@@ -25,3 +25,11 @@ fixtures/atelier-judgment/native-decision.md text eol=lf
 # Atelier's Obsidian plugin is copied byte for byte into every managed vault and
 # its version is pinned to its code digest: the same bytes on every host.
 plugins/obsidian/** text eol=lf
+
+# The Knowledge Health kit pins its owner rule files by digest and binds its
+# findings to exact fixture bytes: the same bytes on every host.
+src/knowledge/plan.mjs text eol=lf
+src/knowledge/context.mjs text eol=lf
+src/graph/graph.mjs text eol=lf
+src/graph/knowledge-graph.mjs text eol=lf
+fixtures/knowledge-health/** text eol=lf

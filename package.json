@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.12",
+  "version": "0.2.0-alpha.13",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
@@ -114,6 +114,7 @@
     "./contracts/atelier-inquiry.v1.schema.json": "./contracts/atelier-inquiry.v1.schema.json",
     "./harnesses": "./src/harnesses/index.mjs",
     "./knowledge": "./src/knowledge/index.mjs",
+    "./knowledge-health": "./src/knowledge-health/index.mjs",
     "./evidence-navigation": "./src/evidence-navigation/index.mjs",
     "./evidence-navigation/local": "./src/evidence-navigation/local.mjs",
     "./personal-workspace": "./src/personal-workspace/index.mjs",
@@ -135,7 +136,16 @@
     "./interaction": "./src/interaction/index.mjs",
     "./coordination": "./src/coordination/index.mjs",
     "./contracts/atelier-interaction.v1.schema.json": "./contracts/atelier-interaction.v1.schema.json",
-    "./contracts/atelier-coordination.v1.schema.json": "./contracts/atelier-coordination.v1.schema.json"
+    "./contracts/atelier-coordination.v1.schema.json": "./contracts/atelier-coordination.v1.schema.json",
+    "./ingestion/optional": "./src/ingestion/optional/index.mjs",
+    "./ingestion/composition": "./src/ingestion/optional/composition/index.mjs",
+    "./ingestion/qualification": "./src/ingestion/optional/evaluation/index.mjs",
+    "./ingestion/vanilla": "./src/ingestion/optional/vanilla/composition-binding.mjs",
+    "./ingestion/native-normalization": "./src/ingestion/optional/vanilla/native-normalization.mjs",
+    "./ingestion/jev": "./src/ingestion/optional/jev/composition-binding.mjs",
+    "./ingestion/jev/judgments": "./src/ingestion/optional/jev/judgments.mjs",
+    "./ingestion/graphify": "./src/ingestion/optional/graphify/composition-binding.mjs",
+    "./ingestion/lightrag": "./src/ingestion/optional/lightrag/composition-binding.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

@@ -1,0 +1,74 @@
+{
+  "schema": "atelier-knowledge-plan@v1",
+  "purpose": "Review the source support for an invented pilot readiness proposal.",
+  "steward": "Example source owner",
+  "reviewer": "Example reviewer",
+  "governance": {
+    "admission": "Invented public example only.",
+    "review": "Meaning and useful human contribution remain unassessed.",
+    "correction": "Keep baseline expected pins and prior results; do not silently rewrite history.",
+    "expression": "No approval, funding or acceptance is implied by the example."
+  },
+  "budget": {
+    "maxContextBytes": 32768,
+    "maxSourceBytes": 65536,
+    "maxDocuments": 6
+  },
+  "concepts": [
+    {
+      "id": "checklist",
+      "definition": "A readiness checklist.",
+      "identityRule": "Use the declared demo record ID.",
+      "tag": "concept:checklist"
+    },
+    {
+      "id": "pilot",
+      "definition": "A pilot proposal.",
+      "identityRule": "Use the declared demo record ID.",
+      "tag": "concept:pilot"
+    }
+  ],
+  "relations": [
+    {
+      "id": "checklist-pilot",
+      "predicate": "supports",
+      "from": "checklist",
+      "to": "pilot",
+      "meaning": "Readiness review needs recorded checklist support; this does not establish approval."
+    }
+  ],
+  "questions": [
+    {
+      "id": "readiness",
+      "question": "What supports pilot readiness?",
+      "work": "Review the recorded support and remaining qualifications.",
+      "concepts": [
+        "checklist",
+        "pilot"
+      ],
+      "relations": [
+        "checklist-pilot"
+      ],
+      "expect": "evidence",
+      "expectedEvidence": [
+        {
+          "id": "demo:checklist",
+          "sha256": "feb802b56e1016c9b154eedaf4660f668a45c59f51e514c889fcef638a5a2462"
+        },
+        {
+          "id": "demo:pilot",
+          "sha256": "8174dbbf5944e8c1d26ca3aabe06c0c076045a5f4551a745c5b2e2b0cb133b28"
+        }
+      ]
+    },
+    {
+      "id": "unknown",
+      "question": "When is the lunar eclipse?",
+      "work": "Recognize missing evidence.",
+      "concepts": [],
+      "relations": [],
+      "expect": "abstain",
+      "expectedEvidence": []
+    }
+  ]
+}

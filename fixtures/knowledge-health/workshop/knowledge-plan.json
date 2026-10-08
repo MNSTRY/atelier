@@ -1,0 +1,65 @@
+{
+  "schema": "atelier-knowledge-plan@v1",
+  "purpose": "Understand one missing supporting relationship in an invented workshop plan.",
+  "steward": "Example source owner",
+  "reviewer": "Workshop participant",
+  "governance": {
+    "admission": "Public invented material only.",
+    "review": "The participant decides what the evidence means.",
+    "correction": "The source owner reviews the proposed declaration and reads it back.",
+    "expression": "A supporting relationship does not approve the workshop."
+  },
+  "budget": {
+    "maxContextBytes": 32768,
+    "maxSourceBytes": 65536,
+    "maxDocuments": 6
+  },
+  "concepts": [
+    {
+      "id": "checklist",
+      "definition": "The workshop checklist.",
+      "identityRule": "Exact declared checklist identity.",
+      "tag": "concept:checklist"
+    },
+    {
+      "id": "workshop",
+      "definition": "The proposed workshop.",
+      "identityRule": "Exact declared workshop identity.",
+      "tag": "concept:workshop"
+    }
+  ],
+  "relations": [
+    {
+      "id": "checklist-workshop",
+      "predicate": "supports",
+      "from": "checklist",
+      "to": "workshop",
+      "meaning": "The checklist supports consideration of the workshop without approving it."
+    }
+  ],
+  "questions": [
+    {
+      "id": "workshop-readiness",
+      "question": "What supports consideration of the workshop?",
+      "work": "Read both sources and the declaration; decide whether this relation is useful.",
+      "concepts": [
+        "checklist",
+        "workshop"
+      ],
+      "relations": [
+        "checklist-workshop"
+      ],
+      "expect": "evidence",
+      "expectedEvidence": [
+        {
+          "id": "devday:checklist",
+          "sha256": "8fde88a926c04195fb82e793fdc61145c1ee19b0696ffb924dac821f6cd85bcd"
+        },
+        {
+          "id": "devday:workshop",
+          "sha256": "691075a704b6da8913f58d6317875a754f24a3a71baa12d471d0c621a2174b33"
+        }
+      ]
+    }
+  ]
+}

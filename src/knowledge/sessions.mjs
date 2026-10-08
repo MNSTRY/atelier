@@ -17,6 +17,8 @@ import {
   loadKnowledgeWorkspace,
 } from './workspace.mjs'
 
+import { publicWorkshopProfile, publicWorkshopReviewProfile, validatePublicWorkshopEvent, preparePublicWorkshopHandoff, PUBLIC_PARTICIPANT_PROFILE } from '../knowledge-health/workshop-profile.mjs'
+
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 const identifier =
   /^kg-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
@@ -163,7 +165,7 @@ export function createKnowledgeSessions(
   }
   function currency(record, cache = new Map()) {
     try {
-      const ref = record.config.fields[0].source.ref
+      const ref = ['workshop', 'workshop-review'].includes(record.flow) ? planName : record.config.fields[0].source.ref
       if (!cache.has(ref)) {
         try {
           cache.set(ref, loadKnowledgeWorkspace(initial, ref).snapshot)
@@ -184,19 +186,59 @@ export function createKnowledgeSessions(
   function result(record, state) {
     assertState(record, state)
     const sourceState = currency(record)
+    let owningReadbacks
+    if (record.context?.participantResponseProfile === PUBLIC_PARTICIPANT_PROFILE) {
+      const actual = store().readSavedFields(record.id)
+      if (canonicalize(actual.state) !== canonicalize(state)) throw new Error('session changed during owning readback; look up the original request')
+      owningReadbacks = { verified: true, descriptorAndLedger: { sessionId: record.id, revision: state.revision,
+        descriptorSha256: digest(canonicalize(record)) }, immutableValues: actual.values }
+    }
     return {
       ok: true,
       record,
       state,
       current: sourceState === 'current',
       currency: sourceState,
+      ...(owningReadbacks ? { owningReadbacks } : {}),
       savedMeaning: 'private-draft-only',
       sourceEditsApplied: false,
     }
   }
   return {
+    workshopProfile() {
+      const workspace = loadKnowledgeWorkspace(initial, planName)
+      return { ...publicWorkshopProfile(root), snapshot: workspace.snapshot }
+    },
+    workshopReview(input) {
+      shape(input, ['requestId', 'sessionId'])
+      const parent = this.read(input.sessionId)
+      publicWorkshopReviewProfile(root, parent) // read-only before any start intent
+      return this.start({ requestId: input.requestId, flow: 'workshop-review',
+        questionId: 'workshop-readiness', snapshot: parent.record.snapshot,
+        author: parent.record.author, participantSessionId: parent.record.id })
+    },
+    workshopHandoff(input) {
+      shape(input, ['sessionId'])
+      const record = descriptor(input.sessionId)
+      return { ok: true, handoff: preparePublicWorkshopHandoff(result(record, store().read(record.id))),
+        sourceEditsApplied: false, directWrite: false }
+    },
+    lookup(input) {
+      shape(input, ['sessionId', 'eventId'])
+      if (!identifier.test(input.sessionId) || (input.eventId !== null && typeof input.eventId !== 'string'))
+        throw new Error('invalid original request lookup')
+      try {
+        const record = descriptor(input.sessionId), state = store().read(record.id)
+        const found = input.eventId === null || state.events.some(e => e.id === input.eventId)
+        return { ok: true, outcome: found ? 'observed' : 'not-found', session: result(record, state) }
+      } catch (error) {
+        // Lost descriptors or ledger custody are unknown, never absence fences.
+        // A known descriptor still permits exact missing-event lookup above.
+        return { ok: true, outcome: 'unknown', session: null }
+      }
+    },
     start(input) {
-      shape(input, ['requestId', 'flow', 'questionId', 'snapshot', 'author'])
+      shape(input, ['requestId', 'flow', 'questionId', 'snapshot', 'author', ...(input?.flow === 'workshop-review' ? ['participantSessionId'] : [])])
       input = {
         ...input,
         requestId:
@@ -218,13 +260,19 @@ export function createKnowledgeSessions(
           throw new Error(
             'workspace changed; refresh before starting a new session'
           )
-        const flow = KNOWLEDGE_FLOWS.find((f) => f.id === input.flow)
+        const participant = input.flow === 'workshop-review' ? this.read(input.participantSessionId) : null
+        if (participant && input.author.trim() !== participant.record.author) throw new Error('Review must preserve the locally asserted participant author')
+        const workshop = input.flow === 'workshop' ? publicWorkshopProfile(root)
+          : participant ? publicWorkshopReviewProfile(root, participant) : null
+        const flow = workshop?.flow || KNOWLEDGE_FLOWS.find((f) => f.id === input.flow)
+        if (workshop && input.questionId !== 'workshop-readiness') throw new Error('workshop question required')
+        const sourceDigest = workshop?.sourceDigest || workspace.sourceDigest
         const question = workspace.plan.questions.find(
           (q) => q.id === input.questionId
         )
         if (!flow || !question)
           throw new Error('unknown knowledge flow or question')
-        const ref = path
+        const ref = workshop?.ref || path
           .relative(root, workspace.file)
           .split(path.sep)
           .join('/')
@@ -253,10 +301,11 @@ export function createKnowledgeSessions(
             record.flow !== input.flow ||
             record.question.id !== input.questionId ||
             record.author !== input.author.trim() ||
+            (input.flow === 'workshop-review' && record.context.participant?.sessionId !== input.participantSessionId) ||
             record.config.fields.some(
               (field) =>
                 field.source.ref !== ref ||
-                field.source.digest !== workspace.sourceDigest
+                field.source.digest !== sourceDigest
             )
           )
             throw new Error(
@@ -268,7 +317,7 @@ export function createKnowledgeSessions(
           id,
           fields: flow.prompts.map(([field]) => ({
             id: field,
-            source: { ref, digest: workspace.sourceDigest },
+            source: { ref, digest: sourceDigest },
           })),
         }
         const record = {
@@ -283,9 +332,9 @@ export function createKnowledgeSessions(
           question,
           author: input.author.trim(),
           identity: 'locally-asserted',
-          context: workspace.graph.ok
+          context: workshop?.context || (workspace.graph.ok
             ? knowledgeQuestionContext(workspace, question.id)
-            : null,
+            : null),
           config,
         }
         const bytes = canonicalize({
@@ -387,7 +436,9 @@ export function createKnowledgeSessions(
       const adapter = store()
       // Complete the durable start marker before any guided answer can be kept.
       // A later missing aggregate must never be mistaken for a new empty start.
-      markStarted(record, adapter.read(record.id))
+      const previous = adapter.read(record.id)
+      markStarted(record, previous)
+      if (!previous.events.some(e => e.id === input.event?.id)) validatePublicWorkshopEvent(record, previous, input.event)
       const state = adapter.dispatch(record.id, input.event)
       return result(record, state)
     },

@@ -25,6 +25,7 @@ import {
   trustedMutationRequest,
   trustedReadRequest,
 } from './security.mjs'
+import { canonicalize } from '../attestation/jcs.mjs'
 import { createProposalStore } from '../collaboration/proposals.mjs'
 import {
   renderProposalDetailPageHtml,
@@ -280,6 +281,95 @@ export function createAtelierSidecarServer({
     workspaceId,
   })
 
+  // One copy-only declaration is retained from the workshop: this path, this
+  // action, from this view. The request stays `{ sessionId }`; everything
+  // retained is derived here from fresh owning readbacks, and the generic
+  // /api/proposals route keeps its published-HTML fence.
+  const WORKSHOP_HANDOFF_TARGET = Object.freeze({ path: 'records/checklist.md', action: 'copy.repoPath', viewId: 'knowledge-workshop' })
+  const sameJson = (left, right) => canonicalize(left) === canonicalize(right)
+  const refusedRetention = (error, status = 'refused') => ({ status: 409, body: { ok: false, error, retention: { status } } })
+  const retentionSummary = (record, outcome, sourceCurrent) => ({
+    status: 'retained',
+    outcome,
+    sourceCurrent,
+    proposalId: record.proposal.id,
+    readback: `/api/proposals/${record.proposal.id}`,
+    receipt: {
+      sessionId: record.retention.sessionId,
+      requestId: record.retention.requestId,
+      valueDigest: record.retention.valueDigest,
+    },
+    payloadDigest: record.retention.payloadDigest,
+    proposalStatus: record.proposal.status,
+    eventVersion: record.proposal.eventVersion,
+  })
+
+  function retainWorkshopHandoff(body) {
+    if (!body || Array.isArray(body) || Object.keys(body).join(',') !== 'sessionId' || typeof body.sessionId !== 'string') {
+      return refusedRetention('workshop handoff accepts a session id only')
+    }
+    // A fresh owning readback: this throws when the session, its ledger or a
+    // saved value is missing, redirected or altered.
+    const session = knowledge.read(body.sessionId)
+    const selected = session.record.flow === 'workshop-review'
+      ? session.state.saved.find((value) => value.fieldId === 'authored-revision')
+      : null
+    if (!selected) {
+      // No separately selected draft receipt: prepared only, as before. An
+      // incomplete Review or a response that selects nothing is refused by
+      // the existing preparation.
+      return { status: 200, body: { ...knowledge.workshopHandoff(body), retention: { status: 'not-retained', reason: 'no separately selected draft receipt' } } }
+    }
+    const own = session.owningReadbacks?.verified === true
+      ? session.owningReadbacks.immutableValues.find((value) => sameJson(value.receipt, selected.receipt))
+      : null
+    if (!own || own.text !== selected.text || selected.receipt.sessionId !== session.record.id) {
+      return refusedRetention('the selected draft receipt is not confirmed by its owning readback')
+    }
+    if (!session.current) {
+      // Reopen after a source change: read back what was retained, never append.
+      const known = proposals.lookupRetainedProposal(selected.receipt)
+      if (known.outcome === 'retained') {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            handoff: proposals.retainedHandoff(known.record),
+            sourceEditsApplied: false,
+            directWrite: false,
+            retention: retentionSummary(known.record, 'existing', false),
+          },
+        }
+      }
+      return known.outcome === 'not-found'
+        ? refusedRetention('the source changed before this draft was retained; nothing is retained for this receipt', 'not-retained')
+        : refusedRetention(known.error, known.outcome === 'conflict' ? 'refused' : 'unknown')
+    }
+    const prepared = knowledge.workshopHandoff(body)
+    const handoff = prepared.handoff
+    if (
+      !sameJson(handoff.proposal.selectedDraftReceipt, selected.receipt) || handoff.sessionId !== session.record.id ||
+      handoff.path !== WORKSHOP_HANDOFF_TARGET.path || handoff.action !== WORKSHOP_HANDOFF_TARGET.action ||
+      handoff.viewId !== WORKSHOP_HANDOFF_TARGET.viewId || handoff.directWrite !== false ||
+      handoff.applyEndpoint !== null || handoff.diff?.replacement !== selected.text
+    ) {
+      return refusedRetention('the prepared handoff does not match the selected draft readback')
+    }
+    // The original contribution is read back from its own session as well.
+    const original = knowledge.read(handoff.proposal.contributionSessionId)
+    const values = original.owningReadbacks?.verified === true ? original.owningReadbacks.immutableValues : null
+    if (
+      !values ||
+      !sameJson([...values.map((value) => value.receipt), selected.receipt], handoff.proposal.savedDraftReceipts) ||
+      values.find((value) => value.receipt.fieldId === 'original-words')?.text !== handoff.proposal.originalWords
+    ) {
+      return refusedRetention('the original contribution is not confirmed by its owning readback')
+    }
+    const result = proposals.retainProposal(handoff)
+    if (!result.ok) return refusedRetention(result.error, result.outcome === 'unknown' ? 'unknown' : 'refused')
+    return { status: 200, body: { ...prepared, retention: retentionSummary(result.record, result.outcome, true) } }
+  }
+
   function resolvePublishedPath({ rel, requireFile = false, requireHtml = false } = {}) {
     const resolved = resolveWorkspacePath({
       workspaceRoot: root,
@@ -440,11 +530,17 @@ export function createAtelierSidecarServer({
 
     if (knowledge && url.pathname.startsWith('/api/knowledge/')) {
       const operation = url.pathname.slice('/api/knowledge/'.length)
-      if (!['start', 'event', 'recover'].includes(operation) || url.search) {
+      if (!['start', 'event', 'recover', 'lookup', 'workshop-handoff', 'workshop-review'].includes(operation) || url.search) {
         json(res, 404, { ok: false, error: 'unknown knowledge action' }); return
       }
-      try { json(res, 200, knowledge[operation](body)) }
-      catch (error) { json(res, 409, { ok: false, error: knowledgeError(error) }) }
+      try {
+        if (operation === 'workshop-handoff') {
+          const retained = retainWorkshopHandoff(body)
+          json(res, retained.status, retained.body)
+        } else {
+          json(res, 200, knowledge[operation === 'workshop-review' ? 'workshopReview' : operation](body))
+        }
+      } catch (error) { json(res, 409, { ok: false, error: knowledgeError(error) }) }
       return
     }
 
@@ -577,7 +673,17 @@ export function createAtelierSidecarServer({
         const operation = url.pathname.slice('/api/knowledge/'.length)
         const parameters = operation === 'context' ? ['id', 'mode'] : operation === 'read' ? ['id'] : []
         if ([...url.searchParams.keys()].some(k => !parameters.includes(k)) || [...url.searchParams.keys()].length !== new Set(url.searchParams.keys()).size) throw new Error('invalid knowledge query')
-        if (operation === 'dashboard') result = { dashboard: knowledgeDashboard(loadKnowledgeWorkspace(knowledgeProject)) }
+        if (operation === 'dashboard') {
+          const dashboard = knowledgeDashboard(loadKnowledgeWorkspace(knowledgeProject))
+          try {
+            const profile = knowledge.workshopProfile()
+            dashboard.flows = [profile.flow, ...dashboard.flows]
+            dashboard.workshop = { available: true, context: profile.context }
+          } catch {
+            dashboard.workshop = { available: false, reason: 'No current actionable public workshop finding.' }
+          }
+          result = { dashboard }
+        }
         else if (operation === 'context') result = { context: knowledgeQuestionContext(loadKnowledgeWorkspace(knowledgeProject), url.searchParams.get('id'), url.searchParams.get('mode') || 'graph') }
         else if (operation === 'sessions') result = knowledge.list()
         else if (operation === 'read') result = knowledge.read(url.searchParams.get('id'))
@@ -685,6 +791,8 @@ export function createAtelierSidecarServer({
         proposal: record.proposal,
         diff: record.diff,
         copyable: record.copyable,
+        // A retained workshop handoff is read back whole; other proposals are unchanged.
+        ...(record.retention ? { payload: record.payload, retention: record.retention } : {}),
       } : { ok: false, error: result.error, diagnostics: result.diagnostics })
       return
     }

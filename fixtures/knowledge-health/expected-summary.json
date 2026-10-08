@@ -1,0 +1,27 @@
+{
+  "scope": "Selected observed fields from the invented receiving rehearsal. Run the installed example for complete current source/rule/read-set/declaration pins and original output.",
+  "before": {
+    "assessmentStatus": "needs-attention",
+    "selectedFindings": 1,
+    "matchingDeclaredEdges": 0,
+    "coverage": "complete",
+    "currency": "current",
+    "semanticQualification": "not-assessed",
+    "approvalAndFunding": "unknown",
+    "adoptedConsumedExecuted": "unobserved"
+  },
+  "after": {
+    "assessmentStatus": "structurally-valid",
+    "selectedFindings": 0,
+    "matchingDeclaredEdges": 1,
+    "coverage": "complete",
+    "currency": "current",
+    "semanticQualification": "not-assessed",
+    "approvalAndFunding": "unknown",
+    "adoptedConsumedExecuted": "unobserved"
+  },
+  "afterFrozenExpectedEvidenceStale": [
+    "demo:checklist"
+  ],
+  "currentSourceQualificationRetained": "A possible budget was discussed; no allocation decision is recorded."
+}
