@@ -136,7 +136,16 @@
     "./interaction": "./src/interaction/index.mjs",
     "./coordination": "./src/coordination/index.mjs",
     "./contracts/atelier-interaction.v1.schema.json": "./contracts/atelier-interaction.v1.schema.json",
-    "./contracts/atelier-coordination.v1.schema.json": "./contracts/atelier-coordination.v1.schema.json"
+    "./contracts/atelier-coordination.v1.schema.json": "./contracts/atelier-coordination.v1.schema.json",
+    "./ingestion/optional": "./src/ingestion/optional/index.mjs",
+    "./ingestion/composition": "./src/ingestion/optional/composition/index.mjs",
+    "./ingestion/qualification": "./src/ingestion/optional/evaluation/index.mjs",
+    "./ingestion/vanilla": "./src/ingestion/optional/vanilla/composition-binding.mjs",
+    "./ingestion/native-normalization": "./src/ingestion/optional/vanilla/native-normalization.mjs",
+    "./ingestion/jev": "./src/ingestion/optional/jev/composition-binding.mjs",
+    "./ingestion/jev/judgments": "./src/ingestion/optional/jev/judgments.mjs",
+    "./ingestion/graphify": "./src/ingestion/optional/graphify/composition-binding.mjs",
+    "./ingestion/lightrag": "./src/ingestion/optional/lightrag/composition-binding.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

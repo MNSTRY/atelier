@@ -1,0 +1,7 @@
+import './optional-ingestion/composition.test.mjs'
+import './optional-ingestion/evaluation.test.mjs'
+import './optional-ingestion/vanilla.test.mjs'
+import './optional-ingestion/jev/ingestion-judgments.test.mjs'
+import './optional-ingestion/jev/composition-binding.test.mjs'
+import './optional-ingestion/graphify-binding.test.mjs'
+import './optional-ingestion/lightrag-binding.test.mjs'

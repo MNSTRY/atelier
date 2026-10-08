@@ -41,6 +41,10 @@ const allowedFiles = [
   // The decision contract's declarations are part of its public typed API.
   // Other declaration paths still require their own reviewed admission.
   /^src\/decisions\/contracts\.d\.mts$/,
+  // Optional native supplier adapters are text and receive the same content scan.
+  // Admit only these runtime modules; native SDKs, caches and fixtures stay outside.
+  /^src\/ingestion\/optional\/graphify\/(?:json_bridge|graphify_supplier|query_receiving|composition_receiving)\.py$/,
+  /^src\/ingestion\/optional\/lightrag\/atelier_lightrag_supplier\/(?:__init__|adapter|artifacts|projection)\.py$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.?gitignore)$/,
   // Exact line-ending policy for the source-pinned knowledge starter.
   /^templates\/knowledge-workspace\/\.gitattributes$/,
