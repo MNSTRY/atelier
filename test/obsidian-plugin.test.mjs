@@ -53,7 +53,7 @@ import { createRecoveryStore } from '../src/projection/obsidian/recovery/index.m
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { runObsidianCommandForOracleTests } from '../src/commands/obsidian.mjs'
 import { MINIMUM_APP_VERSION, createQualifiedAdapterFactory, inspectApp, parseAppVersion, qualifyApp, readVersionAnswer } from '../src/runtime/obsidian/app-capability.mjs'
-import { ensureWorkspaceIdentity, protectedRoots, workspaceStateRoot, writeMachineSettings } from '../src/runtime/obsidian/machine-settings.mjs'
+import { ensureWorkspaceIdentity, localPointerPath, protectedRoots, workspaceStateRoot, writeMachineSettings } from '../src/runtime/obsidian/machine-settings.mjs'
 import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
 import { createPluginDriftObserver } from '../src/runtime/obsidian/plugin-drift.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP, PLUGIN_FILES_WAIT_NEXT, pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
@@ -1868,9 +1868,9 @@ test('a view the project turns off or no longer declares is told nothing the ser
 
 test('a loader that answers a promise never keeps the plugin waiting: until it has answered the view is told nothing, sealed, and the plugin keeps its session; then it is told what is stored', needsExchange, async (t) => {
   const world = serviceWorld(t)
-  // A service resolves its workspace from its loader's own answer when it starts, so no service starts on a loader
-  // that only answers promises. This one answers at once until the service runs, then with a promise: resolved at once
-  // for a tick, and held back, until the test lets it go, for a status request.
+  // A service resolves its workspace from its loader's own answer when it starts, not from a project it promises. This
+  // loader answers at once until the service runs, then with a promise: resolved at once for a tick, and held back,
+  // until the test lets it go, for a status request.
   let answers = 'at-once'
   const held = []
   const loader = () => {
@@ -1895,11 +1895,13 @@ test('a loader that answers a promise never keeps the plugin waiting: until it h
   for (let round = 0; round < 3; round += 1) await plugin.cycle()
   assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
   assert.equal(held.length, 1, 'four rounds, one load under way')
-  // The first load tells which files decide the project; the second is the one their bytes vouch for.
-  await letGo()
-  await plugin.cycle()
-  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
-  assert.equal(held.length, 1)
+  // The first load tells which files decide the project; the next two, over the same bytes, have to agree.
+  for (let load = 0; load < 2; load += 1) {
+    await letGo()
+    await plugin.cycle()
+    assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+    assert.equal(held.length, 1)
+  }
   await letGo()
   await plugin.cycle()
   assert.equal(statusBar(), 'Atelier: current')
@@ -1919,6 +1921,32 @@ test('a loader that answers a promise never keeps the plugin waiting: until it h
   await plugin.cycle()
   assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
   assert.equal(plugin.session.id, session)
+})
+
+test('a project whose pointer is pointed at another workspace has its service tell the plugin nothing of this workspace\'s view, until the pointer names it again', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const service = await world.service()
+  assert.ok((await service.tickNow()).ok)
+  const { plugin, statusBar } = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBar(), 'Atelier: current')
+  const told = toldTo(plugin)
+  const session = plugin.session.id
+  // The project's pointer names another workspace that has private state of its own; no tick follows.
+  const pointerPath = localPointerPath(world.loadProject())
+  const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8'))
+  const other = `ws-${'0b'.repeat(12)}`
+  fs.mkdirSync(workspaceStateRoot(world.dataRoot, other), { recursive: true, mode: 0o700 })
+  writeJson(pointerPath, { ...pointer, workspaceId: other })
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(statusBar(), 'Atelier: stale')
+  assert.equal(plugin.session.id, session, 'sealed as ever: the plugin keeps its session')
+  writeJson(pointerPath, pointer)
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), told)
+  assert.equal(statusBar(), 'Atelier: current')
 })
 
 test('with a location decided, the service keeps the allocated vault current, its plugin holds it open, a drifted plugin file is written again there, and the person\'s choice is read there', needsExchange, async (t) => {
