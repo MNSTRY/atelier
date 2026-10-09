@@ -168,9 +168,9 @@ const cleanupDetail = ({ graceful, gracefulError, status, forced, forceError, he
 // detached service has no retained child handle, so a refused graceful stop
 // must be followed by an identity-checked force stop or an explicit stopped
 // status before roots can be removed.
-export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 20_000, heldTimeoutMs = 5_000, timeoutMs } = {}) {
+export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000, heldTimeoutMs = 5_000, timeoutMs } = {}) {
   if (timeoutMs !== undefined) gracefulTimeoutMs = timeoutMs
-  if (!Number.isFinite(gracefulTimeoutMs) || gracefulTimeoutMs < 0 || gracefulTimeoutMs > 20_000) throw new RangeError('graceful service cleanup timeout must be between 0 and 20000 ms')
+  if (!Number.isFinite(gracefulTimeoutMs) || gracefulTimeoutMs < 0 || gracefulTimeoutMs > 35_000) throw new RangeError('graceful service cleanup timeout must be between 0 and 35000 ms')
   if (!Number.isFinite(heldTimeoutMs) || heldTimeoutMs < 0 || heldTimeoutMs > 5_000) throw new RangeError('held service cleanup timeout must be between 0 and 5000 ms')
   let graceful = null
   let gracefulError = null
@@ -205,9 +205,9 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 20_000,
     observed = readRecord()
     observedLive = readLive(observed)
   }
-  const explicitlyStopped = graceful?.stopped === true || (graceful?.state === 'stopped' && observedLive !== true && !observed?.__error) || (status?.state === 'stopped' && !status.record && observedLive !== true)
   const occupied = status?.state === 'occupied'
-  if (!explicitlyStopped && (occupied || observedLive !== false) && forced?.stopped !== true) {
+  const explicitlyStopped = graceful?.stopped === true || (graceful?.state === 'stopped' && observedLive !== true && !observed?.__error) || (status?.state === 'stopped' && !status.record && observedLive !== true)
+  if (occupied || (!explicitlyStopped && observedLive !== false) && forced?.stopped !== true) {
     throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, held, heldError, record: observed, alive: observedLive }))
   }
   const afterRecord = readRecord()

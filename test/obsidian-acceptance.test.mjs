@@ -2629,7 +2629,7 @@ const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true 
 const endLeftService = (runtime) => async () => {
   try { await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 5000 }) }
   catch (error) {
-    if (error?.code !== 'owned-service-cleanup-unverified' || error.detail?.alive === true || error.detail?.status?.state === 'occupied') throw error
+    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || error.detail?.alive === true || error.detail?.status?.state === 'occupied') throw error
     const held = await runtime.stopHeld()
     assert.equal(held.joined, true, 'fixture teardown must join every owned child')
   }
@@ -2663,7 +2663,7 @@ test('AP-03 production cleanup sweeps the owned child before a malformed status 
     assert.deepEqual(error.detail.gracefulError, { name: 'Error', message: 'status record unavailable' })
     return true
   })
-  assert.deepEqual(calls, [['stop', { stopTimeoutMs: 20000 }], ['stopHeld', { timeoutMs: 5000 }]])
+  assert.deepEqual(calls, [['stop', { stopTimeoutMs: 35000 }], ['stopHeld', { timeoutMs: 5000 }]])
 })
 
 test('AP-03 production cleanup refuses and retains custody when an owned child remains live', async () => {
@@ -2704,7 +2704,7 @@ test('AP-03 production cleanup force-stops a detached service only after identit
     async stopHeld(options) { calls.push({ held: options }); return { joined: true, signals: [], remaining: [] } },
   }
   const result = await cleanupOwnedRuntime(runtime)
-  assert.deepEqual(calls, [{ stopTimeoutMs: 20000 }, { held: { timeoutMs: 5000 } }, { stopTimeoutMs: 5000, force: true }])
+  assert.deepEqual(calls, [{ stopTimeoutMs: 35000 }, { held: { timeoutMs: 5000 } }, { stopTimeoutMs: 5000, force: true }])
   assert.equal(result.forced.stopped, true)
   assert.equal(result.after.alive, false)
 })
@@ -2840,6 +2840,7 @@ for (const damaged of ['missing', 'malformed']) {
     // hooks from running. Joining here also precedes temporary-root removal.
     try {
       const record = path.join(world.workspaceRoot, 'state', 'service', 'runtime.json')
+      runtime.fixtureMayAbsorbUnknownRefusal = true
       if (damaged === 'missing') fs.unlinkSync(record)
       else fs.writeFileSync(record, '{')
       try {
@@ -3012,6 +3013,38 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 
+test('AP-05 production cleanup joins a live in-process service after a bounded graceful timeout', needsExchange, async (t) => {
+  const { world, env } = serviceWorld(t, 'ap05-stop-held-join', { scoped: true })
+  const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
+  let release
+  const runtime = createInProcessServiceRuntime({
+    ...context,
+    consent: { actor: 'op-synthetic', coverage: 'service' },
+    probeTimeoutMs: 100,
+    adapterFactory: () => absentAdapter(),
+    runService: async (input) => {
+      const service = await runMaintenanceService({ ...input, shutdownGraceMs: 0 })
+      const shutdown = service.shutdown
+      release = () => shutdown('test-cleanup')
+      return { ...service, shutdown: async (reason) => { await new Promise((resolve) => setTimeout(resolve, 250)); return shutdown(reason) } }
+    },
+  })
+  t.after(async () => { if (release) await release() })
+  let started
+  try { started = await runtime.start() }
+  catch (error) {
+    if (error?.code === 'EPERM') return t.skip('host loopback is unavailable in this sandbox')
+    throw error
+  }
+  assert.equal(started.started, true)
+  const timed = await runtime.stop({ stopTimeoutMs: 10 })
+  assert.equal(timed.reason, 'stop-timed-out')
+  const cleanup = await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 10, heldTimeoutMs: 5000 })
+  assert.equal(cleanup.graceful.stopped, false)
+  assert.equal(cleanup.held.joined, true)
+  assert.equal(cleanup.after.record, null)
+})
+
 test('AP-05 production cleanup fails closed when a live in-process shutdown never settles', needsExchange, async (t) => {
   const { world, env } = serviceWorld(t, 'ap05-stop-timeout', { scoped: true })
   const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
@@ -3022,7 +3055,7 @@ test('AP-05 production cleanup fails closed when a live in-process shutdown neve
     probeTimeoutMs: 100,
     adapterFactory: () => absentAdapter(),
     runService: async (input) => {
-      const service = await runMaintenanceService(input)
+      const service = await runMaintenanceService({ ...input, shutdownGraceMs: 0 })
       release = service.shutdown
       return { ...service, shutdown: () => new Promise(() => {}) }
     },
@@ -3039,10 +3072,12 @@ test('AP-05 production cleanup fails closed when a live in-process shutdown neve
   assert.equal(stop.reason, 'stop-timed-out')
   const held = await runtime.stopHeld({ timeoutMs: 10 })
   assert.deepEqual([held.joined, held.remaining.length], [false, 1])
-  await assert.rejects(
-    () => cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 10, heldTimeoutMs: 10 }),
-    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-incomplete' && error.detail.held.joined === false && error.detail.held.remaining.length === 1,
-  )
+  const outcome = await cleanupProcedureRuntime(runtime, { gracefulTimeoutMs: 10, heldTimeoutMs: 10 })
+  assert.equal(outcome.retainRoots, true)
+  assert.ok(outcome.error instanceof IsolationRefusal)
+  assert.equal(outcome.error.code, 'owned-service-cleanup-incomplete')
+  assert.equal(outcome.error.detail.held.joined, false)
+  assert.equal(outcome.error.detail.held.remaining.length, 1)
 })
 
 test('mutation control: a recorder blind to source digests accepts a manual-mode tick that wrote a source; the real recorder refuses it', needsExchange, async (t) => {

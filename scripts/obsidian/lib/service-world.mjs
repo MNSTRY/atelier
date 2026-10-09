@@ -11,7 +11,7 @@ import { defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMa
 import { isProcessAlive } from '../../../src/runtime/obsidian/private-lock.mjs'
 import { probeHealth } from '../../../src/runtime/obsidian/service-client.mjs'
 import { SERVICE_ENTRY_PATH } from '../../../src/runtime/obsidian/service-main.mjs'
-import { resolveServiceWorkspace, runMaintenanceService } from '../../../src/runtime/obsidian/service.mjs'
+import { DEFAULT_SHUTDOWN_GRACE_MS, resolveServiceWorkspace, runMaintenanceService } from '../../../src/runtime/obsidian/service.mjs'
 import { SERVICE_SETTINGS_SCHEMA, readServiceRecord, readServiceSettings, servicePaths, writeServiceSettings } from '../../../src/runtime/obsidian/service-record.mjs'
 import { createMaintenanceStateStore } from '../../../src/runtime/obsidian/state-store.mjs'
 import { isoNow, sha256Digest, walkFiles } from './common.mjs'
@@ -28,6 +28,7 @@ import { waitUntil } from './measure.mjs'
 export const PRODUCTION_ENTRY_ARGS = Object.freeze(['--adapter=obsidian-cli'])
 export const LAUNCHER_PATH = fileURLToPath(new URL('./service-launcher.mjs', import.meta.url))
 const IGNORED_SOURCE_DIRECTORIES = new Set(['.git', '.atelier-proposals', '.atelier-local', '.mnstry-local'])
+const DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS = DEFAULT_SHUTDOWN_GRACE_MS + 5_000
 
 // The project configuration of a synthetic workspace, read without any
 // overlay this process may carry.
@@ -257,8 +258,8 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
     status: () => serviceStatus(lifecycle),
     statusDocument: () => readServiceStatusDocument(lifecycle),
     tick: (options = {}) => requestServiceTick({ ...lifecycle, ...options }),
-    async stop({ stopTimeoutMs = 20_000 } = {}) {
-      if (!Number.isFinite(stopTimeoutMs) || stopTimeoutMs < 0 || stopTimeoutMs > 20_000) throw new RangeError('in-process service cleanup timeout must be between 0 and 20000 ms')
+    async stop({ stopTimeoutMs = DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS } = {}) {
+      if (!Number.isFinite(stopTimeoutMs) || stopTimeoutMs < 0 || stopTimeoutMs > DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS) throw new RangeError(`in-process service cleanup timeout must be between 0 and ${DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS} ms`)
       if (service === null) return { state: 'stopped', stopped: false, refused: false, reason: 'not-running-in-this-process' }
       const target = service
       const { identity } = target
