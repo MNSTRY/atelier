@@ -1026,9 +1026,13 @@ answers when it starts, and refuses a loader that answers a promise or any
 other thenable, such as `loadBoundProjectOffThread`, with
 `service-loader-not-synchronous`, before it reads anything from it, listens or
 records anything; a promise it was handed is let go, and its refusal, if it
-is refused, does not go unhandled. The plugin's status read already allows for
-such a loader without waiting for it (see "The channel" in
-[obsidian-plugin.md](obsidian-plugin.md)).
+is refused, does not go unhandled. Started by a login item (`--startup`), the
+service asks its loader once for both the lookup of its workspace and its own
+start. A loader that answers a promise there is never handed to the workspace
+resolution: the refusal is recorded in the workspace the unit names, and the
+process ends with 0, so the service manager does not start it again at once.
+The plugin's status read already allows for such a loader without waiting for
+it (see "The channel" in [obsidian-plugin.md](obsidian-plugin.md)).
 
 ## Known limits
 

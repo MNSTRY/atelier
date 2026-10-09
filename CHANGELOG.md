@@ -86,7 +86,21 @@
   elsewhere is a change; two loads agree when what the decision reads of the
   project is the same, so a field that differs between loads (a time, a
   binding under a symbol key) no longer stops a project from being kept; and
-  every load is logged with how long it took and how it ended.
+  a load that fails, is given up or holds the event loop is logged with how
+  long it took.
+- Started by a login item, the Obsidian maintenance service asks its project
+  loader once, and a loader that answers a promise there is refused and
+  recorded as at any other start, ending with 0. Before, the promise reached
+  the workspace resolution, and a refused one ended the process with an error
+  that the service manager answered by starting it again. The loads behind a
+  plugin's status requests are counted in the service's status document
+  (`statusLoads`), and the service log gets a `status-project-loaded` line
+  only for a load that failed or was given up (the first in a row, then when
+  the row is 2, 4, 8 and so on long), the first that answered after a failure,
+  and one that held the event loop for a second or more. A regular
+  configuration file the system resolves no path for (some Windows volumes)
+  is compared by its own path and bytes, instead of the project being loaded
+  at every request.
 
 ## 0.2.0-alpha.13
 

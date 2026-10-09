@@ -1,9 +1,7 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
-import { OBSIDIAN_EXT_KEY } from '../../projection/obsidian/contracts.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
 import { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, configFilesOf } from './engine.mjs'
-import { localPointerPath, protectedRoots } from './machine-settings.mjs'
 import { readFileFacts } from './observation.mjs'
 
 // Whether the project allows a view of this workspace right now.
@@ -39,12 +37,18 @@ import { readFileFacts } from './observation.mjs'
 //                       folder's above it, is a change. Nothing there is a
 //                       state like any other. A folder in a file's place, a
 //                       link that leads nowhere or to anything but a regular
-//                       file, and a file that does not read vouch for nothing
+//                       file, and a file that does not read vouch for nothing.
+//                       Where the system resolves no path for a regular file
+//                       that is there and is not a link (some volumes on
+//                       Windows; a C library that needs /proc and has none),
+//                       the file holds its own path as given and its bytes: a
+//                       link above it pointed elsewhere is not seen there
 //   a project is kept   when two loads in a row, each started after the
 //                       files were read and found to hold the same, returned
 //                       the same project as far as this permission reads one:
 //                       the views it enables, and what the service's
-//                       workspace resolution reads of it (where its pointer
+//                       workspace resolution reads of it, handed in as
+//                       `workspaceInputsOf` (where its pointer
 //                       is, the data root its local overlay prefers, the
 //                       roots it protects). One load is not enough: a file
 //                       changed and changed back while it ran leaves the same
@@ -80,10 +84,13 @@ import { readFileFacts } from './observation.mjs'
 // asked for again at once: after two seconds, then four, up to thirty, for as
 // long as the files hold the same. A change to them is tried at once, once a
 // load has named them: until a load has answered, a corrected configuration
-// waits for the next try.
+// waits for the next try. And while one of them vouches for nothing there is
+// no digest to change: under a loader that answers a promise, a change to
+// another file waits for the next try as well.
 //
 // `onLoad({ durationMs, outcome, promised })` is told how long each load took
 // and how it ended (`answered`, `failed` or `given-up`): times and codes only.
+// createLoadReport, below, counts them and decides which are worth a log line.
 
 // A kept project is never used for longer than the engine goes without a full reconciliation.
 export const DEFAULT_KEEP_FOR_MS = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS
@@ -95,12 +102,16 @@ export const DEFAULT_RETRY_AT_MOST_MS = 30 * 1000
 // What one file holds, as [path, its real path, digest of the bytes there], or [path, null, null] when it is absent;
 // undefined when it vouches for nothing. The real path is the system's own (realpath(3)): JavaScript's realpathSync
 // takes a `..` after a link away before following the link, and names a file the loader never opens.
-function heldBy(file) {
+function heldBy(file, realpath) {
   let real
-  try { real = fs.realpathSync.native(file) } catch (error) {
-    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') return undefined
-    // Nothing there is absent; a link there that leads nowhere is not.
-    try { return fs.lstatSync(file, { throwIfNoEntry: false }) === undefined ? [file, null, null] : undefined } catch (inner) { return inner.code === 'ENOTDIR' ? [file, null, null] : undefined }
+  try { real = realpath(file) } catch {
+    // Unresolved. Nothing there is absent. A regular file that is there, and is not a link, is read where it is given
+    // (readFileFacts follows no link at its end). A link, resolved or not, never is: it leads nowhere, or nobody can say where.
+    let stat
+    try { stat = fs.lstatSync(file, { throwIfNoEntry: false }) } catch (inner) { return inner.code === 'ENOTDIR' ? [file, null, null] : undefined }
+    if (stat === undefined) return [file, null, null]
+    if (!stat.isFile()) return undefined
+    real = file
   }
   let facts
   try { facts = readFileFacts(real) } catch { return undefined }
@@ -108,10 +119,10 @@ function heldBy(file) {
 }
 
 // One digest over what every file holds, in order. Null when one of them vouches for nothing.
-function digestOf(files) {
+function digestOver(files, realpath) {
   const hash = createHash('sha256')
   for (const file of files) {
-    const held = heldBy(file)
+    const held = heldBy(file, realpath)
     if (held === undefined) return null
     hash.update(`${JSON.stringify(held)}\n`)
   }
@@ -126,23 +137,68 @@ function viewsOf(project) {
   } catch { return new Set() }
 }
 
-// What two loads have to agree on: the views, and what resolveServiceWorkspace reads of a project. Nothing else of it
-// is compared, so a field that differs from load to load (a time, a binding under a symbol key) does not keep a project
-// from being kept, and nothing a decision reads is left out.
-function decidedBy(project, views) {
-  const preference = project?.localOverlay?.overlay?.preferences?.[OBSIDIAN_EXT_KEY]
-  return JSON.stringify([[...views].sort(), localPointerPath(project), preference === undefined ? null : preference, protectedRoots(project)])
+export const STATUS_LOAD_EVENT = 'status-project-loaded'
+// A second: most of the second and a half a plugin gives a request, spent on the listener's own event loop.
+export const DEFAULT_SLOW_LOAD_MS = 1000
+
+// Counts every load a permission is told about (onLoad), and writes a line for the ones somebody has to see:
+//
+//   failed, given up   the first in a row, then when the row is 2, 4, 8, ... long, so a loader that keeps failing
+//                      writes a line less and less often, never one per try
+//   answered           the first after a failure; and one that answered at once and held the event loop for `slowMs`
+//                      or more, on the same doubling row while slow loads follow each other
+//
+// A load that answered in time after another that did writes nothing: that is every load of a healthy service. A
+// line holds the event, milliseconds, the outcome and counts; never a path, a view or a message.
+export function createLoadReport({ write, slowMs = DEFAULT_SLOW_LOAD_MS }) {
+  if (typeof write !== 'function') throw new TypeError('a load report needs somewhere to write')
+  const counts = { answered: 0, failed: 0, givenUp: 0, slow: 0, longestMs: 0 }
+  const doubled = (row) => (row & (row - 1)) === 0
+  let failedInARow = 0
+  let slowInARow = 0
+  return {
+    onLoad({ durationMs, outcome, promised }) {
+      const ms = Math.round(durationMs)
+      counts.longestMs = Math.max(counts.longestMs, ms)
+      if (outcome !== 'answered') {
+        counts[outcome === 'given-up' ? 'givenUp' : 'failed'] += 1
+        failedInARow += 1
+        if (doubled(failedInARow)) write({ event: STATUS_LOAD_EVENT, durationMs: ms, outcome, promised, inARow: failedInARow })
+        return
+      }
+      counts.answered += 1
+      const afterFailures = failedInARow
+      failedInARow = 0
+      const slow = !promised && ms >= slowMs
+      slowInARow = slow ? slowInARow + 1 : 0
+      if (slow) counts.slow += 1
+      if (afterFailures > 0 || (slow && doubled(slowInARow))) {
+        write({ event: STATUS_LOAD_EVENT, durationMs: ms, outcome, promised, ...(afterFailures > 0 ? { afterFailures } : {}), ...(slow ? { slow: true, inARow: slowInARow } : {}) })
+      }
+    },
+    // answered, failed, givenUp and slow loads so far, and the longest in milliseconds.
+    counts: () => ({ ...counts }),
+  }
 }
 
-// `resolveWorkspace(project)` answers { workspaceId, workspaceRoot } as the project names them now, or null.
+// `resolveWorkspace(project)` answers { workspaceId, workspaceRoot } as the project names them now, or null, and
+// `workspaceInputsOf(project)` what it reads of a project to do so, as JSON: the service hands in its own of both
+// (resolveServiceWorkspace, serviceWorkspaceInputs), so what two loads are compared by is never a copy kept here.
 // `now()` answers milliseconds that only go up; the times are this module's defaults unless a test gives its own.
+// `realpath(file)` resolves a path as the system does; a test hands in one that fails.
 export function createViewPermission({
-  loadProject, resolveWorkspace, workspaceId, workspaceRoot, now = () => performance.now(),
+  loadProject, resolveWorkspace, workspaceInputsOf, workspaceId, workspaceRoot, now = () => performance.now(),
   keepForMs = DEFAULT_KEEP_FOR_MS, loadDeadlineMs = DEFAULT_LOAD_DEADLINE_MS, retryAfterMs = DEFAULT_RETRY_AFTER_MS, retryAtMostMs = DEFAULT_RETRY_AT_MOST_MS,
-  onLoad = () => {},
+  onLoad = () => {}, realpath = fs.realpathSync.native,
 }) {
   if (typeof loadProject !== 'function') throw new TypeError('a view permission needs loadProject')
   if (typeof resolveWorkspace !== 'function') throw new TypeError('a view permission needs resolveWorkspace')
+  if (typeof workspaceInputsOf !== 'function') throw new TypeError('a view permission needs workspaceInputsOf')
+  const digestOf = (files) => digestOver(files, realpath)
+  // What two loads have to agree on: the views, and what the workspace is resolved from. Nothing else of a project is
+  // compared, so a field that differs from load to load (a time, a binding under a symbol key) does not keep a project
+  // from being kept, and nothing a decision reads is left out.
+  const decidedBy = (project, views) => JSON.stringify([[...views].sort(), workspaceInputsOf(project)])
   // The files that decided the project last loaded.
   let files = null
   // What the last load returned that was started over files that vouched: { digest, shape }.

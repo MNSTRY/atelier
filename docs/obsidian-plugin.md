@@ -382,8 +382,13 @@ every two seconds for every open vault, so the project is kept:
   a folder above it, is a change even where every byte is the same. A folder
   in a file's place, a link that leads nowhere or to a folder, and a file
   that cannot be read vouch for nothing: then nothing is kept, and the
-  project is loaded at every request. The pointer and the place of the
-  private state are read at every request.
+  project is loaded at every request. Where the system resolves no path for a
+  regular file that is there and is not a link (some volumes on Windows
+  answer `EISDIR`; a C library that needs `/proc` and has none), the file is
+  compared by its own path as given and its bytes, so the project is still
+  kept; a link above such a file, pointed elsewhere, is not seen there. A
+  link the system does not resolve vouches for nothing. The pointer and the
+  place of the private state are read at every request.
 - **When it is kept.** Two loads in a row, each started after those files
   were read and found to hold the same, must return the same project as far
   as the decision reads one: the views it enables, where its pointer is, the
@@ -411,12 +416,23 @@ every two seconds for every open vault, so the project is kept:
   vouches for nothing under a loader that answers a promise) ends whatever
   was kept, and is asked for again after two seconds, then four, up to
   thirty, while the files hold the same. A change to them is tried at once,
-  once a load has named them: until a load has answered, a corrected
-  configuration waits for the next try.
-- **What the service log shows.** Every one of these loads is logged with
-  `status-project-loaded`, how many milliseconds it took, how it ended
-  (`answered`, `failed` or `given-up`) and whether it answered a promise, so a
-  slow load on the request path can be seen.
+  with two exceptions. Until a load has answered and named the files, a
+  corrected configuration waits for the next try. And while one of the files
+  vouches for nothing there is no digest to change, so under a loader that
+  answers a promise a change to another file waits for the next try as well.
+- **What the service shows of these loads.** Its status document counts
+  them (`statusLoads`: `answered`, `failed`, `givenUp`, `slow` and
+  `longestMs`). Its log gets a `status-project-loaded` line, with the
+  milliseconds, the outcome and counts and never a path, only for a load
+  somebody has to see: one that failed or was given up (the first in a row,
+  then when the row is 2, 4, 8 and so on long), the first that answered after
+  a failure, and one that answered at once and took a second or more, on the
+  same doubling row. A second is most of the second and a half the plugin
+  gives a request, spent on the listener's own event loop; a load that
+  answers a promise holds nothing, so only its failures are written. A
+  healthy service writes none of these lines. The log is cut over only when
+  it is opened, so a line per load, every two seconds while a file vouches
+  for nothing, would have grown it without bound.
 
 Refusals, before anything else is looked at: `Host` other than the listener's
 literal loopback authority, a cross-site `Origin` or `Sec-Fetch-Site`, a path
@@ -606,7 +622,18 @@ note open in the editor.
   from the load, no time limit, a late answer taken, JavaScript's realpath, no
   real path for a regular file, the whole project compared, no protected
   roots compared) and a service that does not refuse each fail at least one
-  of them. `test/obsidian-personal-workspace.test.mjs` keeps a bound personal
+  of them. It also covers: a late refusal after the deadline; which loads the
+  log report writes, and that a line holds no path; each input of the
+  workspace resolution (pointer folder, data-root preference, protected
+  repositories) keeping two loads apart; a system that resolves no path, for
+  a regular file and for a link; and, through the test service entry in a
+  child process, a start under `--startup` on a promise, a refused promise
+  and a thenable, which asks the loader once, records the refusal and ends
+  with 0. Ten more mutations (the loader asked twice at such a start, its
+  promise not let go, every load or every failure written, no fallback for a
+  regular file or one for a link too, a late refusal not given up, and each
+  of the three inputs dropped) each fail at least one case.
+  `test/obsidian-personal-workspace.test.mjs` keeps a bound personal
   workspace from the loader that composes in a worker: its views once two
   compositions agree, nothing while its generation is refused, and the next
   generation's views once that is bound.

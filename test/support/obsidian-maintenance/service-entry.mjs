@@ -12,6 +12,9 @@
 //                                 item's service watches its own
 //   --first-tick-block-ms=<N>     the first canonical graph build holds the process for N milliseconds without yielding,
 //                                 so health does not answer in time and the service is busy
+//   --loader-answers=<kind>       the project loader answers a `promise`, a `refused-promise` or a `thenable` instead of
+//                                 a project; how often it was asked is printed when the process ends
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from '../../../src/project/config.mjs'
 import { createEditorAdapter, publishView } from '../../../src/projection/obsidian/publication/index.mjs'
@@ -43,8 +46,19 @@ const seams = {
   },
 }
 
+const answers = typeof args['loader-answers'] === 'string' ? args['loader-answers'] : null
+let loaderCalls = 0
+const loadProject = answers === null ? options.loadProject : () => {
+  loaderCalls += 1
+  if (answers === 'promise') return Promise.resolve().then(() => options.loadProject())
+  if (answers === 'refused-promise') return Promise.reject(new Error('injected: the composition refused'))
+  return { then: (resolve) => resolve(options.loadProject()) }
+}
+if (answers !== null) process.on('exit', () => { try { fs.writeSync(1, `${JSON.stringify({ event: 'loader-calls', count: loaderCalls })}\n`) } catch { /* nobody reads it */ } })
+
 await runServiceProcess({
   ...options,
+  loadProject,
   ...(options.startup && typeof args['release-root'] === 'string' ? { releaseWatch: createReleaseWatch({ root: args['release-root'] }) } : {}),
   entryPath: fileURLToPath(import.meta.url),
   adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' }),

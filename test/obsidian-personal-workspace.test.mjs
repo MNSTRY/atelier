@@ -68,7 +68,7 @@ const { readObsidianEnablement } = await import('../src/runtime/obsidian/enablem
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
-const { resolveServiceWorkspace } = await import('../src/runtime/obsidian/service.mjs')
+const { resolveServiceWorkspace, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
 const { createViewPermission } = await import('../src/runtime/obsidian/view-permission.mjs')
 const { viewCounts } = await import('../src/runtime/obsidian/view-counts.mjs')
 const { EVERYTHING_SCOPE_ID, PERSONAL_MEMBER_KEY, validatePersonalWorkspace, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, loadBoundProjectOffThread, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
@@ -1060,7 +1060,7 @@ test('the plugin status read keeps a bound project from the loader that composes
   // The last load answers, in its worker, and what it answered is taken.
   const settle = async () => { await loads.at(-1).catch(() => {}); await new Promise((resolve) => { setImmediate(resolve) }) }
   const permits = createViewPermission({
-    loadProject, resolveWorkspace: (project) => resolveServiceWorkspace({ project, dataRoot: ari.dataRoot, env: process.env }), workspaceId: ari.workspaceId, workspaceRoot: ari.workspaceRoot(), now: () => time,
+    loadProject, resolveWorkspace: (project) => resolveServiceWorkspace({ project, dataRoot: ari.dataRoot, env: process.env }), workspaceInputsOf: serviceWorkspaceInputs, workspaceId: ari.workspaceId, workspaceRoot: ari.workspaceRoot(), now: () => time,
   })
   for (let load = 0; load < 3; load += 1) { assert.equal(permits('harbor-only'), false, 'not before two compositions agree'); await settle() }
   assert.deepEqual(['harbor-only', 'both', EVERYTHING_SCOPE_ID, 'mine'].map((scopeId) => permits(scopeId)), [true, true, true, false])
