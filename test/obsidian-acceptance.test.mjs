@@ -128,6 +128,15 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     return { custody, signals, rows, spawned, end }
   }
   const rejection = async (promise) => { try { await promise } catch (error) { return error } assert.fail('expected a rejection') }
+  // Holds the next read of the table: the table is taken at once, as it is then, and handed over on `release()`.
+  const holdRead = (f) => {
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const read = f.custody.readTable
+    f.custody.readTable = async (...args) => { f.custody.readTable = read; const taken = await read(...args); await gate; return taken }
+    return release
+  }
+  const turn = () => new Promise((resolve) => { setImmediate(resolve) })
 
   // -- directories ---------------------------------------------------------
 
@@ -267,6 +276,8 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     assert.deepEqual([...f.custody.descendants.keys()], [11])
     // The helper is gone and its number was given to something else before this run looked again.
     f.rows[1] = row(11, 1, { start: LATER, command: '/someone/elses' })
+    await f.custody.observe()
+    assert.deepEqual([[...f.custody.descendants.keys()], [...f.custody.unknown]], [[], ['changed:11']], 'the next table alone releases it')
     const error = await rejection(f.custody.execute(() => { throw new Error('original failure') }))
     assert.equal(error.message, 'original failure')
     assert.deepEqual([f.signals, error.cleanup.joined, error.cleanup.unknown, error.cleanup.retainedRoots, exists(root)], [[], false, ['changed:11'], [root], true])
@@ -314,6 +325,145 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     f.rows.push(row(12, 11, { start: LATER }))
     await rejection(f.custody.execute(() => 'done'))
     assert.deepEqual([f.custody.descendants.has(12), f.signals], [false, []])
+  })
+
+  // A table takes time to read. What it shows is joined only to handles the run held before the read began and
+  // still holds after it; never to a handle adopted meanwhile, whose number the table may show as someone else's.
+  for (const [whose, parent] of [['an unrelated process', 1], ['a process whose row names this one as its parent', SELF]]) {
+    test(`owned run: a child adopted while the table is being read does not make the children of ${whose} its own`, async (t) => {
+      // When the table is taken, number 40 is another process, with a child 41.
+      const f = fake(t, [row(40, parent, { command: '/someone/elses' }), row(41, 40, { command: '/someone/elses --child' })])
+      const root = f.custody.allocateRoot('atelier-owned-test-')
+      const release = holdRead(f)
+      const reading = f.custody.observe()
+      await turn()
+      // That process exits, and before the table is handed over the run spawns a child that is given number 40.
+      f.rows[0] = row(40, SELF, { start: LATER })
+      f.rows[1] = row(41, 1, { command: '/someone/elses --child' })
+      const child = f.spawned(40, { gentle: true })
+      release()
+      await reading
+      assert.deepEqual([[...f.custody.descendants.keys()], [...f.custody.strays.keys()], [...f.custody.unknown]], [[], [], []], 'nothing in that table is the new child\'s')
+      const result = await f.custody.execute(() => 'done')
+      assert.deepEqual([f.signals, child.signals, f.rows.map(({ pid }) => pid), result.cleanup.joined, exists(root)], [[], ['SIGTERM'], [41], true, false], 'the other process\'s child is never signalled')
+    })
+  }
+
+  test('owned run: the children of a spawned process that exits while the table is being read are not recorded from that table', async (t) => {
+    const f = fake(t, [row(10, SELF), row(11, 10)])
+    const child = f.spawned(10)
+    const release = holdRead(f)
+    const reading = f.custody.observe()
+    await turn()
+    // The child is collected and its number is given to another process before the table is handed over.
+    child.exitCode = 0
+    f.rows[0] = row(10, 1, { start: LATER, command: '/someone/elses' })
+    f.rows[1] = row(11, 1)
+    release()
+    await reading
+    assert.deepEqual([[...f.custody.descendants.keys()], [...f.custody.unknown]], [[], []], 'a number the run no longer holds starts no lineage')
+    child.emit('close', 0, null)
+    await f.custody.execute(() => 'done')
+    assert.deepEqual([f.signals, f.rows.map(({ pid }) => pid)], [[], [10, 11]])
+  })
+
+  test('owned run: nothing is recorded under a descendant that no longer answers as itself once the table has been read', async (t) => {
+    const f = fake(t, [row(10, SELF), row(11, 10)])
+    const root = f.custody.allocateRoot('atelier-owned-test-')
+    f.spawned(10, { gentle: true })
+    await f.custody.observe()
+    assert.deepEqual([...f.custody.descendants.keys()], [11])
+    // ps reads row after row: it read 11 while 11 was the helper, and a moment later read 12 naming 11 as parent,
+    // by when another process had taken that number and started 12. Read back after the table, 11 is not itself.
+    f.rows.push(row(12, 11, { start: LATER, command: '/someone/elses --child' }))
+    const release = holdRead(f)
+    const reading = f.custody.observe()
+    await turn()
+    f.rows[1] = row(11, 1, { start: LATER, command: '/someone/elses' })
+    release()
+    await reading
+    assert.deepEqual([[...f.custody.descendants.keys()], [...f.custody.unknown]], [[], ['changed:11']], '12 is not recorded, and 11 is released')
+    const error = await rejection(f.custody.execute(() => 'done'))
+    assert.deepEqual([f.signals, f.rows.map(({ pid }) => pid), error.cleanup.unknown, exists(root)], [[], [11, 12], ['changed:11'], true])
+    // A helper that still answers as itself does pass its lineage on.
+    const g = fake(t, [row(10, SELF), row(11, 10), row(12, 11)])
+    g.spawned(10)
+    await g.custody.observe()
+    assert.deepEqual([...g.custody.descendants.keys()], [11, 12])
+    // A helper first seen in a table, and gone by the time that table is handed over, is not recorded from it,
+    // and neither is anything the table shows under it.
+    const h = fake(t, [row(10, SELF), row(11, 10), row(12, 11)])
+    h.spawned(10)
+    const handOver = holdRead(h)
+    const stale = h.custody.observe()
+    await turn()
+    h.end(11)
+    h.rows[1] = row(12, 1)
+    handOver()
+    await stale
+    assert.deepEqual([[...h.custody.descendants.keys()], [...h.custody.unknown]], [[], []])
+  })
+
+  test('owned run: a held handle starts lineage only when its row names this process as parent and started when it was bound', async (t) => {
+    const f = fake(t, [row(10, 1), row(11, 10), row(20, SELF, { command: '/owned/app --user-data-dir=/owned/profile' }), row(21, 20)])
+    f.spawned(10)
+    f.spawned(20)
+    const bound = [...f.custody.children][1]
+    assert.equal((await f.custody.bind(bound, { program: '/owned/app', profile: '/owned/profile' })).start, START)
+    // The row for the bound number now carries another start time.
+    f.rows[2] = row(20, SELF, { start: LATER, command: '/owned/app --user-data-dir=/owned/profile' })
+    await f.custody.observe()
+    assert.deepEqual([[...f.custody.descendants.keys()], [...f.custody.unknown]], [[], ['spawned-row-mismatch:10', 'spawned-row-mismatch:20']])
+    // With rows that agree, the same two handles start their lineage.
+    f.rows[0] = row(10, SELF)
+    f.rows[2] = row(20, SELF, { command: '/owned/app --user-data-dir=/owned/profile' })
+    await f.custody.observe()
+    assert.deepEqual([...f.custody.descendants.keys()], [11, 21])
+  })
+
+  test('owned run: a number one of the run\'s own handles holds is never recorded or signalled as a descendant', async (t) => {
+    const f = fake(t, [row(10, SELF), row(12, 10), row(13, 10)])
+    f.spawned(10)
+    await f.custody.observe()
+    assert.deepEqual([...f.custody.descendants.keys()], [12, 13])
+    // Both helpers exit and the run's own new children are given their numbers: one looks different, one alike.
+    f.rows[1] = row(12, SELF, { start: LATER, command: '/owned/cli' })
+    f.rows[2] = row(13, SELF)
+    const [different, alike] = [f.spawned(12), f.spawned(13)]
+    assert.equal(f.custody.signalDescendant(13, 'SIGKILL'), false, 'not by number, however alike the row')
+    f.custody.descendants.set(13, row(13, 10))
+    await f.custody.observe()
+    assert.deepEqual([[...f.custody.descendants.keys()], [...f.custody.unknown], f.signals, different.signals, alike.signals], [[], [], [], [], []], 'released without a claim that anything changed')
+    // A table taken while 14 was a helper and 15 another process naming the profile, handed over after both numbers
+    // were given to the run's own new children: neither row is recorded, as a descendant or as a process that remains.
+    f.custody.profiles.add('/owned/profile')
+    f.rows.push(row(14, 10), row(15, 1, { command: '/someone/elses --user-data-dir=/owned/profile' }))
+    const release = holdRead(f)
+    const reading = f.custody.observe()
+    await turn()
+    f.rows.splice(-2, 2, row(14, SELF, { start: LATER }), row(15, SELF, { start: LATER }))
+    f.spawned(14)
+    f.spawned(15)
+    release()
+    await reading
+    assert.deepEqual([[...f.custody.descendants.keys()], [...f.custody.strays.keys()], [...f.custody.unknown]], [[], [], []])
+  })
+
+  test('owned run: cleanup begins its own read of the table and does not settle for one begun earlier', async (t) => {
+    const f = fake(t, [row(10, SELF)])
+    const root = f.custody.allocateRoot('atelier-owned-test-')
+    f.spawned(10, { gentle: true })
+    // A read is under way (the watcher's) when the app starts a helper, and cleanup begins before it is handed over.
+    const release = holdRead(f)
+    const earlier = f.custody.observe()
+    await turn()
+    f.rows.push(row(11, 10))
+    const run = f.custody.execute(() => 'done')
+    await turn()
+    release()
+    await earlier
+    const result = await run
+    assert.deepEqual([f.signals, f.rows, result.cleanup.joined, exists(root)], [[[11, 'SIGTERM'], [11, 'SIGKILL']], [], true, false], 'the helper the earlier table did not show is ended by lineage')
   })
 
   test('owned run: a handle that has reported its exit is never signalled, whatever now holds its number', async (t) => {
@@ -535,7 +685,7 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
   // -- the driver's final output ---------------------------------------------
 
   // The first procedure is the small-fixture one, the only one that runs as an owned run.
-  const { commitOwnedOutput, planProcedure: planOwned, PROCEDURE_IDS: [SMALL_FIXTURE_PROCEDURE] } = await import('../scripts/obsidian/desktop-receipts.mjs')
+  const { appLogEvidence, commitOwnedOutput, planProcedure: planOwned, PROCEDURE_IDS: [SMALL_FIXTURE_PROCEDURE] } = await import('../scripts/obsidian/desktop-receipts.mjs')
   const ownedOutput = (t, options = {}) => {
     const f = fake(t, [], options)
     const receiptDir = path.join(fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-owned-receipts-')), 'receipts')
@@ -581,20 +731,46 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     assert.deepEqual([failure.message, exists(path.join(failing.receiptDir, 'G07.json')), failure.cleanup.retainedRoots, exists(kept)], ['console closed', true, [kept], true])
   })
 
-  test('owned run: app output kept as evidence is counted once, when it arrived', async (t) => {
-    const log = { role: null, name: 'G07-app-synthetic.log', bytes: Buffer.alloc(20000, 'y') }
+  test('owned run: only evidence that says it is a copy of counted app output is counted once; any other evidence is counted in full', async (t) => {
+    const copy = { role: null, name: 'G07-app-synthetic.log', bytes: Buffer.alloc(20000, 'y'), nativeCopyBytes: 20000 }
     const sized = ownedOutput(t)
-    sized.input.evidenceByGate.G07.push(log)
+    sized.input.evidenceByGate.G07.push(copy)
     await sized.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(sized.input) })
     const needed = sized.custody.outputUsed
     // The same output, after the 20000 bytes of the log arrived from the app and were counted then, fits a bound of
-    // exactly what it needs: the evidence copy of the log is not counted a second time.
+    // exactly what it needs: the copy that replaces the log is not counted a second time.
     const f = ownedOutput(t, { outputBytes: boundFor(needed) })
-    f.input.evidenceByGate.G07.push(log)
-    f.custody.consume(log.bytes.length)
+    f.input.evidenceByGate.G07.push(copy)
+    f.custody.consume(20000)
     const result = await f.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(f.input) })
     assert.deepEqual([f.custody.outputUsed, f.custody.outputAllowance, f.custody.nativeCredited, result.value.outputBytes, result.value.outputCharged], [needed, needed, 20000, needed, needed - 20000])
-    assert.equal(fs.readFileSync(path.join(f.receiptDir, log.name)).length, 20000)
+    assert.equal(fs.readFileSync(path.join(f.receiptDir, copy.name)).length, 20000)
+    // Evidence of the same size that does not say it is such a copy is counted again, and so does not fit that bound.
+    const plain = ownedOutput(t, { outputBytes: boundFor(needed) })
+    plain.input.evidenceByGate.G07.push({ role: copy.role, name: copy.name, bytes: copy.bytes })
+    plain.custody.consume(20000)
+    const refused = await rejection(plain.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(plain.input) }))
+    assert.deepEqual([refused.code, plain.custody.nativeCredited, exists(plain.receiptDir)], ['output-budget-exceeded', 0, false])
+    // A copy is credited for no more than it holds, and for no more than arrived.
+    const claims = ownedOutput(t)
+    claims.input.evidenceByGate.G07.push({ ...copy, nativeCopyBytes: 10 ** 9 })
+    claims.custody.consume(20500)
+    await claims.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(claims.input) })
+    assert.deepEqual([claims.custody.nativeCredited, claims.custody.outputUsed], [20000, needed + 500])
+    const counted = fake(t).custody
+    counted.consume(100)
+    assert.deepEqual([counted.finalCharge({ bytes: 10, evidenceBytes: 500, nativeCopyBytes: 300 }), counted.finalCharge({ bytes: 10, evidenceBytes: 500 })], [{ charge: 410, credit: 100 }, { charge: 510, credit: 0 }])
+  })
+
+  test('owned run: the app log copy is counted once only when the root that holds the original is about to be removed', (t) => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-owned-log-'))
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+    assert.equal(appLogEvidence({ gate: 'G07', root, rootWillBeRemoved: true }), null, 'no log, no evidence')
+    fs.writeFileSync(path.join(root, 'app.log'), 'stand-in app output\n')
+    const [replaces, beside] = [true, false].map((rootWillBeRemoved) => appLogEvidence({ gate: 'G07', root, rootWillBeRemoved }))
+    // With the root kept (asked for, or cleanup unverified) the log and its copy both stay, so the copy is counted in full.
+    assert.deepEqual([replaces.nativeCopyBytes, beside.nativeCopyBytes, replaces.bytes.toString('utf8'), beside.bytes.equals(replaces.bytes), replaces.name === beside.name && /^G07-app-[A-Za-z0-9._:-]+\.log$/.test(replaces.name)],
+      [20, 0, `# app.log of ${root}\nstand-in app output\n`, true, true])
   })
 
   test('owned run: a run that used up its bound still records its failed receipt, with shortened evidence marked as shortened', async (t) => {

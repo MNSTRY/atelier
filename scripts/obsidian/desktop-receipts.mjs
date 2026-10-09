@@ -471,9 +471,10 @@ const receiptLine = ({ receiptPath, receipt, validation }) => `[desktop-receipts
 // receipt is first built by the pure builder (no file is written), then the
 // bytes of the receipts, of the evidence copies beside them and of the console
 // text are reserved together against the run's output bound, and only then do
-// the existing writer and the console run. Evidence is charged only beyond the
-// app and command-line output already counted as it arrived, so no byte is
-// counted twice. An output that does not fit is refused whole: nothing of it
+// the existing writer and the console run. An evidence file that is a copy of
+// app output already counted as it arrived, and whose original is about to
+// be removed with the run's roots, is not counted a second time; everything
+// else is counted in full. An output that does not fit is refused whole: nothing of it
 // is written and nothing is shortened to fit. What is written instead is a
 // failed receipt from the reserve the bound sets aside, with its evidence
 // shortened and marked as shortened; when even that does not fit, nothing.
@@ -506,8 +507,10 @@ function stageOwnedOutput({ plan, consolePlan = plan, receiptDir, candidate, cap
   }
   const consoleText = `${[...lines, ...consoleNotes, ...planLines(consolePlan)].join('\n')}\n`
   const evidenceBytes = staged.reduce((total, item) => total + item.input.evidence.reduce((sum, entry) => sum + entry.bytes.length, 0), 0)
+  // Only what an evidence item itself declares as a copy of counted output; never more than the item holds.
+  const nativeCopyBytes = staged.reduce((total, item) => total + item.input.evidence.reduce((sum, entry) => sum + (Number.isSafeInteger(entry.nativeCopyBytes) ? Math.max(0, Math.min(entry.nativeCopyBytes, entry.bytes.length)) : 0), 0), 0)
   const bytes = staged.reduce((total, item) => total + Buffer.byteLength(item.serialized), 0) + Buffer.byteLength(consoleText)
-  return { written, staged, consoleText, bytes, evidenceBytes }
+  return { written, staged, consoleText, bytes, evidenceBytes, nativeCopyBytes }
 }
 
 async function writeStagedOutput({ custody, written, staged, consoleText, plan, writeConsole }) {
@@ -528,8 +531,19 @@ async function writeStagedOutput({ custody, written, staged, consoleText, plan, 
 
 async function commitCompleteOutput({ custody, writeConsole = writeConsoleDefault, ...options }) {
   const stage = stageOwnedOutput(options, (receipt) => custody.serializeFinal(receipt))
-  const { charge } = custody.finalCharge({ bytes: stage.bytes, evidenceBytes: stage.evidenceBytes })
-  return custody.commitFinalOutput({ bytes: stage.bytes, evidenceBytes: stage.evidenceBytes, commit: async () => ({ ...await writeStagedOutput({ custody, ...stage, plan: options.plan, writeConsole }), outputBytes: stage.bytes + stage.evidenceBytes, outputCharged: charge }) })
+  const { charge } = custody.finalCharge(stage)
+  return custody.commitFinalOutput({ bytes: stage.bytes, evidenceBytes: stage.evidenceBytes, nativeCopyBytes: stage.nativeCopyBytes, commit: async () => ({ ...await writeStagedOutput({ custody, ...stage, plan: options.plan, writeConsole }), outputBytes: stage.bytes + stage.evidenceBytes, outputCharged: charge }) })
+}
+
+// The app log as evidence: a header line and the log the owned run wrote as the app's output arrived, every byte
+// of it counted then. When the root that holds the log is about to be removed, this copy replaces it and says
+// so; when the root is kept (asked for, or because cleanup could not be verified), both stay on disk and the
+// copy is counted in full.
+export function appLogEvidence({ gate, root, rootWillBeRemoved, io = fs }) {
+  const log = path.join(root, 'app.log')
+  if (!io.existsSync(log)) return null
+  const body = io.readFileSync(log)
+  return { role: null, name: `${gate}-app-${toIdentifier(path.basename(root))}.log`, bytes: Buffer.concat([Buffer.from(`# app.log of ${root}\n`), body]), nativeCopyBytes: rootWillBeRemoved ? body.length : 0 }
 }
 
 // Strings, lists and nesting cut to a fixed size, so a failed receipt that embeds them is bounded.
@@ -613,8 +627,8 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
       if (!verified) capabilities = { ...capabilities, qualified: false }
       const control = { error: runError?.message ?? null, cleanup, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, nativeOutput: custody.nativeUsed, failureReserve: custody.failureOutputReserve } }
       const recorded = [...evidence, { role: null, name: `${gate}-owned-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(control, null, 2)}\n`) }]
-      const log = layout ? path.join(layout.root, 'app.log') : null
-      if (log && fs.existsSync(log)) recorded.push({ role: null, name: `${gate}-app-${toIdentifier(path.basename(layout.root))}.log`, bytes: Buffer.concat([Buffer.from(`# app.log of ${layout.root}\n`), fs.readFileSync(log)]) })
+      const appLog = layout ? appLogEvidence({ gate, root: layout.root, rootWillBeRemoved: cleanup.joined && !args.keep }) : null
+      if (appLog) recorded.push(appLog)
       // With --keep the manual steps name the kept workspace and instance; without it they keep their placeholders.
       return commitOwnedOutput({ custody, plan, consolePlan: args.keep ? plan : planProcedure(plan.procedureId, { receiptDir, operator }), receiptDir, candidate, capabilities, operator, host,
         evidenceByGate: { [gate]: recorded }, passedByGate: { [gate]: verified ? passed : false }, timingsByGate: { [gate]: timings }, wallClock: { startedAt, endedAt: isoNow() }, json: Boolean(args.json),

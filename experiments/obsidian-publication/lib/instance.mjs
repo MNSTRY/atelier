@@ -48,9 +48,14 @@ export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
 //     handle reports an exit the process number cannot belong to anything
 //     else, and a handle that has reported one is never signalled;
 //   - a process further down is owned only by lineage: the process table
-//     showed it as the child of a process already owned. Immediately before
-//     every signal it is read back alone, and it is signalled only if its
-//     number, user, start time and command are still the ones recorded;
+//     showed it as the child of a process already owned. A table takes time
+//     to read and describes the past, so lineage starts only at a handle the
+//     run held before that table was read and still holds after it; for the
+//     whole read that number was this run's own child's. It continues only
+//     through a recorded process that still answers with its recorded
+//     identity when read back alone after the table. Immediately before
+//     every signal the process is read back alone, and it is signalled only
+//     if its number, user, start time and command are still the ones recorded;
 //   - a directory is owned only when this run created it, and is removed only
 //     while the path still names that same directory (device and file number).
 // A process that merely names one of the run's directories on its command line
@@ -58,19 +63,33 @@ export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
 // says so.
 // A process table that cannot be read is unknown custody, never proof of exit.
 //
-// Limits, stated rather than hidden. The deadline is cooperative: synchronous
-// work is not interrupted. A descendant's readback and its signal run in one
-// turn of this process, with nothing scheduled between them, but the readback
-// is a separate ps process: the time from ps reading the identity to the
-// signal is that process's exit and this one's return from waiting on it, a
-// few milliseconds on an idle host and more on a loaded one. A descendant that
-// exits inside that time and whose number is given to a new process at once
-// would be signalled; macOS offers no handle on a process that is not one's
-// own child that would close this. A process that detaches itself from the
-// app and names none of the run's directories is not seen at all; the app's
-// output streams, which such a process inherits, must still close before the
-// run counts the app as gone, and when they do not, the run stops waiting on
-// them so that it can end and report.
+// Limits, stated rather than hidden.
+//   - The deadline is cooperative: synchronous work is not interrupted.
+//   - Seeing takes time. Reading the whole table takes most of a second on a
+//     busy desktop, and the watcher begins a read one second after the last
+//     one ended. A process is recorded by the first read that begins after it
+//     and its parent both exist and ends while that parent is still the
+//     run's (held, or answering with its recorded identity). The children of
+//     a process that exits while a table is being read are therefore not
+//     recorded from that table, and once their parent is gone they cannot be
+//     recorded at all. Such a process, and one that detaches itself from the
+//     app between two reads, is never signalled; it is reported, and the
+//     roots kept, only if its command line names one of the run's
+//     directories.
+//   - A recorded descendant is known by number, user, start time (to the
+//     second) and command. Another process with the same number, user and
+//     command that started within that same second would be taken for it.
+//   - A descendant's readback and its signal run in one turn of this process
+//     with nothing scheduled between them, but the readback is a separate ps
+//     process: from ps reading the identity to the signal lies that
+//     process's exit and this one's return from waiting on it, a few
+//     milliseconds on an idle host and more on a loaded one. A descendant
+//     that exits inside that time and whose number is given to a new process
+//     at once would be signalled; macOS offers no handle on a process that is
+//     not one's own child that would close this.
+//   - The app's output streams, which a process it starts inherits, must
+//     close before the run counts the app as gone; when they do not, the run
+//     stops waiting on them so that it can end and report.
 // ---------------------------------------------------------------------------
 
 const PS_FIELDS = ['-o', 'pid=', '-o', 'ppid=', '-o', 'uid=', '-o', 'stat=', '-o', 'lstart=', '-o', 'command='];
@@ -150,7 +169,7 @@ export class OwnedRun {
     // The output bound: everything the run keeps, counted once. A reserve (a sixteenth, at most 256 KiB) is set
     // aside for what a failed run still says: a failed receipt with shortened evidence, and a failure line.
     this.outputLimit = outputBytes; this.outputUsed = 0; this.failureOutputReserve = Math.min(256 * 1024, Math.floor(outputBytes / 16)); this.failureOutputUsed = 0;
-    this.nativeUsed = 0; this.nativeCredited = 0; // app and command-line output counted as it arrived, and how much of it final evidence has reused
+    this.nativeUsed = 0; this.nativeCredited = 0; // app and command-line output counted as it arrived, and how much of it a final copy has replaced
     this.roots = new Map(); // path -> identity of the directory this run created there
     this.profiles = new Set(); // profile directories of the apps this run started; like the roots, observed and never a reason to signal
     this.children = new Set(); // processes this run spawned and has not yet seen closed, each held by its handle
@@ -203,15 +222,16 @@ export class OwnedRun {
     if (Buffer.byteLength(text) > this.outputAllowance - this.outputUsed) throw outputRefusal();
     return text;
   }
-  // What the final output adds to the bound. Evidence is mostly the app and command-line output already counted
-  // as it arrived, so it is charged only beyond that: every byte the run keeps is counted once.
-  finalCharge({ bytes = 0, evidenceBytes = 0 }) {
-    const credit = Math.min(evidenceBytes, this.nativeUsed - this.nativeCredited);
+  // What the final output adds to the bound: all of it, except evidence bytes that are a copy of output already
+  // counted when it arrived and whose original is about to be removed with the run's roots. Such a copy
+  // replaces the original, so it is counted once. Nothing else is credited, whatever its size.
+  finalCharge({ bytes = 0, evidenceBytes = 0, nativeCopyBytes = 0 }) {
+    const credit = Math.max(0, Math.min(nativeCopyBytes, evidenceBytes, this.nativeUsed - this.nativeCredited));
     return { charge: bytes + evidenceBytes - credit, credit };
   }
   // One reservation for everything the final output will write, made before any of it is written.
-  async commitFinalOutput({ bytes, evidenceBytes = 0, commit }) {
-    const { charge, credit } = this.finalCharge({ bytes, evidenceBytes });
+  async commitFinalOutput({ bytes, evidenceBytes = 0, nativeCopyBytes = 0, commit }) {
+    const { charge, credit } = this.finalCharge({ bytes, evidenceBytes, nativeCopyBytes });
     this.reserveOutput(charge);
     this.nativeCredited += credit;
     return commit();
@@ -257,28 +277,59 @@ export class OwnedRun {
     this.reading ??= this.readAndRecord().finally(() => { this.reading = null; });
     return this.reading;
   }
+  // A read that begins now: one already under way began earlier and may not show what exists now.
+  async observeFresh() {
+    while (this.reading) await this.reading.catch(() => {});
+    return this.observe();
+  }
+  heldNumbers() { return new Set([...this.children].filter((entry) => this.unreaped(entry)).map((entry) => entry.child.pid)); }
   async readAndRecord() {
+    // The handles lineage may start from are fixed before the table is read. A child adopted while the read is
+    // under way is not among them: the table may show its number as whatever held it before.
+    const heldBefore = [...this.children].filter((entry) => this.unreaped(entry));
     let rows;
     try {
       if ((this.cleanupUntil ?? this.deadline) - this.now() <= 0) throw new Error('Process readback deadline exceeded');
       rows = await this.readTable(this.readbackMs());
     } catch (error) { this.unknown.add(`process-readback:${error.message}`); error.readback = true; throw error; }
     this.tableReads += 1;
-    this.record(rows);
+    this.record(rows, heldBefore);
     return rows;
   }
-  record(rows) {
+  // `rows` is a table read some time ago; `heldBefore` are the handles the run held before that read began.
+  record(rows, heldBefore) {
     const current = new Map(rows.map((row) => [row.pid, row]));
-    // A recorded descendant that is gone, or has exited, is released: whatever holds that number later is not
-    // this run's. One that answers with another identity is released too, and the run no longer claims a clean end.
+    // The numbers the run's own handles hold now. They are used only to leave rows out: the table is older than
+    // they are, so what it says of such a number may be about whatever held it before.
+    const held = this.heldNumbers();
+    // A recorded descendant that is gone, has exited, or whose number one of the run's own handles now holds, is
+    // released: whatever holds that number later is not this run's descendant. One that answers with another
+    // identity is released too, and the run no longer claims a clean end.
     for (const [pid, recorded] of this.descendants) {
       const row = current.get(pid);
-      if (!row || row.exited) this.descendants.delete(pid);
+      if (!row || row.exited || held.has(pid)) this.descendants.delete(pid);
       else if (!sameProcess(recorded, row)) { this.descendants.delete(pid); this.unknown.add(`changed:${pid}`); }
     }
-    const spawned = new Set([...this.children].filter((entry) => this.unreaped(entry)).map((entry) => entry.child.pid));
-    const owned = (pid) => spawned.has(pid) || this.descendants.has(pid);
-    const adoptable = (row) => !row.exited && row.pid > 1 && row.pid !== this.self && !owned(row.pid) && owned(row.ppid);
+    // Lineage starts only at a handle held before this table was read and still held now: an uncollected child
+    // keeps its number, so for the whole read that number was this run's own child's, and the table's row for
+    // it is that child's. The row must say so too: this process is its parent, and it started when it was bound.
+    const roots = new Set();
+    for (const entry of heldBefore) {
+      if (!this.unreaped(entry)) continue;
+      const row = current.get(entry.child.pid);
+      if (!row) continue;
+      if (row.ppid !== this.self || (entry.bound && row.start !== entry.bound.start)) { this.unknown.add(`spawned-row-mismatch:${row.pid}`); continue; }
+      roots.add(row.pid);
+    }
+    // A recorded descendant has no handle, and ps does not read every row at one instant: its row may be its own
+    // while a row read a moment later names a process that has since taken its number as parent. So before
+    // anything new is recorded under it, it is read back alone, after the table: only one that still answers
+    // with its recorded identity was itself for the whole read.
+    const confirmed = new Map();
+    const stillItself = (pid) => { if (!confirmed.has(pid)) confirmed.set(pid, this.confirmDescendant(pid)); return confirmed.get(pid); };
+    const owned = (pid) => roots.has(pid) || (this.descendants.has(pid) && stillItself(pid));
+    // A number just found not to be itself is not recorded again from this table, which is older than that finding.
+    const adoptable = (row) => !row.exited && row.pid > 1 && row.pid !== this.self && !held.has(row.pid) && !this.descendants.has(row.pid) && confirmed.get(row.pid) !== false && owned(row.ppid);
     for (let grew = true; grew;) {
       grew = false;
       for (const row of rows) if (adoptable(row) && row.uid === this.uid) { this.descendants.set(row.pid, row); grew = true; }
@@ -289,23 +340,33 @@ export class OwnedRun {
     const places = [...this.roots.keys(), ...this.profiles];
     for (const [pid, recorded] of this.strays) {
       const row = current.get(pid);
-      if (!row || row.exited || !sameProcess(recorded, row)) this.strays.delete(pid);
+      if (!row || row.exited || held.has(pid) || !sameProcess(recorded, row)) this.strays.delete(pid);
     }
     for (const row of rows) {
-      if (row.exited || row.pid === this.self || owned(row.pid) || this.strays.has(row.pid)) continue;
+      if (row.exited || row.pid === this.self || held.has(row.pid) || this.descendants.has(row.pid) || this.strays.has(row.pid)) continue;
       if (adoptable(row) || places.some((place) => mentionsDirectory(row.command, place))) this.strays.set(row.pid, row);
     }
   }
 
-  // A descendant has no handle. It is read back alone, synchronously, and signalled in the same turn only while
-  // its number, user, start time and command are still the ones recorded.
-  signalDescendant(pid, name) {
+  // Reads one recorded descendant back alone, now, synchronously. One that is gone, has exited, or whose number
+  // one of the run's own handles now holds is released; one that answers with another identity is released and
+  // the run no longer claims a clean end. True only while it still answers with the identity recorded.
+  confirmDescendant(pid) {
     const recorded = this.descendants.get(pid);
-    if (!recorded || !Number.isInteger(pid) || pid <= 1 || pid === this.self) return false;
+    if (!recorded) return false;
+    // A number one of the run's own handles holds is that handle's, and is only ever signalled through it.
+    if (this.heldNumbers().has(pid)) { this.descendants.delete(pid); return false; }
     let current;
     try { current = this.readOne(pid, this.readbackMs()); } catch (error) { this.unknown.add(`process-readback:${error.message}`); error.readback = true; throw error; }
     if (!current || current.exited) { this.descendants.delete(pid); return false; }
     if (!sameProcess(recorded, current)) { this.descendants.delete(pid); this.unknown.add(`changed:${pid}`); return false; }
+    return true;
+  }
+
+  // A descendant has no handle. It is read back alone and signalled in the same turn, with nothing scheduled in
+  // between, only while its number, user, start time and command are still the ones recorded.
+  signalDescendant(pid, name) {
+    if (!Number.isInteger(pid) || pid <= 1 || pid === this.self || !this.confirmDescendant(pid)) return false;
     try { this.signal(pid, name); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
   }
 
@@ -315,7 +376,7 @@ export class OwnedRun {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       let row;
       try { row = this.readOne(entry.child.pid, this.readbackMs()); } catch (error) { this.unknown.add(`process-readback:${error.message}`); throw error; }
-      if (row && !row.exited && row.uid === this.uid && row.ppid === this.self && (row.command === program || row.command.startsWith(`${program} `)) && (!profile || namesProfile(row.command, profile))) return row;
+      if (row && !row.exited && row.uid === this.uid && row.ppid === this.self && (row.command === program || row.command.startsWith(`${program} `)) && (!profile || namesProfile(row.command, profile))) { entry.bound = row; return row; }
       if (entry.closed || !this.unreaped(entry)) return null;
       await this.pause(10);
     }
@@ -364,7 +425,8 @@ export class OwnedRun {
     const read = async (step) => { try { await step(); } catch (error) { readable = false; if (!error.readback) this.unknown.add(`process-cleanup:${error.message}`); } };
     // Without a readable table only the spawned processes can be joined, and the run reports unknown custody.
     const done = () => (readable ? this.settled() : this.children.size === 0);
-    await read(() => this.observe());
+    // A read that begins now, while what was spawned is still running: a read the watcher began earlier is older.
+    await read(() => this.observeFresh());
     // SIGTERM is given at most ten seconds and at most half the budget, so SIGKILL always has time of its own.
     for (const [name, stage] of [['SIGTERM', this.now() + Math.max(0, Math.min(10000, (until - this.now()) / 2))], ['SIGKILL', until]]) {
       // Spawned processes are signalled through their handles, which needs no process table.
