@@ -4,12 +4,12 @@ import childProcess, { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { reservePort } from './helpers/loopback-port.mjs'
 
 // No child of this suite reaches the developer's own Obsidian. The app, its
 // command-line tool, an app link, and anything that takes the command-line
@@ -94,14 +94,6 @@ async function waitFor(check, { timeoutMs = 10000, everyMs = 20, label = 'condit
     if (Date.now() > until) throw new Error(`timed out waiting for ${label}`)
     await sleep(everyMs)
   }
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.once('error', reject)
-    server.listen({ host: '127.0.0.1', port: 0 }, () => { const { port } = server.address(); server.close(() => resolve(port)) })
-  })
 }
 
 function raw({ port, method = 'POST', route, headers = {}, body = null }) {
@@ -440,7 +432,7 @@ async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginS
     t.after(() => listener.close())
     return { listener, calls, runtimeBearer, identity, sessions: withSessions }
   }
-  const port = fixedPort ?? await freePort()
+  const port = fixedPort ?? await reservePort(t)
   world.port = port
   world.bearer = world.install({ port })
   world.service = await world.listen({ port })
@@ -590,7 +582,7 @@ test('a republished data file moves the plugin to the new address and key withou
   const plugin = world.plugin()
   await plugin.load()
   await plugin.cycle()
-  const port = await freePort()
+  const port = await reservePort(t)
   fs.rmSync(path.join(pluginBearerDirectory(world.workspaceRoot), `${SCOPE}.json`))
   const bearer = world.install({ port })
   assert.notEqual(bearer, world.bearer)
@@ -779,7 +771,7 @@ test('an answer relayed from the service at another address does not verify, and
   const world = await channelWorld(t)
   // The service listens elsewhere, with the vault's key; a program at the address the vault names relays to it.
   await world.service.listener.close()
-  const elsewhere = await freePort()
+  const elsewhere = await reservePort(t)
   world.service = await world.listen({ port: elsewhere })
   const relay = await squatter(t, world.port, async (entry) => {
     const answer = await raw({ port: elsewhere, route: entry.path, headers: { Host: authorityOf('127.0.0.1', elsewhere) }, body: entry.body })
@@ -1222,7 +1214,7 @@ test('the bearers are read into memory once, and again only when their directory
   const listenerReads = { count: 0 }
   const counted = createPluginBearerCache({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, read: (input) => { listenerReads.count += 1; return readPluginBearers(input) } })
   const channel = createPluginChannelForOracleTests({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, runtimeId: 'rt-1', sessions: createPluginSessions(), statusOf: world.statusOf, serviceStatus: () => 'healthy', bearers: counted })
-  const port = await freePort()
+  const port = await reservePort(t)
   const identity = { serviceName: 'svc', workspaceId: WORKSPACE_ID, runtimeId: 'rt-1', pid: process.pid, host: '127.0.0.1', port, executableDigest: digest('entry'), startedAt: '2026-01-05T10:00:00.000Z' }
   const listener = createServiceServerForOracleTests({ identity, bearer: randomBytes(32).toString('base64url'), operations: { healthStatus: () => 'healthy', status: () => ({}), tick: async () => ({}), stop: async () => {}, plugin: (command, request) => channel.handle(command, request) } }, SERVER_PRIMITIVES)
   await listener.listen()
@@ -1721,7 +1713,7 @@ function serviceWorld(t) {
     freshness: () => createMaintenanceStateStore({ workspaceRoot, workspaceId: WORKSPACE_ID }).readFreshness().scopes.find((entry) => entry.scopeId === SCOPE),
     // `port`: the listener of an earlier service, which a restart on this machine keeps (its settings name it).
     async service({ adapterFactory = () => absentAdapter(), appStatus, seams = {}, port: keptPort } = {}) {
-      const port = keptPort ?? await freePort()
+      const port = keptPort ?? await reservePort(t)
       writeServiceSettings({ workspaceRoot, workspaceId: WORKSPACE_ID, settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: new Date(START).toISOString(), ...CONSENT }, updatedAt: new Date(START).toISOString() } })
       const service = await runMaintenanceService({
         loadProject, dataRoot, env, adapterFactory, entryPath: TEST_SERVICE_ENTRY, intervalMs: 60 * 60 * 1000, clock: world.clock,

@@ -1,7 +1,73 @@
 # Changelog
 
+## 0.2.0-alpha.14
+
+- `atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
+  candidate's own dependency closure, and `planConsumerClosure` is exported from
+  `@mnstry/atelier/upgrade`. The plan reads the candidate's `package.json` and
+  `package-lock.json`, the installed manifest of every lockfile copy of the
+  selected package, `package.json` in each directory above the npm root (to
+  refuse a parent that declares workspaces) and, for the default package name,
+  Atelier's own `package.json`. It runs no npm command, uses no network, reads
+  no npm configuration and writes nothing. It reports the lockfile's sources,
+  registry hosts and schemes, and platform exclusions. It checks the selected
+  package's exact `overrides` against every installed copy, only after binding
+  each installed manifest to the name and version of its lockfile entry, and
+  lists selector, nested and non-exact overrides, and overrides for packages a
+  link provides, as unchecked. The npm root must be the directory's real path.
+  Refusals reuse `usage`, `consumer-closure-incomplete` and
+  `override-not-inherited`, each with one bounded reason. Every run prints one
+  JSON document, including a run whose arguments are refused. A completed plan
+  exits 3 with `"proof": "not-run"` and a refusal exits 2; the command never
+  exits 0 and does not prove an offline reinstall. The consumer-closure
+  classifiers moved to `src/upgrade/closure-diagnostics.mjs`, and
+  `scripts/consumer-closure-diagnostics.mjs` re-exports them. Two of them
+  changed: a project folder entry in a lockfile is never counted as an
+  installed copy, and a lockfile entry that is not an object is reported as
+  missing by `capturedClosure` instead of raising a `TypeError`.
+
+- Add a tenant-neutral HTML control system at `@mnstry/atelier/ui`. The shared
+  geometry, variants, focus treatment, motion, action-group layouts, and safe
+  renderers are used by Atelier's generated project UI and are available to
+  downstream publication kits without importing publication semantics into
+  Atelier.
+- The Obsidian service test suites reserve the loopback ports they choose, so
+  another test cannot take a port between its selection and its use.
+
+## 0.2.0-alpha.13
+
+- Add the public Knowledge Health workshop on the existing local Knowledge
+  host: original wording, separate interpretation and four distinct responses;
+  optional Review in a separate session; a selected-draft copy-only handoff
+  retained with its original receipt. Exact retries do not append duplicates,
+  and reopening after restart reads the same proposal. The source owner edits
+  through ordinary repository tooling and reassesses; no browser source-apply
+  endpoint is added. Include the installed workshop kit and receiving guidance.
+- `atelier knowledge semantic` exposes the internal semantic operation runner
+  (`docs/semantic-operation.md`) as eleven operations: `begin`, `status`,
+  `reconcile`, `complete`, `proposals`, `contribution`, `relation`, `record`,
+  `cascade`, `context` and `project`. Each reads one JSON object
+  `{workspaceId, run, request}` from stdin, at most 256 KiB, in the workspace
+  `atelier ingest` uses. Each operation accepts exactly its documented request
+  fields, each of a declared kind; an unknown or missing field, a null
+  required field or a value of the wrong kind refuses as
+  `SEMANTIC_OPERATION_INVALID` before any store is opened, so nothing is
+  written. Formats such as timestamps are checked by the runner. Atelier calls no model: the host supplies its raw output, candidates
+  and usage (`null` when unknown), and interpretations stay pending until
+  receiver records, which are caller assertions, accept them. Failures print
+  `{ok:false, code, error}` with the runner's own `SEMANTIC_*` code,
+  `SEMANTIC_OPERATION_INTERRUPTED` for an uncoded error, or
+  `SEMANTIC_OPERATION_REFUSED` for Atelier's other refusals; `recorded` or
+  `captured` details are included whenever the runner attached them. No package export
+  or schema changes.
+
 ## Unreleased
 
+- Patch the fast-uri dependency and override from 3.1.7 to 3.1.8, the patched
+  3.x release for GHSA-hrr3-gc8f-f4qj (3.1.7 is in the affected range; whether
+  Atelier's use was exploitable is not established). The direct dependency
+  keeps packed consumers on one deduplicated copy: Ajv's own `^3.0.1` range
+  resolves to it, so a bare consumer installs 3.1.8 only.
 - Personal workspaces gain an explicit selection record, a read-only inventory of
   the private home, and a restore of authored inputs from an earlier generation:
   `selectPersonalGeneration`, `selectionConfirmDigest`, `readPersonalSelection`,

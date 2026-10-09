@@ -1,3 +1,5 @@
+import { atelierControlStyles } from './control-system.mjs'
+
 export function htmlEscape(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -35,6 +37,7 @@ export function renderPageShell({ title = 'MNSTRY Atelier', body = '' } = {}) {
     '.meta{color:#666;font-size:13px}',
     'pre{white-space:pre-wrap;background:#1f2424;color:#f5f5ee;border-radius:8px;padding:16px;overflow:auto}',
     '.notice{border-left:4px solid #245f73;padding:12px 16px;background:#edf6f7}',
+    atelierControlStyles,
     '</style>',
     '</head>',
     '<body>',

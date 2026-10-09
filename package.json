@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.12",
+  "version": "0.2.0-alpha.14",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
@@ -61,6 +61,7 @@
     "./readiness": "./src/readiness/readiness.mjs",
     "./readiness-protocols": "./src/readiness-protocols/bundled-pack.mjs",
     "./server": "./src/server/local-sidecar.mjs",
+    "./ui": "./src/ui/control-system.mjs",
     "./harness": "./src/harness/context.mjs",
     "./collaboration": "./src/collaboration/index.mjs",
     "./support": "./src/support/support-bundle.mjs",
@@ -114,6 +115,7 @@
     "./contracts/atelier-inquiry.v1.schema.json": "./contracts/atelier-inquiry.v1.schema.json",
     "./harnesses": "./src/harnesses/index.mjs",
     "./knowledge": "./src/knowledge/index.mjs",
+    "./knowledge-health": "./src/knowledge-health/index.mjs",
     "./evidence-navigation": "./src/evidence-navigation/index.mjs",
     "./evidence-navigation/local": "./src/evidence-navigation/local.mjs",
     "./personal-workspace": "./src/personal-workspace/index.mjs",
@@ -135,7 +137,16 @@
     "./interaction": "./src/interaction/index.mjs",
     "./coordination": "./src/coordination/index.mjs",
     "./contracts/atelier-interaction.v1.schema.json": "./contracts/atelier-interaction.v1.schema.json",
-    "./contracts/atelier-coordination.v1.schema.json": "./contracts/atelier-coordination.v1.schema.json"
+    "./contracts/atelier-coordination.v1.schema.json": "./contracts/atelier-coordination.v1.schema.json",
+    "./ingestion/optional": "./src/ingestion/optional/index.mjs",
+    "./ingestion/composition": "./src/ingestion/optional/composition/index.mjs",
+    "./ingestion/qualification": "./src/ingestion/optional/evaluation/index.mjs",
+    "./ingestion/vanilla": "./src/ingestion/optional/vanilla/composition-binding.mjs",
+    "./ingestion/native-normalization": "./src/ingestion/optional/vanilla/native-normalization.mjs",
+    "./ingestion/jev": "./src/ingestion/optional/jev/composition-binding.mjs",
+    "./ingestion/jev/judgments": "./src/ingestion/optional/jev/judgments.mjs",
+    "./ingestion/graphify": "./src/ingestion/optional/graphify/composition-binding.mjs",
+    "./ingestion/lightrag": "./src/ingestion/optional/lightrag/composition-binding.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",
@@ -171,7 +182,7 @@
   "dependencies": {
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "fast-uri": "3.1.7"
+    "fast-uri": "3.1.8"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -217,6 +228,6 @@
     "access": "public"
   },
   "overrides": {
-    "fast-uri": "3.1.7"
+    "fast-uri": "3.1.8"
   }
 }

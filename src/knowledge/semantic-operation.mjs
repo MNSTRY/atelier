@@ -15,6 +15,28 @@ export const SEMANTIC_OPERATION_PROFILE = 'atelier.semantic-operation-profile/v0
 export class SemanticOperationError extends Error {
   constructor(code, message) { super(message); this.name = 'SemanticOperationError'; this.code = code }
 }
+function withSavedReceipts(error, receipts) {
+  if (Object.keys(receipts).length === 0) return error
+  let code
+  if (error !== null && ['object', 'function'].includes(typeof error)) {
+    try {
+      const codeProperty = Object.getOwnPropertyDescriptor(error, 'code')
+      if (typeof codeProperty?.value === 'string' && /^SEMANTIC_[A-Z_]+$/.test(codeProperty.value)) code = codeProperty.value
+      const descriptors = {}, extensible = Object.isExtensible(error)
+      let writable = true
+      for (const [key, value] of Object.entries(receipts)) {
+        const existing = Object.getOwnPropertyDescriptor(error, key)
+        if (existing ? !Object.hasOwn(existing, 'value') || !existing.writable : !extensible) { writable = false; break }
+        descriptors[key] = existing ? { value } : { value, writable: true, configurable: true, enumerable: true }
+      }
+      if (writable) { Object.defineProperties(error, descriptors); return error }
+    } catch { /* Reflection/decoration failure must not erase the original cause. */ }
+  }
+  const failure = new SemanticOperationError(code ?? 'SEMANTIC_OPERATION_INTERRUPTED', 'Semantic operation was interrupted after saving recoverable receipts')
+  Object.defineProperty(failure, 'cause', { value: error, writable: true, configurable: true })
+  Object.assign(failure, receipts)
+  return failure
+}
 function check(condition, code, message) { if (!condition) throw new SemanticOperationError(code, message) }
 function identifier(value) { check(typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value), 'SEMANTIC_OPERATION_INVALID', 'A bounded operation identifier is required'); return value }
 function json(value) {
@@ -152,10 +174,9 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       check(readHistory().head === (result.head ?? state.head), 'SEMANTIC_OPERATION_HEAD', 'Knowledge history changed during the operation')
       return result
     } catch (error) {
-      if (result?.record && result.head) {
-        error.recorded = { record: harnessRef(result.record), head: result.head, nextAction: 'reopen-recorded-write' }
-      }
-      throw error
+      const receipts = result?.record && result.head
+        ? { recorded: { record: harnessRef(result.record), head: result.head, nextAction: 'reopen-recorded-write' } } : {}
+      throw withSavedReceipts(error, receipts)
     } finally { verification = null }
   }
   function events(state) {
@@ -185,7 +206,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       audience: domain.data.audience, scope: domain.data.scope,
       origin: { method: 'captured', locator: `semantic-operation:${value.operationId}`, contentDigest: contentDigest(body), rightsBasis: 'Host-declared operation metadata; integrity is not semantic acceptance.' }, basedOn,
     } }
-    return appendHarness({ workspaceRoot, profile: 'knowledge', record, confirm })
+    return { ...appendHarness({ workspaceRoot, profile: 'knowledge', record, confirm }), record }
   }
   function expectedAttempt(initial) {
     const value = initial.value
@@ -275,9 +296,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       check(ready.freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'Source or domain changed during reservation')
       return { ...ready, execution: 'ready-for-host', cacheReuse: false }
     } catch (error) {
-      const saved = history()
-      error.recorded = { record: harnessRef(saved.records.find(record => record.id === eventId(operationId, 'reserved'))), head: saved.head, nextAction: 'reopen-recorded-write' }
-      throw error
+      throw withSavedReceipts(error, { recorded: { record: harnessRef(recorded.record), head: recorded.head, nextAction: 'reopen-recorded-write' } })
     }
   }
   function reconcile({ operationId, at, by, reason, outcome, confirm }) {
@@ -290,9 +309,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     const recorded = append({ schema: OPERATION, operationId, phase: 'reconciled', reserved: harnessRef(initial.record), outcome, reason, assurance: 'host-declared-not-independently-verified', ...recovery }, { term: initial.record.data.term, at, by, confirm })
     try { return { ...status({ operationId }), head: recorded.head } }
     catch (error) {
-      const saved = history()
-      error.recorded = { record: harnessRef(saved.records.find(record => record.id === eventId(operationId, 'reconciled'))), head: saved.head, nextAction: 'reopen-recorded-write' }
-      throw error
+      throw withSavedReceipts(error, { recorded: { record: harnessRef(recorded.record), head: recorded.head, nextAction: 'reopen-recorded-write' } })
     }
   }
   function complete({ operationId, output, expectedOutputDigest, candidates, usage, at, confirm }) {
@@ -302,9 +319,10 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     const before = inspected(initial)
     check(before.status !== 'absent', 'SEMANTIC_RECONCILE_REQUIRED', 'Reconcile the absent own manifest before completing output')
     // Store owned executed bytes before interpreting even an oversized/malformed envelope.
-    intake.completeAttempt({ attemptId: value.attemptId, output, expectedOutputDigest })
-    const attempt = inspected(initial)
+    const completion = intake.completeAttempt({ attemptId: value.attemptId, output, expectedOutputDigest })
+    let recorded
     try {
+      const attempt = inspected(initial)
       check(status({ operationId }).freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'The source or adopted domain changed before completion')
       const declared = json({ candidates, usage })
       closed(declared.usage, ['inputTokens', 'outputTokens', 'cost', 'currency', 'elapsedMs', 'retries'])
@@ -315,18 +333,18 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       // Preserve executed raw bytes even when their interpretation is refused.
       // Resuming interpretation reuses this completion; it never runs the host.
       const proposals = prepareSemanticProposals({ store, input: value.input, candidates: declared.candidates })
-      const recorded = append({ schema: OPERATION, operationId, phase: 'completed', reserved: harnessRef(initial.record), completion: attempt.completion,
+      recorded = append({ schema: OPERATION, operationId, phase: 'completed', reserved: harnessRef(initial.record), completion: attempt.completion,
         candidates: declared.candidates, usage: declared.usage, usageAssurance: 'host-reported', inputDigest: value.input.digest }, { term: initial.record.data.term, at, by: `host-model:${value.extractor.id}@${value.extractor.version}`, confirm })
       const ready = status({ operationId })
       if (ready.freshness !== 'current') {
         const error = new SemanticOperationError('SEMANTIC_OPERATION_STALE', 'Source or domain changed after recording completion')
-        error.recorded = { record: harnessRef(history().records.find(record => record.id === eventId(operationId, 'completed'))), head: recorded.head, nextAction: 'reopen-recorded-write' }
         throw error
       }
       return { ...ready, head: recorded.head, proposals }
     } catch (error) {
-      error.captured = { attemptId: value.attemptId, completion: attempt.completion, head: history().head, nextAction: 'reopen-captured-output' }
-      throw error
+      const receipts = { captured: { attemptId: value.attemptId, completion, head: recorded?.head ?? state.head, nextAction: 'reopen-captured-output' } }
+      if (recorded) receipts.recorded = { record: harnessRef(recorded.record), head: recorded.head, nextAction: 'reopen-recorded-write' }
+      throw withSavedReceipts(error, receipts)
     }
   }
   function completed(operationId) {

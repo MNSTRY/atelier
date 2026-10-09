@@ -33,6 +33,7 @@ Core commands:
   graph [--check]                 Build or check the knowledge graph.
   knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
   knowledge dashboard|session     Inspect guided work and retain private drafts.
+  knowledge semantic OPERATION    Record a host-run semantic extraction for review.
   enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
@@ -65,6 +66,7 @@ Core commands:
   upgrade explain --plan          Explain saved changes and consent without writes.
   upgrade apply --plan --confirm   Apply the selected plan through commit hooks.
   upgrade status|recover          Inspect receipts or preview recovery.
+  upgrade closure --npm-root      Plan a consumer dependency-closure check; reads only, proves nothing.
   upgrade --dry-run               Plan a legacy package/template upgrade.
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.

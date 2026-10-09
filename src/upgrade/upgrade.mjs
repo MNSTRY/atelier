@@ -26,8 +26,10 @@ import { loadExtensionPacks } from '../extension-packs/loader.mjs'
 import { inspectPackageProvenance, legacyPackageSource } from './provenance.mjs'
 import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, explainSavedUpgrade } from './transaction.mjs'
 import { renderUpgradeExplanation } from './explanation.mjs'
+import { planConsumerClosure, runClosurePlanCommand } from './closure.mjs'
 export { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, explainSavedUpgrade }
 export { prepareTemplateUpgrade } from './transaction.mjs'
+export { planConsumerClosure }
 
 export const ATELIER_LOCK_SCHEMA = 'mnstry.atelier-lock@v1'
 export const ATELIER_MIGRATION_SCHEMA = 'mnstry.atelier-migration@v1'
@@ -683,6 +685,10 @@ export function runLockCommand(argv = process.argv.slice(2)) {
 
 export function runUpgradeCommand(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
+  // `closure` plans against an explicit npm root, which need not be an Atelier
+  // workspace. It runs before the project is resolved, writes nothing, and lets
+  // its typed refusal reach the command wrapper unchanged.
+  if (args._[0] === 'closure') return runClosurePlanCommand(args, argv)
   const project = commandProject({ argv, writeLocalState: args._[0] !== 'explain' })
   if (['plan', 'apply', 'status', 'recover', 'explain'].includes(args._[0])) {
     try {

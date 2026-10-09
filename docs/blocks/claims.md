@@ -20,15 +20,28 @@ for observation/reconciliation and one non-force push only when the exact
 reviewed commit plan requested and confirmed it, no earlier local commit is
 waiting to be published, and HEAD still names the verified commit object. Sync
 never uses the network actor fallback, follows tags, or recursively publishes
-submodule refs. The local authoring HTTP client
+submodule refs.
+
+The explicitly invoked maintainer rehearsal
+`src/knowledge-health/proof/rehearse.mjs` uses
+`src/knowledge-health/proof/common.mjs` to run `npm view`, `npm install` and
+optional `npm pack` against `https://registry.npmjs.org`. These commands can use
+the public package registry. The rehearsal uses empty consumer npm configuration
+and a disposable install/cache; installation uses `--ignore-scripts`. It is a
+maintainer proof command, not an automatic local authoring or conformance
+operation, and it calls no model provider. Its `npm ls` reads the consumer
+dependency tree. This disclosure does not authorize a registry rehearsal or
+publication.
+
+The local authoring HTTP client
 refuses non-loopback URLs, the served pages authorize no external origin, and
 release audit scans every executable or markup file in the exact `npm pack`
 inventory for egress primitives. The standalone gate also scans executable and
 markup files under `src/`, `bin/`, `scripts/`, `templates/`, `examples/`, and
 `skills/`. Two limits worth stating plainly: the egress control does not
 interpret data-only `.json` or `.md` files, and it does not model
-`child_process`; the reviewed `gh` and enrolled Git paths above are documented
-subprocess exceptions rather than scanner detections:
+`child_process`; the `gh`, enrolled Git and explicit maintainer `npm` paths above
+are documented subprocess exceptions rather than scanner detections:
 
 ```bash
 npm run egress:check

@@ -10,7 +10,7 @@ import { EMPTY_HARNESS_HEAD, harnessRef } from '../src/harnesses/contracts.mjs'
 import { inspectKnowledge } from '../src/knowledge/ledger.mjs'
 import { createIntakeStore, intakeDigest } from '../src/intake/store.mjs'
 import { prepareIngestionContribution } from '../src/knowledge/ingestion.mjs'
-import { createSemanticOperation, plainAssertionEligibility, assertSemanticProjection, semanticRelationId, semanticDependencyWitnesses, assertSemanticOperationProfile, SEMANTIC_OPERATION_PROFILE } from '../src/knowledge/semantic-operation.mjs'
+import { createSemanticOperation, SemanticOperationError, plainAssertionEligibility, assertSemanticProjection, semanticRelationId, semanticDependencyWitnesses, assertSemanticOperationProfile, SEMANTIC_OPERATION_PROFILE } from '../src/knowledge/semantic-operation.mjs'
 
 const fixture = JSON.parse(fs.readFileSync(new URL('../fixtures/atelier-ingestion/semantic-operation.json', import.meta.url)))
 const at = '2026-01-01T00:00:00Z'
@@ -536,8 +536,10 @@ transactionTest('begin refuses a reservation reconciled before intake publicatio
   const marker = '    intake.beginAttempt({ attemptId, blobId: source.digest'
   assert.equal(source.split(marker).length, 2)
   source = source.replace(marker, '    globalThis.__atelierSemanticReservationFixture();\n' + marker)
+  let reservation
   globalThis.__atelierSemanticReservationFixture = () => {
     const current = readHarness({ ...s.options, profile: 'knowledge' })
+    reservation = current
     s.runner.reconcile({ operationId: 'first', at, by: 'simulated-receiver', reason: 'Invented concurrent reconciliation before host execution.', outcome: 'not-executed', confirm: current.head })
   }
   t.after(() => { delete globalThis.__atelierSemanticReservationFixture })
@@ -548,7 +550,8 @@ transactionTest('begin refuses a reservation reconciled before intake publicatio
   assert.equal(failure?.code, 'SEMANTIC_RECONCILE_REQUIRED')
   const status = s.runner.status({ operationId: 'first' })
   assert.equal(status.phase, 'reconciled'); assert.equal(status.execution, 'reconciled')
-  assert.equal(failure.recorded.head, status.head)
+  assert.equal(failure.recorded.head, reservation.head)
+  assert.notEqual(failure.recorded.head, status.head, 'Saved receipt head is diagnostic; reopen obtains the later current head.')
   assert.ok(readHarness({ ...s.options, profile: 'knowledge' }).records.some(record => record.id === failure.recorded.record.id))
   fs.writeFileSync(ledgerFile, snapshot); fs.rmSync(path.join(s.root, '.atelier-local/intake/attempts/model-first'), { recursive: true })
   const guard = "ready.phase === 'reserved' && ready.head === recorded.head"
@@ -556,6 +559,340 @@ transactionTest('begin refuses a reservation reconciled before intake publicatio
   const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(guard, 'true')).toString('base64')}`)
   assert.equal(mutant.createSemanticOperation(s.options).begin(s.begin).execution, 'ready-for-host')
 
+})
+
+// Instrument only the runner's direct store imports, retaining real canonical
+// writes and readback. No fault hook is added to the shipped implementation.
+async function receiptFaultRunner(t, options, inspectModule = () => {}) {
+  const moduleUrl = new URL('../src/knowledge/semantic-operation.mjs', import.meta.url)
+  const asModule = source => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
+  const harness = asModule(`
+    import * as native from ${JSON.stringify(new URL('../src/harnesses/store.mjs', import.meta.url).href)};
+    export function appendHarness(request) {
+      const fault = globalThis.__atelierSemanticReceiptFault;
+      if (fault?.mode === 'append-failure') { fault.failureThrown = true; throw fault.primary; }
+      const result = native.appendHarness(request);
+      if (fault) { fault.recorded = true; fault.appendReceipt = result; fault.record = request.record; }
+      return result;
+    }
+    export function readHarness(request) {
+      const fault = globalThis.__atelierSemanticReceiptFault;
+      if (fault) {
+        fault.historyReads = (fault.historyReads ?? 0) + 1;
+        if (fault.failureThrown) { fault.catchHistoryReads = (fault.catchHistoryReads ?? 0) + 1; throw fault.secondary; }
+        if (fault.mode === 'begin-failure' && fault.recorded) throw fault.secondary;
+        if (fault.mode === 'usage-failure' && fault.historyReads === 3) throw fault.secondary;
+        if (['reconcile-failure', 'completed-status-failure', 'verified-result-failure'].includes(fault.mode) && fault.recorded) {
+          if (fault.failedOnce) throw fault.secondary;
+          fault.failedOnce = true; fault.failureThrown = true; throw fault.primary;
+        }
+      }
+      return native.readHarness(request);
+    }
+  `)
+  const intake = asModule(`
+    import { createIntakeStore as native } from ${JSON.stringify(new URL('../src/intake/store.mjs', import.meta.url).href)};
+    export { intakeDigest } from ${JSON.stringify(new URL('../src/intake/store.mjs', import.meta.url).href)};
+    export function createIntakeStore(options) {
+      const store = native(options);
+      return Object.freeze({ ...store,
+        beginAttempt(request) {
+          const fault = globalThis.__atelierSemanticReceiptFault;
+          if (fault?.mode === 'begin-failure') { fault.failureThrown = true; throw fault.primary; }
+          return store.beginAttempt(request);
+        },
+        completeAttempt(request) {
+          const result = store.completeAttempt(request);
+          const fault = globalThis.__atelierSemanticReceiptFault;
+          if (fault) { fault.captured = true; fault.completion = result; }
+          return result;
+        },
+        readAttempt(attemptId) {
+          const fault = globalThis.__atelierSemanticReceiptFault;
+          if (fault?.mode === 'capture-read-failure' && fault.captured) { fault.failureThrown = true; throw fault.primary; }
+          return store.readAttempt(attemptId);
+        },
+      });
+    }
+  `)
+  const source = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => {
+    if (ref === '../harnesses/store.mjs') return `from ${JSON.stringify(harness)}`
+    if (ref === '../intake/store.mjs') return `from ${JSON.stringify(intake)}`
+    return ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original
+  })
+  t.after(() => { delete globalThis.__atelierSemanticReceiptFault })
+  const module = await import(asModule(source))
+  inspectModule(module)
+  return module.createSemanticOperation(options)
+}
+function receiptFault(mode) {
+  return globalThis.__atelierSemanticReceiptFault = { mode,
+    primary: Object.assign(new Error('Invented primary store failure'), { code: 'E_PRIMARY' }),
+    secondary: Object.assign(new Error('Invented catch-side read failure'), { code: 'E_SECONDARY' }),
+  }
+}
+function completionRequest(first, overrides = {}) {
+  const candidates = emptyCandidates(first.input), output = JSON.stringify(candidates)
+  return { operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head, ...overrides }
+}
+function thrownReceiptError(fn) {
+  let failure, caught = false
+  try { fn() } catch (error) { failure = error; caught = true }
+  assert.equal(caught, true, 'The injected store failure must be observed, including null or undefined.')
+  return failure
+}
+function savedCapture(s, request, fault) {
+  delete globalThis.__atelierSemanticReceiptFault
+  const saved = createIntakeStore(s.options).readAttempt('model-first')
+  assert.equal(saved.status, 'complete'); assert.equal(saved.output, request.output)
+  assert.deepEqual(saved.completion, fault.completion)
+  return saved
+}
+
+function arbitraryReceiptFailures(mode) {
+  const error = () => Object.assign(new Error('Invented original storage failure'), { code: 'E_PRIMARY' })
+  const accessCalls = { get: 0, set: 0 }
+  const shapes = [
+    { id: 'extensible-error', make: error, retainsIdentity: true },
+    { id: 'frozen-error', make: () => Object.freeze(error()) },
+    { id: 'nonextensible-error', make: () => Object.preventExtensions(error()) },
+    { id: 'sealed-error', make: () => Object.seal(error()) },
+    { id: 'readonly-receipts', make: () => Object.defineProperties(error(), {
+      recorded: { value: 'original-recorded', writable: false }, captured: { value: 'original-captured', writable: false },
+    }) },
+    { id: 'accessor-receipts', make: () => Object.defineProperties(error(), Object.fromEntries(['recorded', 'captured'].map(key => [key, {
+      get() { accessCalls.get++; return 'original-receipt' },
+      set() { accessCalls.set++ },
+    }]))), accessCalls },
+    { id: 'writable-nonconfigurable-receipts', make: () => Object.defineProperties(error(), {
+      recorded: { value: 'original-recorded', writable: true }, captured: { value: 'original-captured', writable: true },
+    }), retainsIdentity: true },
+    { id: 'frozen-semantic-error', make: () => Object.freeze(new SemanticOperationError('SEMANTIC_OPERATION_HEAD', 'Invented original head failure')) },
+    { id: 'null', make: () => null }, { id: 'undefined', make: () => undefined },
+    { id: 'string', make: () => 'Invented original failure' }, { id: 'zero', make: () => 0 },
+    { id: 'false', make: () => false }, { id: 'symbol', make: () => Symbol('invented failure') },
+    { id: 'bigint', make: () => 1n },
+  ]
+  if (mode === 'completed-status-failure') shapes.push(
+    { id: 'mixed-captured-writable-recorded-readonly', make: () => Object.defineProperties(error(), {
+      captured: { value: 'original-captured', writable: true }, recorded: { value: 'original-recorded', writable: false },
+    }) },
+    { id: 'mixed-captured-readonly-recorded-writable', make: () => Object.defineProperties(error(), {
+      captured: { value: 'original-captured', writable: false }, recorded: { value: 'original-recorded', writable: true },
+    }) },
+  )
+  return shapes
+}
+
+for (const mode of ['begin-failure', 'reconcile-failure', 'capture-read-failure', 'completed-status-failure', 'verified-result-failure']) {
+  transactionTest(`arbitrary thrown values preserve saved receipts through ${mode}`, async t => {
+    for (const shape of arbitraryReceiptFailures(mode)) await t.test(shape.id, async t => {
+      const s = setup(t)
+      let FailureClass
+      const runner = await receiptFaultRunner(t, s.options, module => { FailureClass = module.SemanticOperationError })
+      let first, request, preparedRequest
+      if (mode !== 'begin-failure') first = runner.begin(s.begin)
+      if (['capture-read-failure', 'completed-status-failure'].includes(mode)) request = completionRequest(first)
+      if (mode === 'verified-result-failure') {
+        const candidates = extractedCandidates(first.input), output = JSON.stringify(candidates)
+        let head = runner.complete({ ...completionRequest(first), candidates, output, expectedOutputDigest: intakeDigest(output) }).head
+        const source = prepareIngestionContribution({ ...s.options, records: readHarness({ ...s.options, profile: 'knowledge' }).records,
+          ...s.begin.plan, sourceId: 'notes', title: 'Invented source', term: 'material' })
+        const sourceRecord = { schema: 'atelier-knowledge-record@v1', id: 'arbitrary-source', run: fixture.domain.run, at,
+          by: 'simulated-receiver', kind: 'contribution', data: source.data }
+        head = appendHarness({ ...s.options, profile: 'knowledge', record: sourceRecord, confirm: head }).head
+        preparedRequest = { operationId: 'first', id: 'arbitrary-entity', kind: 'entity', candidateId: 'nora', term: 'person', at,
+          confirm: head, source: harnessRef(sourceRecord), sourceBinding: source.sourceBinding }
+      }
+      const fault = receiptFault(mode), original = shape.make()
+      fault.primary = original
+      const descriptors = original && typeof original === 'object' ? Object.getOwnPropertyDescriptors(original) : null
+      const failure = thrownReceiptError(() => {
+        if (mode === 'begin-failure') return runner.begin(s.begin)
+        if (mode === 'reconcile-failure') return runner.reconcile({ operationId: 'first', at, by: 'simulated-receiver',
+          reason: 'Invented host did not execute.', outcome: 'not-executed', confirm: first.head })
+        if (mode === 'verified-result-failure') return runner.prepareContribution(preparedRequest)
+        return runner.complete(request)
+      })
+      assert.equal(fault.failureThrown, true, 'The intended original failure point was reached.')
+      assert.equal(fault.catchHistoryReads ?? 0, 0, 'No catch-side history read may replace the original failure.')
+      if (shape.accessCalls) assert.deepEqual(shape.accessCalls, { get: 0, set: 0 }, 'Accessor calls must be observed outside the recovery helper.')
+      if (shape.retainsIdentity) assert.equal(failure, original)
+      else {
+        assert.ok(failure instanceof FailureClass)
+        assert.equal(failure.cause, original); assert.equal(Object.hasOwn(failure, 'cause'), true)
+        assert.equal(Object.getOwnPropertyDescriptor(failure, 'cause').enumerable, false)
+        assert.equal(failure.code, shape.id === 'frozen-semantic-error' ? 'SEMANTIC_OPERATION_HEAD' : 'SEMANTIC_OPERATION_INTERRUPTED')
+        assert.doesNotThrow(() => JSON.stringify(failure), 'Primitive causes must not break existing JSON error reporting.')
+        if (descriptors) assert.deepEqual(Object.getOwnPropertyDescriptors(original), descriptors)
+      }
+      delete globalThis.__atelierSemanticReceiptFault
+      const history = readHarness({ ...s.options, profile: 'knowledge' })
+      const reopened = createSemanticOperation(s.options).status({ operationId: 'first' })
+      assert.equal(reopened.head, history.head)
+      const captured = ['capture-read-failure', 'completed-status-failure'].includes(mode)
+      const recorded = mode !== 'capture-read-failure'
+      if (recorded) {
+        const savedRecord = history.records.find(record => record.id === fault.record.id)
+        assert.ok(savedRecord); assert.deepEqual(failure.recorded.record, harnessRef(savedRecord))
+        assert.equal(failure.recorded.head, history.head); assert.equal(failure.recorded.nextAction, 'reopen-recorded-write')
+      }
+      if (captured) {
+        const saved = createIntakeStore(s.options).readAttempt('model-first')
+        assert.equal(saved.status, 'complete'); assert.equal(saved.output, request.output)
+        assert.deepEqual(failure.captured.completion, saved.completion)
+        assert.equal(failure.captured.attemptId, 'model-first'); assert.equal(failure.captured.head, history.head)
+        assert.equal(saved.completion.outputDigest, intakeDigest(request.output))
+        if (!recorded) assert.equal(createSemanticOperation(s.options).complete({ ...request, confirm: reopened.head }).phase, 'completed')
+      }
+      const serialized = JSON.parse(JSON.stringify(failure))
+      for (const [key, saved] of [['recorded', recorded], ['captured', captured]]) if (saved) {
+        if (Object.getOwnPropertyDescriptor(failure, key).enumerable) assert.deepEqual(serialized[key], failure[key])
+        else assert.equal(Object.hasOwn(serialized, key), false, 'Existing non-enumerable receipt attributes must remain intact.')
+      }
+      if (!shape.retainsIdentity) {
+        assert.equal(serialized.code, failure.code); assert.equal(serialized.name, 'SemanticOperationError')
+        assert.equal(Object.hasOwn(serialized, 'cause'), false, 'Existing JSON reporting excludes the original thrown value.')
+      }
+      if (mode === 'begin-failure') {
+        assert.equal(reopened.attempt.status, 'absent'); assert.equal(reopened.phase, 'reserved')
+        assert.equal(createSemanticOperation(s.options).reconcile({ operationId: 'first', at, by: 'simulated-receiver',
+          reason: 'Invented storage refused before execution.', outcome: 'not-executed', confirm: reopened.head }).phase, 'reconciled')
+      } else if (mode === 'reconcile-failure') assert.equal(reopened.phase, 'reconciled')
+      else {
+        const current = createSemanticOperation(s.options).status({ operationId: 'first' })
+        const cached = createSemanticOperation(s.options).begin({ ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: current.head })
+        assert.equal(cached.cacheReuse, true); assert.equal(cached.operationId, 'first')
+        assert.equal(createIntakeStore(s.options).readAttempt('model-second').status, 'absent')
+        if (mode === 'verified-result-failure') {
+          const saved = createIntakeStore(s.options).readAttempt('model-first')
+          const body = JSON.parse(history.records.find(record => record.id === preparedRequest.id).data.body)
+          assert.equal(body.raw.completionDigest, intakeDigest(JSON.stringify(saved.completion)))
+        }
+      }
+      if (shape.id === 'writable-nonconfigurable-receipts') for (const key of ['recorded', 'captured']) {
+        const actual = Object.getOwnPropertyDescriptor(original, key)
+        assert.equal(actual.configurable, descriptors[key].configurable); assert.equal(actual.enumerable, descriptors[key].enumerable)
+        assert.equal(actual.writable, descriptors[key].writable)
+      }
+    })
+  })
+}
+
+transactionTest('arbitrary thrown values remain unchanged when no reservation was saved', async t => {
+  for (const shape of arbitraryReceiptFailures()) await t.test(shape.id, async t => {
+    const s = setup(t), runner = await receiptFaultRunner(t, s.options), fault = receiptFault('append-failure')
+    const original = shape.make(); fault.primary = original
+    const descriptors = original && typeof original === 'object' ? Object.getOwnPropertyDescriptors(original) : null
+    assert.equal(thrownReceiptError(() => runner.begin(s.begin)), original)
+    if (shape.accessCalls) assert.deepEqual(shape.accessCalls, { get: 0, set: 0 })
+    if (descriptors) assert.deepEqual(Object.getOwnPropertyDescriptors(original), descriptors)
+    delete globalThis.__atelierSemanticReceiptFault
+    assert.equal(readHarness({ ...s.options, profile: 'knowledge' }).head, s.begin.confirm)
+    assert.equal(createIntakeStore(s.options).readAttempt('model-first').status, 'absent')
+  })
+})
+
+transactionTest('saved receipts preserve the original post-capture inspection error and recover identical output', async t => {
+  const s = setup(t), runner = await receiptFaultRunner(t, s.options), first = runner.begin(s.begin)
+  const request = completionRequest(first), fault = receiptFault('capture-read-failure')
+  const failure = thrownReceiptError(() => runner.complete(request))
+  assert.equal(failure, fault.primary); assert.equal(failure.code, 'E_PRIMARY')
+  assert.deepEqual(failure.captured.completion, fault.completion)
+  assert.equal(failure.captured.attemptId, 'model-first'); assert.equal(failure.captured.head, first.head)
+  assert.equal(failure.recorded, undefined)
+  savedCapture(s, request, fault)
+  const completed = createSemanticOperation(s.options).complete(request)
+  assert.equal(completed.phase, 'completed'); assert.equal(completed.attempt.output, request.output)
+  assert.deepEqual(completed.attempt.completion, fault.completion)
+  const cached = createSemanticOperation(s.options).begin({ ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: completed.head })
+  assert.equal(cached.cacheReuse, true); assert.equal(cached.operationId, 'first')
+  assert.equal(createIntakeStore(s.options).readAttempt('model-second').status, 'absent')
+})
+
+transactionTest('saved receipts retain usage refusal without any catch-side history read', async t => {
+  const s = setup(t), runner = await receiptFaultRunner(t, s.options), first = runner.begin(s.begin)
+  const request = completionRequest(first, { usage: { ...unknownUsage, inputTokens: -1 } }), fault = receiptFault('usage-failure')
+  const failure = thrownReceiptError(() => runner.complete(request))
+  assert.equal(failure.code, 'SEMANTIC_OPERATION_INVALID'); assert.match(failure.message, /Usage counts/)
+  assert.equal(fault.historyReads, 2, 'A third history read would replace the original refusal.')
+  assert.deepEqual(failure.captured.completion, fault.completion); assert.equal(failure.captured.head, first.head)
+  assert.equal(failure.recorded, undefined)
+  savedCapture(s, request, fault)
+  assert.equal(createSemanticOperation(s.options).complete({ ...request, usage: unknownUsage }).phase, 'completed')
+})
+
+transactionTest('saved receipts retain the original begin failure and committed reservation before explicit recovery', async t => {
+  const s = setup(t), runner = await receiptFaultRunner(t, s.options), fault = receiptFault('begin-failure')
+  const failure = thrownReceiptError(() => runner.begin(s.begin))
+  assert.equal(failure, fault.primary); assert.equal(failure.code, 'E_PRIMARY')
+  assert.deepEqual(failure.recorded.record, harnessRef(fault.record)); assert.equal(failure.recorded.head, fault.appendReceipt.head)
+  assert.equal(failure.recorded.nextAction, 'reopen-recorded-write'); assert.equal(failure.captured, undefined)
+  delete globalThis.__atelierSemanticReceiptFault
+  const reopened = createSemanticOperation(s.options).status({ operationId: 'first' })
+  assert.equal(reopened.phase, 'reserved'); assert.equal(reopened.attempt.status, 'absent'); assert.equal(reopened.head, fault.appendReceipt.head)
+  const reconciled = createSemanticOperation(s.options).reconcile({ operationId: 'first', at, by: 'simulated-receiver', reason: 'Invented store failure before host execution.', outcome: 'not-executed', confirm: reopened.head })
+  assert.equal(reconciled.phase, 'reconciled')
+  assert.equal(createSemanticOperation(s.options).begin({ ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: reconciled.head }).execution, 'ready-for-host')
+})
+
+transactionTest('saved receipts retain the original reconciliation status failure and committed record', async t => {
+  const s = setup(t), runner = await receiptFaultRunner(t, s.options), first = runner.begin(s.begin), fault = receiptFault('reconcile-failure')
+  const failure = thrownReceiptError(() => runner.reconcile({ operationId: 'first', at, by: 'simulated-receiver', reason: 'Invented host did not execute.', outcome: 'not-executed', confirm: first.head }))
+  assert.equal(failure, fault.primary); assert.deepEqual(failure.recorded.record, harnessRef(fault.record))
+  assert.equal(failure.recorded.head, fault.appendReceipt.head); assert.equal(failure.captured, undefined)
+  delete globalThis.__atelierSemanticReceiptFault
+  const reopened = createSemanticOperation(s.options).status({ operationId: 'first' })
+  assert.equal(reopened.phase, 'reconciled'); assert.equal(reopened.head, fault.appendReceipt.head)
+})
+
+transactionTest('saved receipts retain original post-completion status failure with capture and committed record', async t => {
+  const s = setup(t), runner = await receiptFaultRunner(t, s.options), first = runner.begin(s.begin)
+  const request = completionRequest(first), fault = receiptFault('completed-status-failure')
+  const failure = thrownReceiptError(() => runner.complete(request))
+  assert.equal(failure, fault.primary); assert.deepEqual(failure.recorded.record, harnessRef(fault.record))
+  assert.equal(failure.recorded.head, fault.appendReceipt.head); assert.equal(failure.captured.head, fault.appendReceipt.head)
+  assert.deepEqual(failure.captured.completion, fault.completion)
+  savedCapture(s, request, fault)
+  const reopened = createSemanticOperation(s.options).status({ operationId: 'first' })
+  assert.equal(reopened.phase, 'completed'); assert.equal(reopened.head, fault.appendReceipt.head)
+  assert.deepEqual(reopened.attempt.completion, fault.completion)
+})
+
+transactionTest('saved receipts never claim a reservation when append failed before publication', async t => {
+  const s = setup(t), runner = await receiptFaultRunner(t, s.options), fault = receiptFault('append-failure')
+  const failure = thrownReceiptError(() => runner.begin(s.begin))
+  assert.equal(failure, fault.primary); assert.equal(failure.recorded, undefined); assert.equal(failure.captured, undefined)
+  delete globalThis.__atelierSemanticReceiptFault
+  assert.equal(createIntakeStore(s.options).readAttempt('model-first').status, 'absent')
+  assert.equal(readHarness({ ...s.options, profile: 'knowledge' }).head, s.begin.confirm)
+})
+
+transactionTest('saved receipts never claim raw capture when completion refuses before publication', t => {
+  const s = setup(t), first = s.runner.begin(s.begin), request = completionRequest(first, { expectedOutputDigest: 'f'.repeat(64) })
+  const failure = thrownReceiptError(() => s.runner.complete(request))
+  assert.match(failure.message, /output digest mismatch/); assert.equal(failure.captured, undefined); assert.equal(failure.recorded, undefined)
+  const reopened = createSemanticOperation(s.options).status({ operationId: 'first' })
+  assert.equal(reopened.attempt.status, 'begun'); assert.equal(reopened.attempt.output, null); assert.equal(reopened.head, first.head)
+})
+
+transactionTest('saved receipts leave successful begin complete cache and public record responses unchanged', async t => {
+  const s = setup(t), runner = await receiptFaultRunner(t, s.options), first = runner.begin(s.begin), request = completionRequest(first)
+  const completed = runner.complete(request)
+  assert.equal(completed.phase, 'completed'); assert.deepEqual(completed.usage, unknownUsage)
+  const cached = runner.begin({ ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: completed.head })
+  assert.equal(cached.cacheReuse, true); assert.equal(createIntakeStore(s.options).readAttempt('model-second').status, 'absent')
+  const contribution = { schema: 'atelier-knowledge-record@v1', id: 'receipt-material', run: fixture.domain.run, at, by: 'simulated-receiver', kind: 'contribution', data: {
+    domain: harnessRef(fixture.domain), category: 'interpretation', term: 'material', title: 'Invented receipt control', body: 'Invented observation only.', audience: fixture.domain.data.audience, scope: fixture.domain.data.scope,
+    origin: { method: 'authored', reason: 'Simulated control fixture only.' }, basedOn: [],
+  } }
+  const contributed = appendHarness({ ...s.options, profile: 'knowledge', record: contribution, confirm: completed.head })
+  const record = { schema: 'atelier-knowledge-record@v1', id: 'receipt-control', run: fixture.domain.run, at, by: 'simulated-receiver', kind: 'evaluation', data: {
+    contribution: harnessRef(contribution), judgment: 'supported', rationale: 'Simulated receiver evaluation only.', limitations: ['Not a human acceptance result'], scope: fixture.domain.data.scope,
+  } }
+  const result = runner.record({ record, confirm: contributed.head })
+  assert.deepEqual(Object.keys(result).sort(), ['authority', 'head', 'reconsider', 'recorded'])
+  assert.equal(result.recorded, record.id); assert.equal(result.authority, 'none')
 })
 
 transactionTest('cascade skips a generated relation whose assertion support digest differs', t => {
