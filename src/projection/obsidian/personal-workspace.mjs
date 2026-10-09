@@ -5,7 +5,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { PersonalWorkspaceRefusal, composePersonalWorkspace, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
 import { ensureLocalState, resolveProjectConfig, validateProjectConfigDoc } from '@mnstry/atelier/project'
 import { buildCanonicalGraph } from '../../graph/graph.mjs'
-import { refuse } from '../../runtime/obsidian/errors.mjs'
+import { ObsidianMaintenanceRefusal, refuse } from '../../runtime/obsidian/errors.mjs'
 import { OBSIDIAN_EXT_KEY } from './contracts.mjs'
 
 // The one personal-workspace route of the Obsidian projection.
@@ -61,7 +61,7 @@ const ROUTES = new WeakMap()
 // The last validity key the composition confirmed for each binding: { inputs, facts }.
 const CONFIRMED = new WeakMap()
 // The selection record a binding was loaded under, when its loader followed the person's confirmed selection instead of
-// naming a generation itself (runtime/obsidian/personal-selection.mjs): { sequence, head, observe }.
+// naming a generation itself (runtime/obsidian/personal-selection.mjs): { sequence, head, observe, recheck }.
 const SELECTED = new WeakMap()
 export const EVERYTHING_SCOPE_ID = 'everything'
 const EXT_SCHEMA = 'atelier-obsidian-ext-settings/v1'
@@ -392,6 +392,12 @@ export async function validatePersonalWorkspace(project) {
   if (binding === null) return null
   const route = ROUTES.get(binding)
   if (route === undefined) return { ok: false, code: 'personal-binding-unrecognized' }
+  // A project pinned to a confirmed selection holds only while the history still ends, intact, with that selection's
+  // record: what observation of the record cannot see (a record before it broken, a confirmation that landed before
+  // the engine first looked) is seen here.
+  if (SELECTED.get(binding)?.recheck) {
+    try { assertPersonalSelection(project) } catch (error) { if (!(error instanceof ObsidianMaintenanceRefusal)) throw error; CONFIRMED.delete(binding); return { ok: false, code: error.code } }
+  }
   let composed
   if (route.offThread) composed = await composeInWorker(binding, route.worker)
   else {
@@ -407,10 +413,11 @@ const selectionRecord = ({ personalHome }, sequence) => path.join(personalHome, 
 
 // Pins a bound project to the selection record it was loaded under, and answers the project. From then on the engine
 // observes that record and the place of the next one as configuration (personalWorkspaceInputs): a confirmation
-// appended to the history, or a history cut short, is a change. `observe: false` is a test seam only, the mutation
-// control of that observation.
-export function pinPersonalSelection(project, { sequence, head }, { observe = true } = {}) {
-  SELECTED.set(personalWorkspaceBindingOf(project), Object.freeze({ sequence, head, observe }))
+// appended to the history, or a history cut short, is a change. And every time the composition is asked again
+// (validatePersonalWorkspace) the history is read again and must still end with that record. `observe: false` and
+// `recheck: false` are test seams only, the mutation controls of each.
+export function pinPersonalSelection(project, { sequence, head }, { observe = true, recheck = true } = {}) {
+  SELECTED.set(personalWorkspaceBindingOf(project), Object.freeze({ sequence, head, observe, recheck }))
   return project
 }
 

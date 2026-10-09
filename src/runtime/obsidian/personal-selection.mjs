@@ -28,7 +28,8 @@ import { refuse } from './errors.mjs'
 // A loaded project is pinned to the record it was loaded under
 // (pinPersonalSelection), so the engine observes that record and the place of
 // the next one, and loads again at the tick after a confirmation or after the
-// history was cut short.
+// history was cut short. At every full reconciliation the history is read
+// again, and a project whose record it no longer ends with is refused.
 //
 // Who may see a vault is not decided here: that stays the machine's setting.
 
@@ -39,7 +40,7 @@ export const SELECTION_PRIMITIVES = Object.freeze({
   // The head is read again once the generation is loaded.
   readsHeadAgain: true,
   // What the loaded project is pinned for (pinPersonalSelection).
-  pin: Object.freeze({ observe: true }),
+  pin: Object.freeze({ observe: true, recheck: true }),
 })
 
 const SOURCE = Object.freeze({ source: 'personal-workspace' })

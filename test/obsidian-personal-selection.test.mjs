@@ -276,3 +276,22 @@ test('a selection record that is not a regular file refuses without waiting on i
   const waited = run(`const fs = await import('node:fs'); fs.openSync(${JSON.stringify(ari.record(1))}, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); console.log('opened')`)
   assert.deepEqual([waited.status, waited.stdout], [null, ''], 'the oracle can fail: without O_NONBLOCK the open waits for a writer')
 })
+
+test('a history broken before its last record is refused at the next full reconciliation; mutation control: not read again, the views stay current', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  ari.select()
+  const blind = ari.engine({ fullReconciliationIntervalMs: 0, rules: { ...SELECTION_PRIMITIVES, pin: { ...SELECTION_PRIMITIVES.pin, recheck: false } } })
+  const engine = ari.engine({ fullReconciliationIntervalMs: 0 })
+  t.after(() => { blind.stop(); engine.stop() })
+  assert.ok(everyView(await blind.tick(), 'current'))
+  assert.ok(everyView(await engine.tick(), 'current'))
+  // The first record is no longer what the second links to, and neither record the engine observes changed.
+  fs.appendFileSync(ari.record(1), ' ')
+  assert.ok(everyView(await blind.tick(), 'current'), 'the oracle can fail')
+  const full = await engine.tick()
+  assert.equal(full.full, true)
+  assert.ok(everyView(full, 'stale', 'selection-history-corrupt'), JSON.stringify(full.scopes))
+  const next = await engine.tick()
+  assert.deepEqual([next.state, next.refusal?.code], ['refused', 'selection-history-corrupt'], JSON.stringify(next))
+})
