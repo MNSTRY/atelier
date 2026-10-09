@@ -232,7 +232,7 @@ test('cooperative publication interruption after journal staging releases locks 
   } }), (error) => error.code === 'ABORT_ERR')
   assert.equal(world.store.readCurrent(), null)
   assert.equal(world.read(NOTE), null)
-  assertJournalsValid(world)
+  assert.deepEqual(assertJournalsValid(world).map(lastEntryOf), [['verify', 'failed', 'ABORT_ERR']], 'the journal ends on the cancellation, under its own code')
   const retried = await world.publish(prepared, absentAdapter())
   assert.equal(retried.state, 'committed')
   assert.equal(world.read(NOTE), CANDIDATE)
@@ -282,27 +282,38 @@ const stopsBy = {
   'the settings check': () => {
     const refusal = Object.assign(new Error('source selection or eligibility changed while a view was being published'), { code: 'mixed-read' })
     let fire = false
-    return { arm: () => { fire = true }, scheduling: { guard: () => { if (fire) throw refusal } }, expected: (error) => error === refusal }
+    return { arm: () => { fire = true }, scheduling: { guard: () => { if (fire) throw refusal } }, expected: (error) => error === refusal, code: 'mixed-read' }
   },
   'a cancellation': () => {
     const controller = new AbortController()
-    return { arm: () => controller.abort(), scheduling: { signal: controller.signal }, expected: (error) => error?.code === 'ABORT_ERR' }
+    return { arm: () => controller.abort(), scheduling: { signal: controller.signal }, expected: (error) => error?.code === 'ABORT_ERR', code: 'ABORT_ERR' }
   },
 }
 async function stopDuringStaging(t, { phase, occurrence, stop, publisher }) {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
-  const { arm, scheduling, expected } = stopsBy[stop]()
+  const { arm, scheduling, expected, code } = stopsBy[stop]()
   let seen = 0
   const outcome = world.publish(viewOf('gen-stopped', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter(), {
     ...(publisher ? { publisher } : {}),
     scheduling: { ...scheduling, maxUnits: 1, onBurst: ({ phase: at }) => { if (at === phase && (seen += 1) === occurrence) arm() } },
   })
-  return { world, outcome, expected, seen: () => seen }
+  return { world, outcome, expected, code, seen: () => seen }
+}
+// What a stopped publication leaves in its journal. A stop before the journal is written leaves none. One after it
+// (at `move-candidate`) leaves a journal whose one entry names the stop by its own code, the one its caller is told,
+// and not as a fault of the publisher. Returns that journal, or null.
+const lastEntryOf = (document) => { const entry = document.entries.at(-1); return entry ? [entry.step, entry.outcome, entry.ext?.[EXT]?.code] : null }
+function assertStopJournalledAsItself(world, { journalled, code }) {
+  const stopped = assertJournalsValid(world).filter((document) => document.targetGeneration === 'gen-stopped')
+  assert.equal(stopped.length, journalled ? 1 : 0, 'the stopped publication has a journal only once it wrote one')
+  if (!journalled) return null
+  assert.deepEqual([stopped[0].state, stopped[0].entries.length, lastEntryOf(stopped[0])], ['failed', 1, ['verify', 'failed', code]], 'the journal ends on the stop, under its own code')
+  return stopped[0]
 }
 for (const [phase, occurrence, when] of STAGING_STOPS) {
   for (const stop of Object.keys(stopsBy)) {
     test(`a stop by ${stop} during staging, ${when}, is reported as itself; the candidates are cleaned up and the vault is untouched`, needsExchange, async (t) => {
-      const { world, outcome, expected, seen } = await stopDuringStaging(t, { phase, occurrence, stop })
+      const { world, outcome, expected, code, seen } = await stopDuringStaging(t, { phase, occurrence, stop })
       await assert.rejects(outcome, expected)
       assert.equal(seen(), occurrence, `the stop came at ${phase}`)
       assert.equal(world.store.readCurrent().generationId, 'gen-0001')
@@ -310,10 +321,15 @@ for (const [phase, occurrence, when] of STAGING_STOPS) {
       assert.deepEqual(filesUnder(world.store.stagingRoot), [], 'no staged candidate is left')
       assert.deepEqual(exchangeCandidateFiles(world), [], 'no candidate is left at an exchange path')
       assertJournalsValid(world)
+      const journalled = phase === 'move-candidate'
+      const stopped = assertStopJournalledAsItself(world, { journalled, code })
       const next = await world.publish(viewOf('gen-after-stop', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter())
       assert.deepEqual([next.state, world.store.readCurrent().generationId], ['committed', 'gen-after-stop'], JSON.stringify(next).slice(0, 300))
       assert.deepEqual([world.read(NOTE), world.read(OTHER)], [CANDIDATE, CANDIDATE])
       assertJournalsValid(world)
+      // The restart recovery of that publication read the journal of the stop and left it as it was: nothing appended,
+      // nothing committed from it.
+      if (journalled) assert.deepEqual(assertStopJournalledAsItself(world, { journalled, code }), stopped, 'restart recovery leaves the journal of a stop as it is')
     })
     test(`mutation control: a staging catch that reports every error as a staging failure fails the oracle for a stop by ${stop}, ${when}`, needsExchange, async (t) => {
       const broken = { ...PUBLICATION_PRIMITIVES, callerStoppedStaging: () => false }
@@ -322,7 +338,60 @@ for (const [phase, occurrence, when] of STAGING_STOPS) {
       assert.equal(seen(), occurrence)
       assert.deepEqual([result.state, result.refusal?.code], ['refused', 'staging-failed'], 'the stop is reported as a staging failure, which the oracle above refuses')
     })
+    if (phase === 'move-candidate') test(`mutation control: a publisher that journals every stop as its own fault fails the journal oracle for a stop by ${stop}, ${when}`, needsExchange, async (t) => {
+      const broken = { ...PUBLICATION_PRIMITIVES, journalFailureCode: () => 'publisher-error' }
+      const { world, outcome, expected, code, seen } = await stopDuringStaging(t, { phase, occurrence, stop, publisher: (options) => publishViewForOracleTests(options, broken) })
+      await assert.rejects(outcome, expected)
+      assert.equal(seen(), occurrence)
+      assert.throws(() => assertStopJournalledAsItself(world, { journalled: true, code }), assert.AssertionError, 'the journal names the stop as a publisher error, which the oracle above refuses')
+    })
   }
+}
+
+// The publisher's own check refuses between two candidates: the vault's folder went away while they were being staged
+// (`vault-root-moved`). The refusal is reported under its own code, and only once the candidates are cleaned up: a
+// candidate staged before the journal is written is named by no journal, so restart recovery never removes one that
+// was left. The vault, back where it was, is untouched, and the next publication commits.
+async function refuseDuringStaging(t, { phase, occurrence, publisher }) {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const away = `${world.vault}.moved-away`
+  let seen = 0
+  const result = await world.publish(viewOf('gen-refused-staging', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter(), {
+    ...(publisher ? { publisher } : {}),
+    scheduling: { maxUnits: 1, onBurst: ({ phase: at }) => { if (at === phase && (seen += 1) === occurrence) fs.renameSync(world.vault, away) } },
+  })
+  const left = () => [...filesUnder(world.store.stagingRoot), ...exchangeCandidateFiles(world)].map((file) => path.relative(world.root, file))
+  return { world, result, left, seen: () => seen, putBack: () => fs.renameSync(away, world.vault) }
+}
+for (const [phase, occurrence, when] of STAGING_STOPS) {
+  test(`a vault folder gone during staging, ${when}, refuses under its own code; the candidates are cleaned up and the vault is untouched`, needsExchange, async (t) => {
+    const { world, result, left, seen, putBack } = await refuseDuringStaging(t, { phase, occurrence })
+    assert.equal(seen(), occurrence, `the folder went away at ${phase}`)
+    assert.deepEqual([result.state, result.refusal?.code], ['refused', 'vault-root-moved'], JSON.stringify(result).slice(0, 300))
+    assert.deepEqual(left(), [], 'no candidate is left in staging or at an exchange path')
+    putBack()
+    assert.equal(world.store.readCurrent().generationId, 'gen-0001')
+    assert.deepEqual([world.read(NOTE), world.read(OTHER)], [BASE, BASE], 'nothing in the vault was touched')
+    assertJournalsValid(world)
+    const next = await world.publish(viewOf('gen-after-refusal', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter())
+    assert.deepEqual([next.state, world.store.readCurrent().generationId], ['committed', 'gen-after-refusal'], JSON.stringify(next).slice(0, 300))
+    assert.deepEqual([world.read(NOTE), world.read(OTHER)], [CANDIDATE, CANDIDATE])
+    assert.deepEqual(left(), [])
+    assertJournalsValid(world)
+  })
+  test(`mutation control: a staging catch that hands a refusal on before the cleanup fails the oracle for a vault folder gone ${when}`, needsExchange, async (t) => {
+    const broken = { ...PUBLICATION_PRIMITIVES, refusedStagingCleansUp: () => false }
+    const { world, result, left, seen, putBack } = await refuseDuringStaging(t, { phase, occurrence, publisher: (options) => publishViewForOracleTests(options, broken) })
+    assert.equal(seen(), occurrence)
+    assert.deepEqual([result.state, result.refusal?.code], ['refused', 'vault-root-moved'])
+    assert.notDeepEqual(left(), [], 'candidates are left behind, which the oracle above refuses')
+    // What becomes of them: the restart recovery of the next publication retires the candidates a journal names (the
+    // journal is written before the first move), and never looks at a staging folder no journal names.
+    putBack()
+    const next = await world.publish(viewOf('gen-after-refusal', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter(), { publisher: (options) => publishView(options) })
+    assert.equal(next.state, 'committed', JSON.stringify(next).slice(0, 300))
+    assert.equal(left().length > 0, phase !== 'move-candidate', `after the next publication: ${JSON.stringify(left())}`)
+  })
 }
 
 test('a publication refused before its commit is not committed by the restart recovery of the next publication', needsExchange, async (t) => {
@@ -330,21 +399,23 @@ test('a publication refused before its commit is not committed by the restart re
     // What the resident engine does when a selected source changed during the publication.
     'by the check before the commit': () => {
       const refusal = Object.assign(new Error('a selected source changed during publication'), { code: 'mixed-read' })
-      return { refusal, options: { beforeCommit: async () => { throw refusal } } }
+      return { refusal, journalled: 'publisher-error', options: { beforeCommit: async () => { throw refusal } } }
     },
     // What it does when the settings that selected the view changed: its guard refuses at the last boundary.
     'by the guard at the last boundary': () => {
       const refusal = Object.assign(new Error('source selection changed during publication'), { code: 'mixed-read' })
       let last = false
-      return { refusal, options: { scheduling: { onBurst: ({ phase }) => { if (phase === 'verify-before-commit') last = true }, guard: () => { if (last) throw refusal } } } }
+      return { refusal, journalled: 'mixed-read', options: { scheduling: { onBurst: ({ phase }) => { if (phase === 'verify-before-commit') last = true }, guard: () => { if (last) throw refusal } } } }
     },
   }
   for (const [name, make] of Object.entries(refusals)) await t.test(name, async (t) => {
     const world = makeWorld(t)
-    const { refusal, options } = make()
+    const { refusal, journalled, options } = make()
     await assert.rejects(world.publish(viewOf('gen-refused', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } }), absentAdapter(), options), (error) => error === refusal)
     assert.equal(world.store.readCurrent(), null, 'the refused generation is not committed')
-    assertJournalsValid(world)
+    // The two refusals look the same (an error whose code is `mixed-read`). Only the one that came through the
+    // scheduling guard carries the tag of a caller's stop, and only that one is journalled under its own code.
+    assert.deepEqual(assertJournalsValid(world).map(lastEntryOf), [['verify', 'failed', journalled]])
     // The next publication recovers what the refused one left. It publishes its own generation; it does not first
     // commit the refused one, which would also refuse this publication as a generation mismatch.
     const result = await world.publish(viewOf('gen-after-refusal', { notes: { [NOTE]: BASE, [OTHER]: BASE } }), absentAdapter())

@@ -97,8 +97,12 @@
   `open` waits for a tick that starts after the one in flight, and `service
   stop` ends the service after the tick in flight or its shutdown grace,
   leaving a publication cut short to the publisher's restart recovery. Reading sources
-  and building the canonical graph, the source snapshot, restart recovery and
-  the read-back still run without yielding. `prepareView` stays synchronous
+  and building the canonical graph, capturing the source snapshot, observing
+  source and vault files, the publisher's restart recovery, validating a
+  prepared view and planning its units, the exchange probe, writing and
+  syncing the journal before the candidates move, the look again at displaced
+  files after the units and the read-back after a commit still run without
+  yielding. `prepareView` stays synchronous
   and returns the same bytes. Across each wait the configuration files, the
   machine settings and the eligibility revision are checked again, and after
   a view is prepared and before its generation commits every selected source
@@ -123,6 +127,22 @@
   configuration file the system resolves no path for (some Windows volumes)
   is compared by its own path and bytes, instead of the project being loaded
   at every request.
+- A publication of the Obsidian maintenance service that is stopped or refused
+  on the way is recorded and cleaned up as what it was. A caller's stop after
+  the journal was opened (a setting that changed during the tick,
+  `mixed-read`, or a cancellation) is recorded in the journal's last entry
+  under that stop's own code instead of `publisher-error`; restart recovery
+  reads such a journal as before. A configuration file that cannot be read
+  again at a wait (no permission, an I/O error, no descriptor left) refuses
+  that view as `mixed-read` and has the next tick read everything again;
+  before, the raw error ended the tick, and the views after that one were not
+  prepared. A refusal raised while candidates are being staged (the vault's
+  folder replaced or gone) is still reported under its own code, now after
+  the candidates it staged are removed; before, those staged ahead of the
+  journal stayed in private staging, where restart recovery never looks. And
+  the service reads an explicit `prepareViewCooperatively: null` among its
+  engine seams as the engine does: there is no cooperative preparation, so a
+  replaced `prepareView` prepares the view.
 
 ## 0.2.0-alpha.13
 
