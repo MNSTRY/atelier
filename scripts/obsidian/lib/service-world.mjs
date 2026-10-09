@@ -265,10 +265,10 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
       const { identity } = target
       if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
       const settled = await awaitShutdown(stopTimeoutMs)
-      if (!settled) return { state: 'stopping', stopped: false, refused: true, reason: 'stop-timed-out', runtimeId: identity.runtimeId, pid: identity.pid }
+      if (!settled) return { state: 'stopping', stopped: false, refused: true, reason: 'stop-timed-out', runtimeId: identity.runtimeId, pid: identity.pid, heldCount: 1, handleKind: 'in-process-service' }
       service = null
       shutdownPromise = null
-      return { state: 'stopped', stopped: true, refused: false, reason: 'stopped-the-in-process-runtime', runtimeId: identity.runtimeId, pid: identity.pid }
+      return { state: 'stopped', stopped: true, refused: false, reason: 'stopped-the-in-process-runtime', runtimeId: identity.runtimeId, pid: identity.pid, heldCount: 1, handleKind: 'in-process-service' }
     },
     async stopHeld({ timeoutMs = 5000 } = {}) {
       if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new RangeError('held-service cleanup timeout must be between 0 and 5000 ms')

@@ -225,7 +225,8 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
     observedLive = readLive(observed)
   }
   const occupied = status?.state === 'occupied'
-  const heldStopProof = held?.joined === true && (held?.heldCount > 0 || held?.handleKind === 'in-process-service') && (lastKnownAlive !== true || graceful?.pid === process.pid)
+  const heldProof = (answer) => answer?.heldCount > 0 || answer?.handleKind === 'in-process-service'
+  const heldStopProof = held?.joined === true && (heldProof(held) || heldProof(graceful)) && (lastKnownAlive !== true || graceful?.pid === process.pid)
   const knownStopped = lastKnownPids.length === 0 || lastKnownAlive === false || (heldStopProof && graceful?.pid === process.pid)
   const gracefulStopped = graceful?.stopped === true && knownStopped
   const gracefulStateStopped = graceful?.state === 'stopped' && graceful?.stopped !== false && observedLive !== true && !observed?.__error && knownStopped
