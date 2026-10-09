@@ -56,6 +56,13 @@
   project is loaded again only when a file that decides it changed, compared
   by content at every request. A loader that answers a promise is never
   waited for: its view is told nothing until the load has answered.
+- The real-app acceptance run of the small-fixture desktop procedure
+  (`scripts/obsidian/desktop-receipts.mjs`, maintainer tooling that is not
+  shipped) ends the processes it started, removes the temporary directories it
+  created, and bounds the receipt and console output it keeps. It signals only
+  a process it spawned or a recorded child of one, and removes a directory only
+  while the path still names the one it created; otherwise it keeps the
+  directories and names them.
 - The Obsidian maintenance service stays responsive while it prepares and
   publishes a view. The engine prepares each view cooperatively and the
   publisher yields between complete units, so the loopback listener answers

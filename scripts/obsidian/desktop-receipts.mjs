@@ -35,13 +35,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { buildFocusQuery, focusBookmarkPayload } from '../../src/projection/obsidian/selection-ui/focus.mjs'
-import { RECEIPT_GATES } from '../../src/projection/obsidian/selection-ui/receipt.mjs'
+import { RECEIPT_GATES, validateAcceptanceReceipt } from '../../src/projection/obsidian/selection-ui/receipt.mjs'
 import { OutputRefusal, REPOSITORY_ROOT, assertExternalOutput, candidateIdentity, hardwareProfile, hostIdentity, isoNow, osEnvironment, parseArgs, sha256Digest, toIdentifier, walkFiles } from './lib/common.mjs'
 import { runAp03 } from './lib/ap03.mjs'
 import { AP05_SCOPES, AP05_SCOPE_DOCUMENTS, prepareAp05Workspace, runAp05 } from './lib/ap05.mjs'
 import { FULL_SCOPE, absentAdapter, createEngineSeams, deriveWorkspace, loadProject, materializeFixtureWorkspace } from './lib/derive.mjs'
 import { PROPOSED_TARGETS, waitUntil, warmChangeSummary } from './lib/measure.mjs'
-import { evidenceFileName, writeGateReceipt } from './lib/receipts.mjs'
+import { buildReceipt, evidenceFileName, writeGateReceipt } from './lib/receipts.mjs'
 import { bindLayoutToVault, createAppEditor, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, initialiseRepositories, prepareWorkspace, stripProjectEnv } from './lib/service-world.mjs'
 
 export const DEFAULT_RECEIPT_DIR = path.join(REPOSITORY_ROOT, '.artifacts', 'obsidian', 'desktop')
@@ -436,7 +436,7 @@ export function ap04Evidence({ scaleManifest, run, derivationSamples }) {
 // Receipt assembly (pure apart from writing into receiptDir)
 // ---------------------------------------------------------------------------
 
-export function recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate = {}, passedByGate = {}, timingsByGate = {}, wallClock, dataset = null, recordedAt = isoNow() }) {
+export function recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate = {}, passedByGate = {}, timingsByGate = {}, wallClock, dataset = null, recordedAt = isoNow(), writeReceipt = writeGateReceipt }) {
   const written = []
   for (const gate of plan.gates) {
     const capabilityEvidence = { role: null, name: `${gate}-capabilities.json`, bytes: text(capabilities) }
@@ -446,7 +446,7 @@ export function recordProcedureReceipts({ plan, receiptDir, candidate, capabilit
     const outcome = automatedPassed === false || capabilities.qualified === false ? 'failed' : pending.length > 0 ? 'blocked' : 'passed'
     const notes = [capabilities.qualified === false ? 'Capability discovery did not qualify the installed app or CLI; unsupported capability is a failed qualification.' : 'Capability discovery qualified the installed app and CLI for this run.']
     if (pending.length > 0) notes.push(`${pending.length} manual step(s) remain; the receipt is incomplete until each role is attached and signed.`)
-    written.push(writeGateReceipt({ receiptDir, gate, candidate, environment: environmentOf(capabilities), host, operator, evidence, recordedAt, outcome, wallClock, dataset, manualStepsRequired: plan.manualStepsRequired, capabilities, timings: timingsByGate[gate] ?? null, notes }))
+    written.push(writeReceipt({ receiptDir, gate, candidate, environment: environmentOf(capabilities), host, operator, evidence, recordedAt, outcome, wallClock, dataset, manualStepsRequired: plan.manualStepsRequired, capabilities, timings: timingsByGate[gate] ?? null, notes }))
   }
   return written
 }
@@ -455,16 +455,122 @@ export function recordProcedureReceipts({ plan, receiptDir, candidate, capabilit
 // Driver: the only code that starts the isolated app. Never runs on import.
 // ---------------------------------------------------------------------------
 
-function printPlan(plan) {
-  console.log(`[desktop-receipts] ${plan.procedureId} ${plan.title}: gates ${plan.gates.join(', ')}; receipts under ${plan.receiptDir}; closes: false`)
-  for (const [gate, roles] of Object.entries(plan.automatedRoles)) console.log(`  ${gate} automated roles: ${roles.length ? roles.join(', ') : '(none)'}`)
+function planLines(plan) {
+  const lines = [`[desktop-receipts] ${plan.procedureId} ${plan.title}: gates ${plan.gates.join(', ')}; receipts under ${plan.receiptDir}; closes: false`]
+  for (const [gate, roles] of Object.entries(plan.automatedRoles)) lines.push(`  ${gate} automated roles: ${roles.length ? roles.join(', ') : '(none)'}`)
   for (const step of plan.manualStepsRequired) {
-    console.log(`  ${step.gate} manual role ${step.role}:`)
-    step.instructions.forEach((line, index) => console.log(`    ${index + 1}. ${line}`))
+    lines.push(`  ${step.gate} manual role ${step.role}:`)
+    step.instructions.forEach((line, index) => lines.push(`    ${index + 1}. ${line}`))
+  }
+  return lines
+}
+function printPlan(plan) { for (const line of planLines(plan)) console.log(line) }
+const receiptLine = ({ receiptPath, receipt, validation }) => `[desktop-receipts] ${receipt.gate} ${receiptPath}: outcome ${receipt.outcome}, status ${receipt.ext['mnstry.atelier.obsidian.desktop-receipts'].status}, closes false, schemaValid ${validation.schemaValid}, missing ${validation.missing.map((item) => item.code).join(',') || 'none'}`
+
+// The final output of an owned run, committed as one bounded amount. Every
+// receipt is first built by the pure builder (no file is written), then the
+// bytes of the receipts, of the evidence copies beside them and of the console
+// text are reserved together against the run's output bound, and only then do
+// the existing writer and the console run. An output that does not fit is
+// refused whole: nothing is written and nothing is shortened to fit.
+export async function commitOwnedOutput({ custody, plan, consolePlan = plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, recordedAt, json = false, consoleNotes = [],
+  writeConsole = (output) => new Promise((resolve, reject) => { process.stdout.write(output, (error) => (error ? reject(error) : resolve())) }) }) {
+  const staged = []
+  const written = recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, ...(recordedAt ? { recordedAt } : {}), writeReceipt: (input) => {
+    const receipt = buildReceipt(input)
+    const result = { receiptPath: path.join(input.receiptDir, `${input.gate}.json`), receipt, validation: validateAcceptanceReceipt(receipt, { gate: input.gate }) }
+    staged.push({ input, serialized: custody.serializeFinal(receipt) })
+    return result
+  } })
+  const lines = []
+  for (const [index, item] of written.entries()) {
+    lines.push(receiptLine(item))
+    if (json) lines.push(staged[index].serialized.slice(0, -1))
+  }
+  const consoleText = `${[...lines, ...consoleNotes, ...planLines(consolePlan)].join('\n')}\n`
+  const bytes = staged.reduce((total, item) => total + Buffer.byteLength(item.serialized) + item.input.evidence.reduce((sum, entry) => sum + entry.bytes.length, 0), 0) + Buffer.byteLength(consoleText)
+  return custody.commitFinalOutput({ bytes, commit: async () => {
+    // The existing writer, given the inputs the reservation was computed from.
+    for (const item of staged) {
+      const actual = writeGateReceipt(item.input)
+      if (`${JSON.stringify(actual.receipt, null, 2)}\n` !== item.serialized) throw new Error('Receipt changed between reservation and writing')
+    }
+    let timer
+    try {
+      await Promise.race([
+        writeConsole(consoleText),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Final console output did not complete in the cleanup budget')), Math.max(0, (custody.cleanupUntil ?? custody.deadline) - custody.now())) }),
+      ])
+    } finally { clearTimeout(timer) }
+    return { written, plan, outputHandled: true, outputBytes: bytes }
+  } })
+}
+
+// The small-fixture procedure as one owned run: its temporary roots, the
+// isolated app, the app's helper processes and every CLI call belong to one
+// lifecycle (lib/instance.mjs, OwnedRun) that ends them, bounds the output it
+// keeps, and removes the roots only after it has verified the processes gone
+// and committed the receipt. A run that fails still records a failed receipt
+// with what it observed; a run that cannot verify its cleanup or commit its
+// output keeps its roots and names them.
+async function runOwnedSmallFixture({ plan, args, candidate, operator, host, receiptDir }) {
+  const { createLayout, Instance, OwnedRun } = await import('../../experiments/obsidian-publication/lib/instance.mjs')
+  const custody = new OwnedRun()
+  const gate = plan.gates[0]
+  const startedAt = isoNow()
+  // What a run that never reached capability discovery records: an unqualified app and CLI.
+  let capabilities = { app: { name: 'Obsidian', version: null, installerVersion: null }, cli: { version: null }, lastSavedData: {}, errors: [], qualified: false }
+  let evidence = [], timings = {}, passed = false, layout = null
+  try {
+    return (await custody.execute(async () => {
+      const temp = custody.allocateRoot('atelier-desktop-')
+      const workspaceDir = path.join(temp, 'workspace')
+      const fixture = materializeFixtureWorkspace(workspaceDir)
+      // Its own short root directly under the system temp directory: the CLI socket path is limited to 104 bytes on macOS.
+      layout = createLayout(undefined, undefined, { custody })
+      const socket = path.join(layout.home, '.obsidian-cli.sock')
+      if (Buffer.byteLength(socket) > 100) throw new OutputRefusal(`isolated instance socket path is too long (${Buffer.byteLength(socket)} bytes): ${socket}`)
+      const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-full'), vaultRoot: layout.vault, withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
+      custody.assertActive()
+      const app = new Instance(layout, { custody })
+      const launchedAt = isoNow()
+      await app.launch()
+      await assertIsolatedInstance(app)
+      if (await declineTrustPrompt(app) === 'not-declined') throw new IsolationRefusal('community-plugins-on', 'the vault\'s trust prompt was answered with community plugins on; these procedures prove the command-line path')
+      capabilities = await assertAppFloor(await discoverCapabilities(app))
+      timings = { launchedAt, derivation: derived.timings }
+      const run = await runAp01({ instance: app, manifest: derived.manifest })
+      evidence = run.evidence
+      passed = run.passed
+      timings = { ...timings, ...run.timings, comparison: run.comparison }
+      plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layout.home, workspaceDir })
+    }, { keep: Boolean(args.keep), finalize: async (_value, cleanup, runError) => {
+      const verified = !runError && cleanup.joined
+      if (!verified) capabilities = { ...capabilities, qualified: false }
+      const control = { error: runError?.message ?? null, cleanup, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, failureReserve: custody.failureOutputReserve } }
+      const recorded = [...evidence, { role: null, name: `${gate}-owned-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(control, null, 2)}\n`) }]
+      const log = layout ? path.join(layout.root, 'app.log') : null
+      if (log && fs.existsSync(log)) recorded.push({ role: null, name: `${gate}-app-${toIdentifier(path.basename(layout.root))}.log`, bytes: Buffer.concat([Buffer.from(`# app.log of ${layout.root}\n`), fs.readFileSync(log)]) })
+      // With --keep the manual steps name the kept workspace and instance; without it they keep their placeholders.
+      return commitOwnedOutput({ custody, plan, consolePlan: args.keep ? plan : planProcedure(plan.procedureId, { receiptDir, operator }), receiptDir, candidate, capabilities, operator, host,
+        evidenceByGate: { [gate]: recorded }, passedByGate: { [gate]: verified ? passed : false }, timingsByGate: { [gate]: timings }, wallClock: { startedAt, endedAt: isoNow() }, json: Boolean(args.json),
+        consoleNotes: args.keep ? [`[desktop-receipts] kept ${[...custody.roots.keys()].join(' ')}`] : [] })
+    } })).value
+  } catch (error) {
+    // Bounded, and paid from the reserve the output bound sets aside for it. This is a control line, not a receipt:
+    // a run that refused its final output keeps every root, and the writer keeps whatever it had already written.
+    let diagnostic = null
+    try { diagnostic = custody.failureDiagnostic({ procedureId: plan.procedureId, error, retainedRoots: error?.cleanup?.retainedRoots ?? [...custody.roots.keys()] }) } catch { /* the reserve is spent; the caller still reports the error */ }
+    if (diagnostic !== null) {
+      process.stderr.write(diagnostic)
+      if (error && typeof error === 'object') error.finalOutputHandled = true
+    }
+    throw error
   }
 }
 
 async function runIsolated({ plan, args, candidate, operator, host, receiptDir }) {
+  if (plan.app === 'small-fixture') return runOwnedSmallFixture({ plan, args, candidate, operator, host, receiptDir })
   const { createLayout, Instance } = await import('../../experiments/obsidian-publication/lib/instance.mjs')
   // The CLI socket lives at <layout>/home/.obsidian-cli.sock and a Unix socket
   // path is limited to 104 bytes on macOS, so every instance gets its own short
@@ -644,7 +750,8 @@ async function main(argv) {
   for (const id of procedures) {
     const plan = planProcedure(id, { receiptDir, operator, scaleDir: args['scale-dir'] ?? null })
     if (plan.requiresScaleDir && !args['scale-dir']) throw new OutputRefusal('usage', 'AP-04 needs --scale-dir DIR (a generate-scale.mjs output with --derive)')
-    const { written, plan: filled } = await runIsolated({ plan, args, candidate, operator, host, receiptDir })
+    const { written, plan: filled, outputHandled } = await runIsolated({ plan, args, candidate, operator, host, receiptDir })
+    if (outputHandled) continue
     for (const { receiptPath, receipt, validation } of written) {
       const desktop = receipt.ext['mnstry.atelier.obsidian.desktop-receipts']
       console.log(`[desktop-receipts] ${receipt.gate} ${receiptPath}: outcome ${receipt.outcome}, status ${desktop.status}, closes false, schemaValid ${validation.schemaValid}, missing ${validation.missing.map((item) => item.code).join(',') || 'none'}`)
@@ -657,5 +764,5 @@ async function main(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => { console.error(`[desktop-receipts] ${error?.message ?? error}`); process.exitCode = error instanceof OutputRefusal || error instanceof IsolationRefusal ? 2 : 1 })
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => { if (!error?.finalOutputHandled) console.error(`[desktop-receipts] ${error?.message ?? error}`); process.exitCode = error instanceof OutputRefusal || error instanceof IsolationRefusal ? 2 : 1 })
 }
