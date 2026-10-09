@@ -2622,16 +2622,21 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
 
 const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'service-entry.mjs')
 const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }]
-// Ends a leftover AP-03 service through its held child handle where possible. For a service started by an exited
-// launcher, stopService's force fallback first asks it to stop, then re-checks the healthy runtime ID and PID before
-// signalling that PID. This fallback uses runtime proof, not a child handle. ap03ServiceWorld registers this cleanup
-// before temporary-directory removal, so the service record remains available throughout cleanup.
+// Graceful stop and the identity-checked fallback serve unheld launcher services.
+// Every exit path also sweeps and joins held children, independent of the record.
 const endLeftService = (runtime) => async () => {
-  try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* tried again below */ }
   try {
-    const record = runtime.record()
-    if (record && runtime.kill(record.pid, 'SIGKILL').sent !== true) await runtime.stop({ stopTimeoutMs: 5000, force: true })
-  } catch { /* gone, or the workspace already removed */ }
+    try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* fallback below */ }
+    let record
+    try { record = runtime.record() } catch { /* held children still joined below */ }
+    if (record && runtime.kill(record.pid, 'SIGKILL').sent !== true) {
+      const stopped = await runtime.stop({ stopTimeoutMs: 5000, force: true })
+      assert.ok(stopped.stopped || !runtime.alive(record.pid), 'unheld service cleanup must finish')
+    }
+  } finally {
+    const held = await runtime.stopHeld()
+    assert.equal(held.joined, true, 'held service cleanup must join every owned child')
+  }
 }
 
 // A synthetic workspace with real (empty) git repositories, its private state under a data root of its own.
@@ -2675,12 +2680,12 @@ test('AP-03 interruption: a service is killed only when it answered healthy with
 })
 
 // Register service cleanup before serviceWorld registers removal of its data root.
-function ap03ServiceWorld(t, label) {
+function ap03ServiceWorld(t, label, { spawn = childProcess.spawn } = {}) {
   let runtime
   t.after(async () => { if (runtime) await endLeftService(runtime)() })
   const setup = serviceWorld(t, label)
   const { world, env } = setup
-  runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
+  runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000, spawn })
   return { ...setup, runtime }
 }
 
@@ -2705,6 +2710,60 @@ test('AP-03 cleanup: a deliberately left service ends before its temporary works
   })
   assert.equal(runtime.alive(pid), false, 'cleanup must stop the service while its record is still readable')
   assert.equal(fs.existsSync(dir), false, 'workspace removal follows service cleanup')
+})
+
+for (const damaged of ['missing', 'malformed']) {
+  test(`AP-03 cleanup: held child is joined after stop failure with a ${damaged} record`, needsExchange, async (t) => {
+    const { world, runtime } = ap03ServiceWorld(t, `ap03-record-${damaged}`)
+    const started = await runtime.start()
+    const pid = started.record?.pid
+    assert.equal(started.state, 'healthy')
+    // Recovery remains handle-bound if the cleanup regression fails.
+    t.after(() => runtime.stopHeld())
+    const record = path.join(world.workspaceRoot, 'state', 'service', 'runtime.json')
+    if (damaged === 'missing') fs.unlinkSync(record)
+    else fs.writeFileSync(record, '{')
+    runtime.stop = async () => { throw new Error('synthetic stop timeout') }
+    await endLeftService(runtime)()
+    assert.equal(runtime.alive(pid), false, 'missing or malformed records cannot hide a held child')
+  })
+}
+
+test('AP-03 cleanup: unheld records use force stop and a failed held join fails cleanup', async () => {
+  const calls = []
+  const runtime = {
+    async stop(options) { calls.push(options); return { stopped: options.force === true } },
+    record: () => ({ pid: 4242 }), kill: () => ({ sent: false }), alive: () => true,
+    async stopHeld() { calls.push('held-sweep'); return { joined: true } },
+  }
+  await endLeftService(runtime)()
+  assert.deepEqual(calls, [{ stopTimeoutMs: 5000 }, { stopTimeoutMs: 5000, force: true }, 'held-sweep'])
+  runtime.stopHeld = async () => ({ joined: false })
+  await assert.rejects(endLeftService(runtime), /held service cleanup must join/)
+})
+
+test('AP-03 cleanup: held sweep reports an unjoined live child without PID signalling', needsExchange, async (t) => {
+  let held
+  const { runtime } = ap03ServiceWorld(t, 'ap03-unjoined', { spawn: (...args) => { held = childProcess.spawn(...args); return held } })
+  const started = await runtime.start()
+  const pid = started.record?.pid
+  assert.equal(started.state, 'healthy')
+  // Refuse signalling through this particular handle, then restore its real
+  // method for emergency recovery and the registered after-hook.
+  const kill = held.kill
+  try {
+    held.kill = () => false
+    const result = await runtime.stopHeld({ timeoutMs: 25 })
+    assert.equal(result.joined, false)
+    assert.deepEqual(result.remaining, [pid])
+    assert.deepEqual(result.signals, [{ pid, sent: false, through: 'handle' }])
+    await assert.rejects(() => runtime.stopHeld({ timeoutMs: Infinity }), RangeError)
+  } finally {
+    held.kill = kill
+    const joined = await runtime.stopHeld()
+    assert.equal(joined.joined, true)
+    assert.deepEqual(joined.remaining, [])
+  }
 })
 
 test('AP-03 runner: source refresh, dropped event with the null watcher, kills at owned points and a start from an exiting launcher, against a real service process', needsExchange, async (t) => {

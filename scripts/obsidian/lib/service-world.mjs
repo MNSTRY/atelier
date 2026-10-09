@@ -170,6 +170,19 @@ export function createServiceRuntime({
       if (!Number.isInteger(pid) || child === undefined) return { pid, signal, sent: false, reason: 'not-a-service-this-runtime-holds' }
       return { pid, signal, sent: child.kill(signal), through: 'handle' }
     },
+    // Teardown cannot rely on a service record surviving a failed start or shutdown.
+    // Only retained, unreaped child handles confer signal authority; a missing record
+    // never turns a PID into authority. Report a failed join instead of claiming cleanup.
+    async stopHeld({ timeoutMs = 5000 } = {}) {
+      if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new RangeError('held-service cleanup timeout must be between 0 and 5000 ms')
+      const held = services.filter(running)
+      const signals = held.map((child) => {
+        try { return { pid: child.pid, sent: child.kill('SIGKILL'), through: 'handle' } }
+        catch (error) { return { pid: child.pid, sent: false, reason: error.code ?? 'signal-failed', through: 'handle' } }
+      })
+      const settled = await waitUntil(() => held.every((child) => !running(child)), { timeoutMs, intervalMs: 25 })
+      return { joined: settled.met, signals, remaining: held.filter(running).map((child) => child.pid) }
+    },
     // A service this runtime started is answered from its handle; any other number is probed as before.
     alive(pid) { const own = services.filter((item) => item.pid === pid); return own.length > 0 ? own.some(running) : probeAlive(pid) },
     record() { const found = workspace(); return found?.workspaceRoot ? readServiceRecord({ workspaceRoot: found.workspaceRoot, workspaceId: found.workspaceId }) : null },
