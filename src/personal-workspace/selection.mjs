@@ -45,8 +45,10 @@ function privateHome(personalHome) {
   if (stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0) refuse('not-private-location')
   return personalHome
 }
+// Opened without waiting on it: a FIFO or a device in a record's place refuses instead of blocking the caller, which
+// may be a service's event loop.
 function readBytes(file, limit, tooLarge = 'malformed-input') {
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0))
   try {
     const stat = fs.fstatSync(fd)
     if (!stat.isFile()) refuse('malformed-input')
