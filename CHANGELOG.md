@@ -188,6 +188,12 @@
   (`scripts/obsidian/benchmark-event-loop.mjs`) signals its child's process
   group only while it still holds the child.
 
+- The desktop acceptance run reports a refused AP-03 interruption without
+  losing its failure evidence. Cleanup remembers the children of a process
+  whose custody could not be established, keeps its temporary roots while
+  those children remain, and reserves time for graceful termination after
+  reading the process tree. The AP-03 test cleanup uses owned process handles.
+
 ## 0.2.0-alpha.13
 
 - Add the public Knowledge Health workshop on the existing local Knowledge
