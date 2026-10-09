@@ -128,6 +128,10 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   heldNoteDigest({ file }) {
     try { return readFileFacts(file)?.digest ?? null } catch { return null }
   },
+  // Whether an error met by the check of a tick's settings, at a wait, is a failure to read them: a file-system error
+  // (no permission, an I/O error, no descriptor left), recognised as one is where a vault is placed. Anything else is a
+  // fault of the engine and stops the tick.
+  guardReadFailed: (error) => typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code),
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
@@ -623,9 +627,20 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       const machineDigest = digestOfJson(machine)
       const eligibilityRevision = String(eligibility.revision())
       const assertBindings = () => {
-        if (bindings.some(file => (readFileFacts(file.absolute)?.digest ?? null) !== file.digest)
-          || digestOfJson(readMachineSettings({ workspaceRoot, workspaceId })) !== machineDigest
-          || String(eligibility.revision()) !== eligibilityRevision) {
+        let changed
+        try {
+          changed = bindings.some(file => (readFileFacts(file.absolute)?.digest ?? null) !== file.digest)
+            || digestOfJson(readMachineSettings({ workspaceRoot, workspaceId })) !== machineDigest
+            || String(eligibility.revision()) !== eligibilityRevision
+        } catch (error) {
+          // A file that cannot be read now is not known to hold what this tick observed. The view is refused as one
+          // whose settings changed, and the next tick reads everything again: what an unreadable configuration file
+          // means is decided there, by observation and the project loader, as before.
+          if (!rules.guardReadFailed(error)) throw error
+          forceFull = true
+          refuse('mixed-read', 'a file that decides source selection could not be read again while a view was being prepared or published', { cause: error.code })
+        }
+        if (changed) {
           forceFull = true
           refuse('mixed-read', 'source selection or eligibility changed while a view was being prepared or published')
         }

@@ -677,7 +677,10 @@ bytes. A source that changed during the tick refuses the generation as
 `mixed-read`: its manifest is not committed, at that tick or by the restart
 recovery of a later one, and the next tick observes in full and prepares the
 view again. The same waits check that the configuration files, the machine
-settings and the eligibility revision are still the ones the tick read.
+settings and the eligibility revision are still the ones the tick read. A
+configuration file that cannot be read at such a check (no permission, an I/O
+error) refuses the view as `mixed-read` too, and the tick goes on to its
+other views.
 
 Called on its own, a cooperative preparation reads every selected source
 against its pin once more before it returns, a reused note's included, unless
