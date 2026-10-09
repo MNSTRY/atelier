@@ -116,16 +116,20 @@ export function assertPrivateHome(home) {
 //     therefore learns its tree one level per read: the child of a helper is
 //     recorded at the earliest by the read after the one that recorded the
 //     helper. Before its first signal, cleanup reads again until a read
-//     records nothing new (within the time SIGTERM is given), so what is there
-//     when cleanup begins is recorded before any parent is ended. The children
-//     of a process that exits before they are recorded cannot be recorded at
-//     all. Such a process, and one that detaches itself from the app between
-//     two reads, is never signalled. When a table still shows it under a
-//     parent that was the run's before that read began and has exited, or
-//     changed, by its end, the run remembers it by identity until it is seen
-//     gone, and keeps the roots while it is there; otherwise it is reported,
-//     and the roots kept, only if its command line names one of the run's
-//     directories.
+//     records nothing new (within the first half of the time SIGTERM is
+//     given), so what is there when cleanup begins is recorded before any
+//     parent is ended. The children of a process that exits before they are
+//     recorded cannot be recorded at all. Such a process, and one that
+//     detaches itself from the app between two reads, is never signalled.
+//     When a table still shows it under a parent that was the run's before
+//     that read began and has exited, or changed, by its end, the run
+//     remembers it by identity until it is seen gone, and keeps the roots
+//     while it is there; what a table shows under a remembered process is
+//     remembered with it. Otherwise it is reported, and the roots kept, only
+//     if its command line names one of the run's directories. That includes
+//     a daemon's double fork: a process that starts a child and exits at once
+//     leaves that child unseen unless a table read while both existed shows
+//     it under its parent, and reads are about a second apart.
 //   - A recorded descendant is known by number, user, start time (to the
 //     second) and command. Another process with the same number, user and
 //     command that started within that same second would be taken for it.
@@ -445,13 +449,21 @@ export class OwnedRun {
     // number's process left behind, which can no longer be recorded. It is never signalled. Like a stray it is
     // remembered by identity until it is seen gone (or recorded after all), and while it is there the run does not
     // claim a clean end and keeps its roots. Remembering signals nothing: a stale row can only keep a root.
+    // A remembered process that is gone, or changed, by this table is itself a parent that lapsed; one recorded after
+    // all is the run's own, and its children are recorded by lineage.
     for (const [pid, recorded] of this.orphans) {
       const row = current.get(pid);
-      if (!row || row.exited || held.has(pid) || this.descendants.has(pid) || !sameProcess(recorded, row)) this.orphans.delete(pid);
+      if (row && !row.exited && this.descendants.has(pid)) this.orphans.delete(pid);
+      else if (!row || row.exited || held.has(pid) || !sameProcess(recorded, row)) { this.orphans.delete(pid); lapsed.add(pid); }
     }
     for (const pid of recordedBefore.keys()) if (!earlier(pid)) lapsed.add(pid);
-    for (const row of rows) {
-      if (lapsed.has(row.ppid) && !row.exited && row.uid === this.uid && row.pid > 1 && row.pid !== this.self && !held.has(row.pid) && !this.descendants.has(row.pid) && !this.orphans.has(row.pid)) this.orphans.set(row.pid, row);
+    const rememberable = (row) => !row.exited && row.uid === this.uid && row.pid > 1 && row.pid !== this.self && !held.has(row.pid) && !this.descendants.has(row.pid) && !this.orphans.has(row.pid);
+    for (const row of rows) if (lapsed.has(row.ppid) && rememberable(row)) this.orphans.set(row.pid, row);
+    // What a remembered process starts is remembered with it, as far as this table shows it under one still here:
+    // closed within the table, so the child a forking process leaves behind holds the roots after its parent exits.
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const row of rows) if (this.orphans.has(row.ppid) && rememberable(row)) { this.orphans.set(row.pid, row); grew = true; }
     }
   }
 
@@ -535,10 +547,13 @@ export class OwnedRun {
     const terminate = this.now() + Math.max(0, Math.min(10000, (until - this.now()) / 2));
     // The descendants are read before the first signal: once their parent is gone the lineage cannot be read. A read
     // that begins now, while what was spawned is still running (a read the watcher began earlier is older), and
-    // again until a read records nothing new, because each read learns one level of the tree. These reads use the
-    // time SIGTERM is given.
-    await read(() => this.observeFresh());
-    while (readable && this.lastRecorded > 0 && this.now() < terminate) await read(() => this.observeFresh());
+    // again until a read records nothing new, because each read learns one level of the tree. These reads use at
+    // most the first half of the time SIGTERM is given, as far as the last read's length predicts the next one's, so
+    // that SIGTERM keeps a grace of its own. A read is never cut short: one that timed out would leave the table
+    // unread, and then nothing could be signalled by lineage.
+    const readsUntil = this.now() + (terminate - this.now()) / 2;
+    const freshRead = async () => { const began = this.now(); await read(() => this.observeFresh()); return this.now() - began; };
+    for (let took = await freshRead(); readable && this.lastRecorded > 0 && this.now() + took < readsUntil;) took = await freshRead();
     for (const [name, stage] of [['SIGTERM', terminate], ['SIGKILL', until]]) {
       // Spawned processes are signalled through their handles, which needs no process table.
       for (const entry of this.children) this.signalChild(entry, name);

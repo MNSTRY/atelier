@@ -188,6 +188,18 @@
   (`scripts/obsidian/benchmark-event-loop.mjs`) signals its child's process
   group only while it still holds the child.
 
+- AP-03 reports a refused interruption without losing its failure evidence.
+  Separately, small-fixture cleanup remembers a child observed under a run-owned
+  process that exited or changed during the process-table read, then remembers
+  descendants of those children. It retains its temporary roots while those
+  remembered processes remain. It also reserves estimated time for SIGTERM
+  grace after reading the process tree.
+- AP-03 test cleanup runs before temporary-workspace removal. It joins children
+  through retained handles even when the service record is missing or malformed
+  or graceful stop fails. Unheld launcher services use the existing forced-stop
+  fallback, which rechecks healthy runtime identity before signalling the PID.
+  A held child that does not exit within the cleanup bound fails the test.
+
 ## 0.2.0-alpha.13
 
 - Add the public Knowledge Health workshop on the existing local Knowledge
