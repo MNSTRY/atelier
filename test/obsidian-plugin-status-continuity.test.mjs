@@ -8,8 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { pluginClientProof, pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof } from '../src/projection/obsidian/plugin-bridge/channel.mjs'
 
 // Inert state, startup and request-flow regression. No real app, sockets, plugin writes or timers.
-// An optional source path allows the same assertions to demonstrate the defect.
-const sourcePath = process.argv[2] || fileURLToPath(new URL('../plugins/obsidian/main.js', import.meta.url))
+// ATELIER_PLUGIN_SOURCE_UNDER_TEST may name another plugin source, so the same assertions can
+// demonstrate the defect. The runner's arguments never choose the source.
+const sourcePath = process.env.ATELIER_PLUGIN_SOURCE_UNDER_TEST || fileURLToPath(new URL('../plugins/obsidian/main.js', import.meta.url))
 const source = fs.readFileSync(sourcePath, 'utf8')
 const checkedAt = '2026-01-01T00:00:00.000Z' // Explicit invented observation, never an execution timestamp.
 const channelData = (changes = {}) => ({
@@ -51,6 +52,8 @@ function world({ requestFlow = false, apiVersion = '1.13.7', unavailableModules 
   plugin.channel = { ...data.channel, scopeId: data.scopeId, bearer: data.bearer }
   plugin.view = { state: 'connecting', reason: 'not-yet-asked', report: null }
   plugin.saveData = () => { calls.writes += 1; throw new Error('Plugin writes forbidden') }
+  // A request made where no request flow is admitted is recorded and refused.
+  plugin.http = { request() { calls.requests.push('forbidden'); throw new Error('No socket admitted') } }
   return { plugin, calls, context }
 }
 function reportOf(plugin, { state = 'stale', reason = 'canonical-graph-invalid', generation = 'gen-invented-a', time = checkedAt, scopeId = plugin.channel.scopeId } = {}) {
@@ -432,8 +435,9 @@ const LEDGER_OPEN = 'const RELEASED_PLUGIN_CODE = Object.freeze({'
 const LEDGER_ENTRY = /^ {2}'(\d+\.\d+\.\d+)': 'sha256:([0-9a-f]{64})',$/u
 
 function releasedPluginCode() {
-  const source = fs.readFileSync(LEDGER_SOURCE, 'utf8')
-  assert.equal(source.includes('\r'), false, 'the plugin ledger must use LF line endings')
+  // The ledger file is not byte-pinned, so a checkout may give it CRLF line endings.
+  const source = fs.readFileSync(LEDGER_SOURCE, 'utf8').replace(/\r\n/gu, '\n')
+  assert.equal(source.includes('\r'), false, 'the plugin ledger must not contain a bare carriage return')
   const lines = source.split('\n')
   assert.equal((source.match(/RELEASED_PLUGIN_CODE\s*=/gu) || []).length, 1, 'exactly one RELEASED_PLUGIN_CODE table')
   const declarations = lines.filter((line) => /RELEASED_PLUGIN_CODE\s*=/u.test(line))

@@ -38,11 +38,11 @@
   the same channel, the status window shows the last observed state, reason,
   generation and check under "Last observed" labels. Those rows are historical
   and never establish current freshness, service health or permission. The
-  history stays in memory and is cleared on a channel change, a refusal, an
-  untrusted or malformed answer, a report for another scope, or unload. A
-  republished channel resets the display to `connecting` without repeating an
-  unchanged notice, and the plugin opens no channel before startup admits it
-  or after unload.
+  history stays in memory and is cleared on a channel change, an
+  authentication refusal, an untrusted or malformed answer, a report for
+  another scope, or unload. A republish that names a different channel resets
+  the display to `connecting` without repeating an unchanged notice, and the
+  plugin opens no channel before startup admits it or after unload.
 
 ## 0.2.0-alpha.13
 

@@ -425,8 +425,9 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     this.pendingFailure = null
     const previous = this.noticeState
     // A transient display projection, never a freshness or permission record.
-    // Only a report of this exact channel may be remembered; retain no service
-    // health, edit counts, source content or credentials in the historical fields.
+    // Only a report of this exact channel may be remembered. `channel` is an
+    // in-memory identity binding, never shown or stored; the other fields hold
+    // no service health, edit counts, source content or credentials.
     if (!this.channel || view.state === 'not-set-up' || view.state === 'unsupported' || (view.state === 'unreachable' && view.transportFailure !== true)) this.lastObservedStatus = null
     else if (view.report !== null) {
       const report = view.report

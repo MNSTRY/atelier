@@ -43,8 +43,11 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
   A connection reset or any other failure outside connection refusal and
   timeout also clears it. Without a prior usable report, "Last observed
   status" says "not available". After startup admits the channel, a republish
-  resets the display to `connecting` before its next answer; this reset does
-  not repeat an unchanged notice or lose the transition back to current.
+  that names a different channel (host, port, scope or key) resets the display
+  to `connecting` before its next answer; this reset does not repeat an
+  unchanged notice or lose the transition back to current. A republish of the
+  same channel keeps the display and history, and unusable data shows
+  `not set up`.
   Republish keeps an unsupported-app or unavailable-Node setup label and its
   channel closed. Plugin 1.1.2 adds this status continuity.
 - A notice appears when the view moves into a state that needs a person (held,
