@@ -2629,7 +2629,9 @@ const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true 
 const endLeftService = (runtime) => async () => {
   try { await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 5000 }) }
   catch (error) {
-    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || error.detail?.alive === true || error.detail?.forceAlive === true || error.detail?.status?.state === 'occupied' || error.detail?.held?.joined !== true) throw error
+    const liveness = [error.detail?.alive, error.detail?.forceAlive, error.detail?.lastKnownAlive].filter((value) => value !== undefined)
+    const allLivenessUnknown = liveness.length > 0 && liveness.every((value) => value === null)
+    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || !allLivenessUnknown || error.detail?.status?.state === 'occupied' || error.detail?.held?.joined !== true) throw error
     const held = await runtime.stopHeld()
     assert.equal(held.joined, true, 'fixture teardown must join every owned child')
   }
@@ -2730,6 +2732,16 @@ test('AP-03 fixture teardown does not absorb a live or occupied service refusal'
   }
   await assert.rejects(() => endLeftService(forceSurvivorRuntime)(), (error) => error instanceof IsolationRefusal && error.detail.forceAlive === true)
   assert.equal(forceSurvivorStopHeldCalls, 1, 'a force-stop survivor is never absorbed by fixture teardown')
+
+  const flaggedLastKnownLiveRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop(options) { return options.force === true ? { state: 'stopped', stopped: true } : { state: 'healthy', stopped: false, record: { pid: 13 } } },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return null },
+    alive() { return true },
+  }
+  await assert.rejects(() => endLeftService(flaggedLastKnownLiveRuntime)(), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === true)
 })
 
 test('AP-03 production cleanup force-stops a detached service only after identity proof', async () => {
@@ -2797,6 +2809,20 @@ test('AP-03 production cleanup refuses a graceful timeout whose record disappear
     async stopHeld() { return { joined: true, signals: [], remaining: [] } },
   }
   await assert.rejects(() => cleanupOwnedRuntime(runtime), (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.alive === null)
+})
+
+test('AP-03 production cleanup refuses a graceful timeout with unknown detached liveness', async () => {
+  const runtime = {
+    async stop() { return { state: 'stopped', stopped: false, record: { pid: 4247 } } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return null },
+    alive() { return null },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+  }
+  const outcome = await cleanupProcedureRuntime(runtime)
+  assert.equal(outcome.retainRoots, true)
+  assert.equal(outcome.error.code, 'owned-service-cleanup-unverified')
+  assert.equal(outcome.error.detail.lastKnownAlive, null)
 })
 
 test('AP-03 production cleanup refuses an occupied service after graceful stop reports stopped', async () => {

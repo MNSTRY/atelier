@@ -156,8 +156,8 @@ const publicCleanupRecord = (record) => {
 
 const publicCleanupAnswer = (answer) => answer && typeof answer === 'object' && Object.hasOwn(answer, 'record') ? { ...answer, record: publicCleanupRecord(answer.record) } : answer
 
-const cleanupDetail = ({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record, alive }) => ({
-  graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: publicCleanupRecord(record), alive,
+const cleanupDetail = ({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record, alive, lastKnownPids = [], lastKnownAlive = null }) => ({
+  graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: publicCleanupRecord(record), alive, lastKnownPids, lastKnownAlive,
 })
 
 // The service is a child owned by this run, so teardown cannot depend on a
@@ -225,17 +225,18 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
     observedLive = readLive(observed)
   }
   const occupied = status?.state === 'occupied'
-  const gracefulStopped = graceful?.stopped === true && (lastKnownAlive === null || lastKnownAlive === false)
-  const gracefulStateStopped = graceful?.state === 'stopped' && observedLive !== true && !observed?.__error && (lastKnownAlive === null || lastKnownAlive === false)
-  const heldStopProof = held?.joined === true && (lastKnownAlive !== true || graceful?.pid === process.pid)
+  const heldStopProof = held?.joined === true && (held?.heldCount > 0 || held?.handleKind === 'in-process-service') && (lastKnownAlive !== true || graceful?.pid === process.pid)
+  const knownStopped = lastKnownPids.length === 0 || lastKnownAlive === false || (heldStopProof && graceful?.pid === process.pid)
+  const gracefulStopped = graceful?.stopped === true && knownStopped
+  const gracefulStateStopped = graceful?.state === 'stopped' && graceful?.stopped !== false && observedLive !== true && !observed?.__error && knownStopped
   const statusStopped = status?.state === 'stopped' && !status.record && observedLive !== true && (heldStopProof || lastKnownPids.length === 0 || lastKnownAlive === false)
   const explicitlyStopped = gracefulStopped || gracefulStateStopped || statusStopped
   if (occupied || (!explicitlyStopped && observedLive !== false) && (forced?.stopped !== true || forceAlive !== false)) {
-    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: observed, alive: observedLive }))
+    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: observed, alive: observedLive, lastKnownPids, lastKnownAlive }))
   }
   const afterRecord = readRecord()
   const afterLive = readLive(afterRecord)
-  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: afterRecord, alive: afterLive }))
+  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: afterRecord, alive: afterLive, lastKnownPids, lastKnownAlive }))
   return { graceful, gracefulError, status, forced, forceError, observed: { record: observed, alive: observedLive }, held, after: { record: afterRecord, alive: afterLive } }
 }
 

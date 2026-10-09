@@ -182,7 +182,7 @@ export function createServiceRuntime({
         catch (error) { return { pid: child.pid, sent: false, reason: error.code ?? 'signal-failed', through: 'handle' } }
       })
       const settled = await waitUntil(() => held.every((child) => !running(child)), { timeoutMs, intervalMs: 25 })
-      return { joined: settled.met, signals, remaining: held.filter(running).map((child) => child.pid) }
+      return { joined: settled.met, heldCount: held.length, handleKind: held.length > 0 ? 'child-handle' : 'none', signals, remaining: held.filter(running).map((child) => child.pid) }
     },
     // A service this runtime started is answered from its handle; any other number is probed as before.
     alive(pid) { const own = services.filter((item) => item.pid === pid); return own.length > 0 ? own.some(running) : probeAlive(pid) },
@@ -272,13 +272,13 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
     },
     async stopHeld({ timeoutMs = 5000 } = {}) {
       if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new RangeError('held-service cleanup timeout must be between 0 and 5000 ms')
-      if (service === null) return { joined: true, signals: [], remaining: [] }
+      if (service === null) return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] }
       const target = service
       const { identity } = target
       if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
       const settled = await awaitShutdown(timeoutMs)
       if (settled) { service = null; shutdownPromise = null }
-      return { joined: settled, signals: [], remaining: settled ? [] : [identity.pid] }
+      return { joined: settled, heldCount: 1, handleKind: 'in-process-service', signals: [], remaining: settled ? [] : [identity.pid] }
     },
     record,
     alive: isProcessAlive,
