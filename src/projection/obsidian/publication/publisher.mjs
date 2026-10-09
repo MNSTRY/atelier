@@ -1,3 +1,4 @@
+import { createCooperativeBudget, isSchedulingStop } from '../materialize/prepare-view.mjs'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -322,6 +323,9 @@ export function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = 
 export const PUBLICATION_PRIMITIVES = Object.freeze({
   // The one operation the `direct-unheld` path writes into the vault: a file created where nothing is.
   unheldWrites: (op) => op === 'create',
+  // Whether an error that stopped staging was the caller's stop (its settings check, or a cancellation), handed on
+  // under its own code once the candidates are cleaned up, rather than reported as a staging failure.
+  callerStoppedStaging: (error) => isSchedulingStop(error),
 })
 
 // Whether the `direct-unheld` path applies, after the adapter found an app it cannot coordinate with (see the head of
@@ -355,6 +359,8 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
   if (!adapter || typeof adapter.probe !== 'function') throw new TypeError('publishView needs an editor coordination adapter')
   if (expectedGeneration !== null && typeof expectedGeneration !== 'string') throw new TypeError('expectedGeneration must be a generation identity or null')
 
+  const budget = createCooperativeBudget(options.scheduling)
+  budget.check()
   const releases = []
   let journal = null
   try {
@@ -384,9 +390,16 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     store.checkAllocatedVault?.()
     acquire(store.vaultLockPath, () => acquireVaultLock(store), 'into this vault')
     store.checkAllocatedVault?.()
+    await budget.checkpoint('recover', true)
+    store.checkAllocatedVault?.()
     const recovered = recoverPublicationsLocked({ store, clock })
+    await budget.checkpoint('recovery-complete', true)
+    store.checkAllocatedVault?.()
     const pointer = store.readCurrent()
     if (pointer?.generationId === manifest.generationId && !pluginFilesDrifted(preparedView, store)) {
+      await options.beforeCommit?.()
+      budget.check()
+      store.checkAllocatedVault?.()
       return { state: 'committed', alreadyCommitted: true, generationId: manifest.generationId, journalId: pointer.journalId, notes: [], retainedEdits: pointer.retained ?? [], lateWriters: [], recovered }
     }
     if ((pointer?.generationId ?? null) !== expectedGeneration) refuse('generation-mismatch', 'the committed generation is not the one this publication expects', { committed: pointer?.generationId ?? null })
@@ -426,12 +439,16 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       stagingDir = store.stagingDir(journalId)
       // On the `direct-unheld` path a replacement is never written, so no candidate is staged for one.
       for (const unit of units.filter((item) => item.op === 'create' || (item.op === 'replace' && (mode !== 'direct-unheld' || rules.unheldWrites(item.op))))) {
+        await budget.checkpoint('stage-candidate')
+        store.checkAllocatedVault?.()
         const existing = fs.lstatSync(path.join(store.vaultRoot, unit.path), { throwIfNoEntry: false })
         unit.preparedPath = store.preparedPath(journalId, unit.unit)
         stageCandidate(unit.preparedPath, unit.bytes, unit.mode ?? (existing?.isFile() ? existing.mode & 0o777 : 0o644), created)
         // A replacement is exchanged, and the exchange leaves the displaced bytes at this path: it is in recovery.
         unit.stagedPath = unit.op === 'replace' ? store.exchangeCandidatePath(journalId, unit.unit) : unit.preparedPath
       }
+      await budget.checkpoint('staging-complete', true)
+      store.checkAllocatedVault?.()
       syncPrivateDirectory(stagingDir)
       const manifestFile = path.join(store.journalDir(journalId), 'manifest.json')
       publishPrivateFile(manifestFile, manifestBytes)
@@ -446,10 +463,13 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       // The journal now names every exchange candidate by path and digest. Only complete, fsynced files are moved
       // in, so a file at an exchange path is never a partial candidate.
       for (const unit of units.filter((item) => item.stagedPath && item.stagedPath !== item.preparedPath)) {
+        await budget.checkpoint('move-candidate')
+        store.checkAllocatedVault?.()
         moveToExchangePath(store, journalId, unit, moved)
       }
     } catch (error) {
-      if (error instanceof PublicationRefusal) throw error
+      const stopped = rules.callerStoppedStaging(error)
+      if (error instanceof PublicationRefusal && !stopped) throw error
       // No payload has named any of these paths, so nothing was exchanged and they can only hold our own
       // candidates. In staging they are removed by name. In recovery a file is removed only when its bytes are
       // the candidate's; anything else stays for restart recovery, which the journal header points at it. Only
@@ -460,8 +480,13 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       }
       for (const file of created) fs.rmSync(file, { force: true })
       for (const directory of [stagingDir, store.unitsRoot(journalId)]) if (directory) try { fs.rmdirSync(directory) } catch { /* absent, or not empty */ }
+      // The caller stopped the publication between two candidates: nothing failed to stage, and its reason (a
+      // setting that changed during the tick, `mixed-read`, or a cancellation) is the one reported.
+      if (stopped) throw error
       refuse('staging-failed', 'the candidates could not be staged; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
     }
+    await budget.checkpoint('journal-and-moves-complete', true)
+    store.checkAllocatedVault?.()
     crash('after-staging')
 
     const context = { store, journal, journalId, channel, clock, crash, mode, rules }
@@ -479,6 +504,8 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     // unit refuses, a kept one included, so nothing is committed.
     let lastProbe = null
     for (const unit of units) {
+      await budget.checkpoint('publish-unit')
+      store.checkAllocatedVault?.()
       if (mode === 'direct' && (lastProbe === null || Date.now() - lastProbe > 2000)) {
         lastProbe = Date.now()
         const again = await adapter.probe({ vaultRoot: store.vaultRoot })
@@ -501,6 +528,8 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       }
     }
 
+    await budget.checkpoint('publication-complete', true)
+    store.checkAllocatedVault?.()
     const blocking = results.filter((result) => result.blocking)
     const retainedEdits = results.filter((result) => result.retained).map((result) => result.retained)
     // Notes kept earlier stay surfaced until they leave the vault or come back into a view.
@@ -517,6 +546,16 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       journal.append({ step: 'verify', outcome: 'conflict', state: 'verifying', notePath: finding.notePath, beforeDigest: finding.digestAtMove, afterDigest: finding.observedDigest, recoveryRef: finding.displacedRef,
         detail: { unit: finding.unit, code: 'late-writer-captured', objectRef: finding.objectRef } })
     }
+    await budget.checkpoint('verify-before-commit', true)
+    // The resident engine revalidates the selected source pins here, while
+    // publication still owns its locks. Its check may yield; no durability
+    // unit or committed pointer is half-written across that wait. It comes
+    // before the entry that says the publication settled: restart recovery
+    // commits a journal that holds that entry, so a refusal after it would be
+    // committed by the next publication of this view.
+    await options.beforeCommit?.()
+    budget.check()
+    store.checkAllocatedVault?.()
     journal.append({ step: 'verify', outcome: 'ok', state: 'verifying', detail: { settled: true, retained: retainedEdits } })
     crash('before-manifest-commit')
     store.checkAllocatedVault?.()

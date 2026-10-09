@@ -5,16 +5,20 @@ import path from 'node:path'
 import test from 'node:test'
 import { LOCAL_OVERLAY_ENV, resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { OBSIDIAN_EXT_KEY } from '../src/projection/obsidian/contracts.mjs'
+import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
 import { LOCAL_POINTER_SCHEMA, ensureWorkspaceIdentity, localPointerPath, workspaceStateRoot } from '../src/runtime/obsidian/machine-settings.mjs'
-import { resolveServiceWorkspace } from '../src/runtime/obsidian/service.mjs'
+import { readServiceRecord } from '../src/runtime/obsidian/service-record.mjs'
+import { resolveServiceWorkspace, runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { DEFAULT_KEEP_FOR_MS, DEFAULT_LOAD_DEADLINE_MS, DEFAULT_RETRY_AFTER_MS, createViewPermission } from '../src/runtime/obsidian/view-permission.mjs'
 
 // Whether the project allows a view right now (view-permission.mjs), asked the
 // way the maintenance service asks before it tells a plugin what it stored.
 // Real project files in temporary directories, the real loader and the real
-// workspace resolution. No service, listener, timer or vault; time is a number
-// the test moves. The service's own answer over its listener is in
-// obsidian-plugin.test.mjs.
+// workspace resolution. No listener, timer or vault; time is a number the test
+// moves. The service is started only to show it refuses a loader that answers a
+// promise, before it reads or listens. Its own answer over its listener is in
+// obsidian-plugin.test.mjs, and a bound personal workspace in
+// obsidian-personal-workspace.test.mjs.
 
 const TMP = fs.realpathSync(os.tmpdir())
 const WORKSPACE_ID = `ws-${'0a'.repeat(12)}`
@@ -53,7 +57,7 @@ function world(t, { dataRootFrom = 'injected', envOverlay = false } = {}) {
   const env = envOverlay ? { ...inherited, [LOCAL_OVERLAY_ENV]: envOverlayPath } : inherited
   const stateOf = (root, workspaceId) => { const requested = workspaceStateRoot(root, workspaceId); fs.mkdirSync(requested, { recursive: true, mode: 0o700 }); return fs.realpathSync(requested) }
   const self = {
-    dir, projectDir, dataRoot, configPath, overlayPath, envOverlayPath, write, keepDataRootIn, stateOf, loads: 0, time: 0,
+    dir, projectDir, dataRoot, configPath, overlayPath, envOverlayPath, env, write, keepDataRootIn, stateOf, loads: 0, time: 0,
     load: () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: projectDir, env, writeLocalState: false }),
     loadProject: () => { self.loads += 1; return self.load() },
     advance: (ms) => { self.time += ms },
@@ -514,6 +518,158 @@ test('a promised load that fails is handled, permits nothing, and is asked for a
   assert.equal(permits(VIEW), true)
   assert.deepEqual(unhandled, [])
 })
+
+test('a link is followed as the system follows it: a `..` after a link in its target leads where the system says, not where the text says', { skip: noLinks }, (t) => {
+  const w = world(t)
+  // atelier.project.json -> shared/../atelier.real.json, and shared -> elsewhere/inner: the loader opens
+  // elsewhere/atelier.real.json. Read as text, the target would name the project's own atelier.real.json.
+  const elsewhere = path.join(w.dir, 'elsewhere')
+  fs.mkdirSync(path.join(elsewhere, 'inner'), { recursive: true })
+  fs.symlinkSync(path.join(elsewhere, 'inner'), path.join(w.projectDir, 'shared'))
+  const opened = path.join(elsewhere, 'atelier.real.json')
+  const named = path.join(w.projectDir, 'atelier.real.json')
+  w.write(settings(), opened)
+  w.write(settings({ enabled: false }), named)
+  w.link(w.configPath, 'shared/../atelier.real.json')
+  assert.equal(fs.readFileSync(w.configPath, 'utf8'), fs.readFileSync(opened, 'utf8'), 'the system opens the file in elsewhere')
+  const permits = w.permission()
+  assert.deepEqual(answers(permits, 4), [true])
+  // A change to the file the loader opens is seen at the next request.
+  w.write(settings({ enabled: false }), opened)
+  assert.equal(permits(VIEW), false)
+  w.write(settings(), opened)
+  assert.deepEqual(answers(permits, 4), [true])
+  // A change to the file the text names is no change.
+  const loads = w.loads
+  w.write(settings({ scopes: [view('narrow')] }), named)
+  assert.deepEqual(answers(permits, 4), [true])
+  assert.equal(w.loads, loads)
+})
+
+test('a link to a folder above a file that decides the project, pointed elsewhere, is a change even where every byte is the same', { skip: noLinks }, (t) => {
+  const w = world(t)
+  // The project is reached through a link to its folder, as a checkout kept elsewhere and linked into place would be.
+  const linked = path.join(w.dir, 'linked-project')
+  fs.symlinkSync(w.projectDir, linked)
+  const configThrough = path.join(linked, 'atelier.project.json')
+  const permits = w.permission({ loadProject: () => { w.loads += 1; return resolveProjectConfig({ argv: [`--project=${configThrough}`], cwd: linked, env: w.env, writeLocalState: false }) } })
+  assert.deepEqual(answers(permits, 10), [true])
+  assert.equal(w.loads, 3)
+  // A copy of the folder, byte for byte, pointer included, and the link pointed at it.
+  const copy = path.join(w.dir, 'project-copy')
+  fs.cpSync(w.projectDir, copy, { recursive: true })
+  fs.rmSync(linked)
+  fs.symlinkSync(copy, linked)
+  assert.deepEqual(answers(permits, 10), [true])
+  assert.equal(w.loads, 5, 'loaded again: the files are other files now')
+  // And the copy is what decides from then on.
+  w.write(settings({ enabled: false }), path.join(copy, 'atelier.project.json'))
+  assert.equal(permits(VIEW), false)
+})
+
+test('two loads agree on what the permission reads of a project, not on every field: a time or a binding under a symbol key that differs does not keep a project from being kept, a protected root that differs does', async (t) => {
+  const w = world(t)
+  const loader = deferredLoader(w)
+  const binding = Symbol('binding')
+  let stamp = 0
+  const stamped = () => { stamp += 1; return { ...w.load(), loadedAt: stamp, [binding]: { stamp } } }
+  const permits = w.permission({ loadProject: loader.loadProject })
+  for (let round = 0; round < 3; round += 1) { assert.equal(permits(VIEW), false); await loader.answerWith(stamped()) }
+  assert.deepEqual(answers(permits, 10), [true])
+  assert.equal(w.loads, 3, 'kept by the third load, as any project')
+  // A project that protects another repository from one load to the next is never kept.
+  w.write({ ...settings(), defaultScopeId: VIEW })
+  const extra = { name: 'extra', path: path.join(w.dir, 'extra'), external: false, readBoundary: 'team' }
+  for (let round = 0; round < 4; round += 1) {
+    assert.equal(permits(VIEW), false)
+    const project = w.load()
+    await loader.answerWith(round % 2 === 0 ? project : { ...project, repos: [...project.repos, extra] })
+  }
+  assert.equal(permits(VIEW), false)
+})
+
+test('a promised load whose answer comes after its deadline, before any request saw the deadline pass, is given up all the same', async (t) => {
+  const w = world(t)
+  const loader = deferredLoader(w)
+  const permits = w.permission({ loadProject: loader.loadProject })
+  await keepUnder(permits, loader, 3)
+  assert.equal(permits(VIEW), true)
+  // A change; the first load over it answers in time.
+  w.write({ ...settings(), defaultScopeId: VIEW })
+  assert.equal(permits(VIEW), false)
+  await loader.answer()
+  // The second would agree with it, but answers only once its deadline has passed, with no request in between.
+  assert.equal(permits(VIEW), false)
+  w.advance(DEFAULT_LOAD_DEADLINE_MS)
+  await loader.answer()
+  assert.equal(permits(VIEW), false, 'its answer is not taken')
+  assert.equal(w.loads, 5, 'and the loader is not asked again at once')
+  w.advance(DEFAULT_RETRY_AFTER_MS)
+  assert.equal(permits(VIEW), false)
+  assert.equal(w.loads, 6)
+  await loader.answer()
+  assert.equal(permits(VIEW), true, 'a load in time agrees with the one before the given-up one')
+})
+
+test('each load is told with how long it took and how it ended: times and codes only, and a listener that throws changes no answer', async (t) => {
+  const w = world(t)
+  const told = []
+  let failing = false
+  const permits = w.permission({
+    loadProject: () => { w.advance(120); if (failing) throw new Error('the project cannot be loaded'); return w.loadProject() },
+    onLoad: (entry) => { told.push(entry); throw new Error('a listener that fails') },
+  })
+  assert.equal(permits(VIEW), true)
+  failing = true
+  w.write(settings({ enabled: false }))
+  assert.equal(permits(VIEW), false)
+  assert.deepEqual(told, [{ durationMs: 120, outcome: 'answered', promised: false }, { durationMs: 120, outcome: 'failed', promised: false }])
+
+  const promisedTold = []
+  const loader = deferredLoader(w)
+  const promised = w.permission({ loadProject: loader.loadProject, onLoad: (entry) => promisedTold.push(entry) })
+  w.write(settings())
+  promised(VIEW)
+  w.advance(900)
+  await loader.answer()
+  promised(VIEW)
+  w.advance(400)
+  await loader.fail()
+  w.advance(DEFAULT_RETRY_AFTER_MS)
+  promised(VIEW)
+  w.advance(DEFAULT_LOAD_DEADLINE_MS)
+  promised(VIEW)
+  assert.deepEqual(promisedTold, [
+    { durationMs: 900, outcome: 'answered', promised: true },
+    { durationMs: 400, outcome: 'failed', promised: true },
+    { durationMs: DEFAULT_LOAD_DEADLINE_MS, outcome: 'given-up', promised: true },
+  ])
+  assert.deepEqual(Object.keys(promisedTold[0]).sort(), ['durationMs', 'outcome', 'promised'])
+})
+
+for (const [name, answer] of [
+  ['a promise', (w) => Promise.resolve(w.load())],
+  ['a promise that is refused', () => Promise.reject(new Error('the composition refused'))],
+  ['a thenable', (w) => ({ then: (resolve) => resolve(w.load()) })],
+]) {
+  test(`the service refuses, typed, to start on a loader that answers ${name}, before it reads anything from it, listens or records anything`, async (t) => {
+    const unhandled = []
+    const record = (reason) => unhandled.push(reason)
+    process.on('unhandledRejection', record)
+    t.after(() => process.off('unhandledRejection', record))
+    const w = world(t)
+    const start = (loadProject) => runMaintenanceService({
+      loadProject, dataRoot: w.dataRoot, env: w.env, entryPath: path.join(w.dir, 'service-entry.mjs'), adapterFactory: () => { throw new Error('no adapter is made') },
+    })
+    await assert.rejects(start(() => answer(w)), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'service-loader-not-synchronous')
+    await settled()
+    assert.deepEqual(unhandled, [])
+    assert.equal(readServiceRecord({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null)
+    // The same project from a loader that answers at once gets past that check, and stops at the next one: this machine
+    // recorded no service settings for the workspace.
+    await assert.rejects(start(() => w.load()), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'service-settings-absent')
+  })
+}
 
 test('a permission is made with a loader and a workspace resolution, or not at all', () => {
   assert.throws(() => createViewPermission({ resolveWorkspace: () => null, workspaceId: WORKSPACE_ID, workspaceRoot: TMP }), TypeError)

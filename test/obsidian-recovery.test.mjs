@@ -31,6 +31,7 @@ import {
   validatePayload,
 } from '../src/projection/obsidian/publication/index.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publication/test-seam.mjs'
+import { PUBLICATION_PRIMITIVES, publishViewForOracleTests } from '../src/projection/obsidian/publication/publisher.mjs'
 
 // The publisher refuses outright where no atomic exchange exists (Windows today),
 // so every case that needs a publication is skipped there with this reason. The
@@ -221,6 +222,138 @@ async function seeded(t, notes = { [NOTE]: BASE }, options = {}) {
   assert.equal(result.mode, 'direct')
   return world
 }
+
+test('cooperative publication interruption after journal staging releases locks and permits recovery', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const controller = new AbortController()
+  const prepared = viewOf('gen-cooperative', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } })
+  await assert.rejects(world.publish(prepared, absentAdapter(), { scheduling: { signal: controller.signal, maxUnits: 1,
+    onBurst: ({ phase }) => { if (phase === 'journal-and-moves-complete') controller.abort() },
+  } }), (error) => error.code === 'ABORT_ERR')
+  assert.equal(world.store.readCurrent(), null)
+  assert.equal(world.read(NOTE), null)
+  assertJournalsValid(world)
+  const retried = await world.publish(prepared, absentAdapter())
+  assert.equal(retried.state, 'committed')
+  assert.equal(world.read(NOTE), CANDIDATE)
+  assert.equal(world.read(OTHER), BASE)
+  assertJournalsValid(world)
+})
+
+// Counts the turns of the event loop while a publication runs: an immediate that queues itself again. No clock is
+// read, so the count means the same on an idle host and on a loaded one.
+function countEventLoopTurns(t) {
+  const counter = { turns: 0, stop() { counter.stopped = true }, stopped: false }
+  const spin = () => { if (counter.stopped) return; counter.turns += 1; setImmediate(spin) }
+  setImmediate(spin)
+  t.after(() => counter.stop())
+  return counter
+}
+const inventedNotes = (count) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`notes/Invented turn ${String(index).padStart(3, '0')}--${String(index).padStart(12, '0')}.md`, `# Invented turn ${index}\n\nDisposable scheduling fixture.\n`]))
+
+test('cooperative publication lets the event loop turn at every unit boundary, and under its default budget inside both loops', needsExchange, async (t) => {
+  const notes = inventedNotes(40)
+  const world = makeWorld(t)
+  const counter = countEventLoopTurns(t)
+  const bursts = []
+  const result = await world.publish(viewOf('gen-turns', { notes }), absentAdapter(), { scheduling: { maxUnits: 1, onBurst: ({ phase }) => bursts.push({ phase, turns: counter.turns }) } })
+  counter.stop()
+  assert.equal(result.state, 'committed', JSON.stringify(result).slice(0, 400))
+  const count = (phase) => bursts.filter((burst) => burst.phase === phase).length
+  assert.deepEqual([count('stage-candidate'), count('publish-unit')], [40, 40], 'one boundary per staged candidate and one per published unit')
+  // Every boundary is followed by a wait the loop really takes: the count has moved on by the next one.
+  for (let index = 1; index < bursts.length; index += 1) assert.ok(bursts[index].turns > bursts[index - 1].turns, `no turn between ${bursts[index - 1].phase} and ${bursts[index].phase}`)
+  for (const notePath of Object.keys(notes)) assert.equal(world.read(notePath), notes[notePath])
+
+  // With no scheduling given, a publication of more units than one burst holds yields inside the staging loop and
+  // inside the unit loop, by the unit count alone.
+  const plain = makeWorld(t)
+  const phases = []
+  const defaults = await plain.publish(viewOf('gen-default-budget', { notes }), absentAdapter(), { scheduling: { onBurst: ({ phase }) => phases.push(phase) } })
+  assert.equal(defaults.state, 'committed')
+  assert.ok(phases.includes('stage-candidate') && phases.includes('publish-unit'), JSON.stringify([...new Set(phases)]))
+})
+
+// The caller stops a publication between two candidates: its settings check refuses (a setting that selected the view
+// changed during the tick), or it cancels. The stop is reported under its own code, never as a staging failure, the
+// candidates are cleaned up, nothing in the vault is touched, and the next publication commits.
+const STAGING_STOPS = [['stage-candidate', 2, 'after one candidate is staged'], ['staging-complete', 1, 'once every candidate is staged'], ['move-candidate', 2, 'after one candidate moved to its exchange path, the journal written']]
+const stopsBy = {
+  'the settings check': () => {
+    const refusal = Object.assign(new Error('source selection or eligibility changed while a view was being published'), { code: 'mixed-read' })
+    let fire = false
+    return { arm: () => { fire = true }, scheduling: { guard: () => { if (fire) throw refusal } }, expected: (error) => error === refusal }
+  },
+  'a cancellation': () => {
+    const controller = new AbortController()
+    return { arm: () => controller.abort(), scheduling: { signal: controller.signal }, expected: (error) => error?.code === 'ABORT_ERR' }
+  },
+}
+async function stopDuringStaging(t, { phase, occurrence, stop, publisher }) {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const { arm, scheduling, expected } = stopsBy[stop]()
+  let seen = 0
+  const outcome = world.publish(viewOf('gen-stopped', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter(), {
+    ...(publisher ? { publisher } : {}),
+    scheduling: { ...scheduling, maxUnits: 1, onBurst: ({ phase: at }) => { if (at === phase && (seen += 1) === occurrence) arm() } },
+  })
+  return { world, outcome, expected, seen: () => seen }
+}
+for (const [phase, occurrence, when] of STAGING_STOPS) {
+  for (const stop of Object.keys(stopsBy)) {
+    test(`a stop by ${stop} during staging, ${when}, is reported as itself; the candidates are cleaned up and the vault is untouched`, needsExchange, async (t) => {
+      const { world, outcome, expected, seen } = await stopDuringStaging(t, { phase, occurrence, stop })
+      await assert.rejects(outcome, expected)
+      assert.equal(seen(), occurrence, `the stop came at ${phase}`)
+      assert.equal(world.store.readCurrent().generationId, 'gen-0001')
+      assert.deepEqual([world.read(NOTE), world.read(OTHER)], [BASE, BASE], 'nothing in the vault was touched')
+      assert.deepEqual(filesUnder(world.store.stagingRoot), [], 'no staged candidate is left')
+      assert.deepEqual(exchangeCandidateFiles(world), [], 'no candidate is left at an exchange path')
+      assertJournalsValid(world)
+      const next = await world.publish(viewOf('gen-after-stop', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter())
+      assert.deepEqual([next.state, world.store.readCurrent().generationId], ['committed', 'gen-after-stop'], JSON.stringify(next).slice(0, 300))
+      assert.deepEqual([world.read(NOTE), world.read(OTHER)], [CANDIDATE, CANDIDATE])
+      assertJournalsValid(world)
+    })
+    test(`mutation control: a staging catch that reports every error as a staging failure fails the oracle for a stop by ${stop}, ${when}`, needsExchange, async (t) => {
+      const broken = { ...PUBLICATION_PRIMITIVES, callerStoppedStaging: () => false }
+      const { outcome, seen } = await stopDuringStaging(t, { phase, occurrence, stop, publisher: (options) => publishViewForOracleTests(options, broken) })
+      const result = await outcome
+      assert.equal(seen(), occurrence)
+      assert.deepEqual([result.state, result.refusal?.code], ['refused', 'staging-failed'], 'the stop is reported as a staging failure, which the oracle above refuses')
+    })
+  }
+}
+
+test('a publication refused before its commit is not committed by the restart recovery of the next publication', needsExchange, async (t) => {
+  const refusals = {
+    // What the resident engine does when a selected source changed during the publication.
+    'by the check before the commit': () => {
+      const refusal = Object.assign(new Error('a selected source changed during publication'), { code: 'mixed-read' })
+      return { refusal, options: { beforeCommit: async () => { throw refusal } } }
+    },
+    // What it does when the settings that selected the view changed: its guard refuses at the last boundary.
+    'by the guard at the last boundary': () => {
+      const refusal = Object.assign(new Error('source selection changed during publication'), { code: 'mixed-read' })
+      let last = false
+      return { refusal, options: { scheduling: { onBurst: ({ phase }) => { if (phase === 'verify-before-commit') last = true }, guard: () => { if (last) throw refusal } } } }
+    },
+  }
+  for (const [name, make] of Object.entries(refusals)) await t.test(name, async (t) => {
+    const world = makeWorld(t)
+    const { refusal, options } = make()
+    await assert.rejects(world.publish(viewOf('gen-refused', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } }), absentAdapter(), options), (error) => error === refusal)
+    assert.equal(world.store.readCurrent(), null, 'the refused generation is not committed')
+    assertJournalsValid(world)
+    // The next publication recovers what the refused one left. It publishes its own generation; it does not first
+    // commit the refused one, which would also refuse this publication as a generation mismatch.
+    const result = await world.publish(viewOf('gen-after-refusal', { notes: { [NOTE]: BASE, [OTHER]: BASE } }), absentAdapter())
+    assert.deepEqual([result.state, result.generationId], ['committed', 'gen-after-refusal'], JSON.stringify(result).slice(0, 400))
+    assert.equal(world.store.readCurrent().generationId, 'gen-after-refusal')
+    assert.deepEqual([world.read(NOTE), world.read(OTHER)], [BASE, BASE])
+    assertJournalsValid(world)
+  })
+})
 
 function filesUnder(directory) {
   const found = []

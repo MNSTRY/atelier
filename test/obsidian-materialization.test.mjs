@@ -21,7 +21,7 @@ import {
   stagePreparedView,
   withEligibility,
 } from '../src/projection/obsidian/materialize/index.mjs'
-import { createViewPreparationForOracleTests } from '../src/projection/obsidian/materialize/prepare-view.mjs'
+import { createViewPreparationForOracleTests, prepareViewCooperatively } from '../src/projection/obsidian/materialize/prepare-view.mjs'
 import { REDACTION_RULES, assertViewRedaction, createDenyMatcher } from '../src/projection/obsidian/materialize/redaction.mjs'
 
 // Invented fixtures only. The workspace is written into a temporary directory,
@@ -106,6 +106,70 @@ const fileOf = (prepared, filePath) => prepared.files.find((file) => file.path =
 const noteOf = (prepared, nodeId) => prepared.manifest.notes.find((note) => note.nodeId === nodeId)
 const noteBytes = (prepared, nodeId) => fileOf(prepared, noteOf(prepared, nodeId).path).bytes
 const original = (repoId, relative) => sourceBytes(workspace.files[`${repoId}/${relative}`])
+
+test('cooperative preparation preserves synchronous bytes and lets the event loop turn at every boundary', async (t) => {
+  const snapshot = makeWorkspace(t)
+  const expected = prepare(snapshot, fullScope)
+  // The turns of the event loop while the preparation runs: an immediate that queues itself again. No clock is read,
+  // so the count means the same on an idle host and on a loaded one.
+  let turns = 0
+  let counting = true
+  const spin = () => { if (!counting) return; turns += 1; setImmediate(spin) }
+  setImmediate(spin)
+  t.after(() => { counting = false })
+  const bursts = []
+  const actual = await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, scheduling: { maxUnits: 1, onBurst: ({ phase }) => bursts.push({ phase, turns }) } })
+  counting = false
+  const count = (phase) => bursts.filter((burst) => burst.phase === phase).length
+  assert.deepEqual([count('emit-note'), count('recheck-source')], [expected.manifest.notes.length, expected.manifest.notes.length], 'one boundary per note emitted and one per source read again')
+  for (let index = 1; index < bursts.length; index += 1) assert.ok(bursts[index].turns > bursts[index - 1].turns, `no turn between ${bursts[index - 1].phase} and ${bursts[index].phase}`)
+  assert.deepEqual(actual, expected)
+})
+
+test('cooperative preparation leaves the second reading of its sources to a caller that says it checks them itself', async (t) => {
+  const snapshot = makeWorkspace(t)
+  const expected = prepare(snapshot, fullScope)
+  const read = snapshot.readSource
+  let reads = 0
+  snapshot.readSource = (repo, relative) => { reads += 1; return read(repo, relative) }
+  const phases = []
+  const actual = await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, scheduling: { maxUnits: 1, recheckSources: false, onBurst: ({ phase }) => phases.push(phase) } })
+  const emitted = reads
+  assert.deepEqual([phases.includes('recheck-source'), phases.includes('recheck-asset')], [false, false])
+  assert.deepEqual(actual, expected)
+  // Left on, every one of those sources is read a second time before the result is returned.
+  reads = 0
+  await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock })
+  assert.equal(reads, 2 * emitted)
+})
+
+test('cooperative preparation refuses a source changed after emission across a yield without replacing the cache', async (t) => {
+  const snapshot = makeWorkspace(t)
+  const cache = createPreparationCache()
+  prepare(snapshot, fullScope, { cache })
+  const originalCache = cache.notes
+  const read = snapshot.readSource
+  let changed = false
+  snapshot.readSource = (repo, relative) => changed ? Buffer.concat([read(repo, relative), Buffer.from('\nChanged while yielding.\n')]) : read(repo, relative)
+  await assert.rejects(prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, cache,
+    scheduling: { maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'emit-complete') changed = true } },
+  }), (error) => error.code === 'mixed-read')
+  assert.equal(changed, true)
+  assert.equal(cache.notes, originalCache)
+})
+
+test('cooperative preparation cancellation leaves the prior cache intact and can be retried', async (t) => {
+  const snapshot = makeWorkspace(t)
+  const cache = createPreparationCache()
+  const controller = new AbortController()
+  const originalCache = cache.notes
+  await assert.rejects(prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, cache,
+    scheduling: { signal: controller.signal, maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'emit-note') controller.abort() } },
+  }), (error) => error.code === 'ABORT_ERR')
+  assert.equal(cache.notes, originalCache)
+  const retried = await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, cache })
+  assert.deepEqual(retried.manifestBytes, prepare(snapshot, fullScope).manifestBytes)
+})
 
 // ---------------------------------------------------------------------------
 // Assertions shared with the mutation controls

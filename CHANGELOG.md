@@ -74,6 +74,41 @@
   and a half minutes and never used past five. A loader that answers a promise
   is given up after two and a half minutes, and a load that fails is asked for
   again after two seconds, then four, up to thirty, unless a file changed.
+- The Obsidian maintenance service refuses to start on a project loader that
+  answers a promise (or any other thenable), with
+  `service-loader-not-synchronous`, before it reads anything from it, listens
+  or records anything. Before, it handed the promise to its workspace
+  resolution, which then read the workspace pointer of the working directory
+  and protected no repository. For the status read of a plugin: a load whose
+  answer comes after its deadline is given up even when no request saw the
+  deadline pass; a link is resolved as the system resolves it, a `..` after a
+  link included, and a link to a folder above a configuration file pointed
+  elsewhere is a change; two loads agree when what the decision reads of the
+  project is the same, so a field that differs between loads (a time, a
+  binding under a symbol key) no longer stops a project from being kept; and
+  every load is logged with how long it took and how it ended.
+- The Obsidian maintenance service stays responsive while it prepares and
+  publishes a view. The engine prepares each view cooperatively and the
+  publisher yields between complete units, so the loopback listener answers
+  health and status while notes are emitted, staged and published, instead of
+  being `busy` for the length of a large first publication. `open` and
+  `service stop` therefore reach a service in the middle of a publication:
+  `open` waits for a tick that starts after the one in flight, and `service
+  stop` ends the service after the tick in flight or its shutdown grace,
+  leaving a publication cut short to the publisher's restart recovery. Reading sources
+  and building the canonical graph, the source snapshot, restart recovery and
+  the read-back still run without yielding. `prepareView` stays synchronous
+  and returns the same bytes. Across each wait the configuration files, the
+  machine settings and the eligibility revision are checked again, and after
+  a view is prepared and before its generation commits every selected source
+  is checked as observation checks it: by its stat hint, and by digest where
+  the hint moved. A change during the tick refuses the generation as
+  `mixed-read`; neither that tick nor a later restart recovery commits it,
+  and the next tick prepares the view again. A source that drifts under an
+  unchanged stat hint is still seen by the next full reconciliation, and a
+  note reused from the preparation cache is still not read. A cancelled
+  preparation leaves the preparation cache as it was, and publication keeps
+  its locks, journal and conditional writes.
 
 ## 0.2.0-alpha.13
 

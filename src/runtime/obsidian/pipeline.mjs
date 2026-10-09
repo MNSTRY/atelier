@@ -1,3 +1,4 @@
+import { prepareViewCooperatively } from '../../projection/obsidian/materialize/prepare-view.mjs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
@@ -141,6 +142,12 @@ export function buildGraph({ project, eligibility, cache = null, index = null, d
 // its pinned digest is unchanged and the cached bytes are the ones that digest
 // describes, so bytes that drift under an unchanged pin are not consulted
 // until observation hashes the file again (the same bound as the graph stage).
+// The engine keeps that bound when it prepares cooperatively. Called on its
+// own, prepareViewCooperatively waits between notes and so reads every
+// selected source against its pin once more before it returns. The engine
+// turns that second reading off and checks the selected sources itself, after
+// the preparation and again before the commit, as observation does: by stat
+// hint, and by digest only where the hint moved.
 export function captureSnapshot({ project, graph, workspaceId, index, configDigest, capturedAt }) {
   const roots = new Map((project.repos ?? []).filter((repo) => !repo.external).map((repo) => [repo.name, repo.path]))
   const absolute = (repoId, relative) => {
@@ -186,5 +193,5 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
 // that note and reuses the rest. Both caches are derived, in-memory state: a
 // test may replace either seam with `() => null` to build or prepare in full.
 export function createProductionSeams() {
-  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
+  return { buildGraph, captureSnapshot, profileFor, prepareView, prepareViewCooperatively, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
 }

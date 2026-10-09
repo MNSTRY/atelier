@@ -16,6 +16,7 @@ import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publicatio
 import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src/runtime/obsidian/engine.mjs'
 import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 import { withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
+import { prepareViewCooperatively } from '../src/projection/obsidian/materialize/prepare-view.mjs'
 import { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } from '../src/runtime/obsidian/lifecycle.mjs'
 import { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock, isProcessAlive, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
 import { HEALTH_SCHEMA, authorityOf, probeHealth, requestLoopback } from '../src/runtime/obsidian/service-client.mjs'
@@ -158,12 +159,17 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
       installApplyPolicy({ workspaceRoot: workspaceStateRoot(dataRoot, WORKSPACE_ID), workspaceId: WORKSPACE_ID, policy, repositoryRoots: protectedRoots(project), updatedAt: world.clock().toISOString() })
       return policy
     },
-    // Counting wrappers over the production seams; `seams` replaces single members.
+    // Counting wrappers over the production seams; `seams` replaces single members. A view is prepared as production
+    // prepares it, cooperatively, unless the test replaced prepareView and left the cooperative preparation as it
+    // ships: then, as in the engine, the replacement prepares it. Either way a preparation is counted once.
     engine({ primitives = ENGINE_PRIMITIVES, seams = {}, ...options } = {}) {
+      const replacedPrepare = typeof seams.prepareView === 'function' && seams.prepareView !== DEFAULT.prepareView
+        && (seams.prepareViewCooperatively === undefined || seams.prepareViewCooperatively === DEFAULT.prepareViewCooperatively)
       const counted = {
         ...seams,
         buildGraph: (input) => { world.calls.buildGraph += 1; return (seams.buildGraph ?? DEFAULT.buildGraph)(input) },
         prepareView: (input) => { world.calls.prepareView += 1; return (seams.prepareView ?? DEFAULT.prepareView)(input) },
+        prepareViewCooperatively: replacedPrepare ? null : (input) => { world.calls.prepareView += 1; return (seams.prepareViewCooperatively ?? DEFAULT.prepareViewCooperatively)(input) },
         publishView: async (input) => { world.calls.publishView.push(input.recoveryStore.scopeId); return (seams.publishView ?? DEFAULT.publishView)(input) },
         captureSnapshot: (input) => { const snapshot = (seams.captureSnapshot ?? DEFAULT.captureSnapshot)(input); world.snapshots.push(snapshot.document); return snapshot },
       }
@@ -195,6 +201,151 @@ function lyingStat() {
 // ---------------------------------------------------------------------------
 // 1. Typed enablement
 // ---------------------------------------------------------------------------
+
+test('cooperative engine refuses changed scope and machine settings across a preparation yield', needsExchange, async (t) => {
+  for (const kind of ['scope', 'machine']) await t.test(kind, async (t) => {
+    const world = makeWorld(t)
+    let changed = false
+    const engine = world.engine({ seams: { prepareViewCooperatively: input => prepareViewCooperatively({
+      ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (changed || phase !== 'emit-note') return
+        changed = true
+        if (kind === 'scope') world.writeExt(settingsOf([EAST_SCOPE]))
+        else world.configureMachine({ maintenanceMode: 'manual', audienceAllow: ['public'] })
+      } },
+    }) } })
+    const report = await engine.tick()
+    assert.equal(changed, true)
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+    assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
+    assert.equal(world.calls.publishView.length, 0)
+  })
+})
+
+test('cooperative engine refuses an eligibility revision changed across a preparation yield', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let revision = 'one'
+  const engine = world.engine({ eligibility: { ...DEFAULT_ELIGIBILITY, revision: () => revision }, seams: {
+    prepareViewCooperatively: input => prepareViewCooperatively({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'emit-note') revision = 'two' } } }),
+  } })
+  const report = await engine.tick()
+  assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.equal(world.calls.publishView.length, 0)
+})
+
+test('cooperative engine refuses a source changed during publication before committing its pointer', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let changed = false
+  let refusedGeneration = null
+  const engine = world.engine({ seams: { publishView: input => {
+    refusedGeneration ??= input.preparedView.manifest.generationId
+    return publishView({ ...input, scheduling: {
+      ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (changed || phase !== 'publication-complete') return
+        changed = true
+        fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nChanged authored source during publication.\n')
+      },
+    } })
+  } } })
+  const report = await engine.tick()
+  assert.equal(changed, true)
+  assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
+  assert.match(fs.readFileSync(world.source('east-wing/notes/lantern.md'), 'utf8'), /Changed authored source/)
+  // The refusal holds at the next tick: its publication recovers what the refused one left, does not commit the refused
+  // generation, and publishes the source as it is now. The notes the refused publication wrote are nobody's edits.
+  world.advance(1000)
+  const next = await engine.tick()
+  assert.deepEqual([world.scope(next).state, world.scope(next).reason, next.pendingEdits], ['current', 'published-and-verified', []], JSON.stringify(world.scope(next)))
+  assert.equal(world.scope(next).generationId, world.manifest().generationId)
+  assert.ok(typeof refusedGeneration === 'string' && world.scope(next).generationId !== refusedGeneration, 'the committed generation is not the refused one')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /Changed authored source during publication/)
+})
+
+test('the cooperative preparation keeps the stat-hint bound of observation: a source that changes under an unchanged stat hint is not opened, and only an emitted note is read', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const lstat = lyingStat()
+  const reads = []
+  const engine = world.engine({ lstat, fullReconciliationIntervalMs: FULL_INTERVAL, seams: {
+    prepareViewCooperatively: (input) => prepareViewCooperatively(input),
+    captureSnapshot: (input) => { const snapshot = DEFAULT.captureSnapshot(input); return { ...snapshot, readSource: (repo, relative) => { reads.push(`${repo}/${relative}`); return snapshot.readSource(repo, relative) } } },
+  } })
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  reads.length = 0
+  // As in the case of the synchronous preparation: the compass changes while its stat hint stays frozen, and the tide
+  // log changes visibly, so the view is prepared again.
+  const compass = world.source('east-wing/notes/compass.md')
+  lstat.freeze(compass)
+  fs.appendFileSync(compass, '\nSouth is painted white.\n')
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  let report = await engine.tick()
+  assert.deepEqual([report.full, world.scope(report).state], [false, 'current'], JSON.stringify(world.scope(report)))
+  // Neither the check after the preparation nor the one before the commit opens a source observation reports
+  // unchanged: the one read is the emission of the note whose pin moved.
+  assert.deepEqual(reads.splice(0), ['west-wing/logs/tide.md'])
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /Low water at six/)
+  assert.doesNotMatch(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+  world.advance(FULL_INTERVAL)
+  report = await engine.tick()
+  assert.deepEqual([report.full, world.scope(report).state], [true, 'current'])
+  assert.match(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+})
+
+test('an engine handed the production seams with prepareView replaced prepares through that replacement', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let replaced = 0
+  // Built here rather than through the counting world, so the engine's own rule is what decides.
+  const engine = createMaintenanceEngineForOracleTests({
+    loadProject: world.loadProject, dataRoot: world.dataRoot, adapterFactory: absentAdapter, clock: world.clock, randomBytes: fixedRandom, quietPeriodMs: 0, watcherFactory: () => ({ close() {} }),
+    seams: { ...createProductionSeams(), prepareView: (input) => { replaced += 1; return DEFAULT.prepareView(input) } },
+  })
+  t.after(() => engine.stop())
+  const report = await engine.tick()
+  assert.deepEqual([world.scope(report).state, replaced], ['current', 1], 'the cooperative preparation that ships does not stand in for a replaced prepareView')
+})
+
+test('a setting changed while candidates are being staged refuses the view as mixed-read, not as a staging failure', needsExchange, async (t) => {
+  for (const at of ['stage-candidate', 'move-candidate']) await t.test(at, async (t) => {
+    const world = makeWorld(t)
+    // A committed generation first, so the next one replaces notes and moves candidates to their exchange paths.
+    assert.equal(world.scope(await world.engine().tick()).state, 'current')
+    const committed = fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json'))
+    const lantern = fs.readFileSync(world.noteFile('east-wing:lantern'))
+    fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nThe lamp was cleaned.\n')
+    fs.appendFileSync(world.source('east-wing/notes/compass.md'), '\nWest is painted blue.\n')
+    let changed = false
+    const engine = world.engine({ seams: { publishView: (input) => publishView({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+      if (changed || phase !== at) return
+      changed = true
+      world.configureMachine({ maintenanceMode: 'manual', audienceAllow: ['public'] })
+    } } }) } })
+    world.advance(1000)
+    const report = await engine.tick()
+    assert.equal(changed, true)
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'], JSON.stringify(world.scope(report)))
+    assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), committed)
+    assert.deepEqual(fs.readFileSync(world.noteFile('east-wing:lantern')), lantern, 'nothing in the vault was touched')
+  })
+})
+
+test('cooperative engine rechecks source pins before reporting an already committed generation current', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let publications = 0
+  const engine = world.engine({ seams: { publishView: input => {
+    publications += 1
+    if (publications === 2) fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nChanged after preparing the same generation.\n')
+    return publishView(input)
+  } } })
+  const first = await engine.tick()
+  assert.equal(world.scope(first).state, 'current')
+  const pointer = fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json'))
+  engine.requestPreparation(FULL_SCOPE.scopeId)
+  const next = await engine.tick()
+  assert.equal(publications, 2)
+  assert.deepEqual([world.scope(next).state, world.scope(next).reason], ['stale', 'mixed-read'])
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), pointer)
+})
 
 function assertUnknownSettingsRefuse(read) {
   const cases = [
@@ -1929,6 +2080,44 @@ async function inProcessService(t, world, options = {}) {
   t.after(() => service.shutdown('test-teardown'))
   return { service, port, record: recordOf(world) }
 }
+
+test('cooperative service preparation keeps real loopback health answering and preserves the plugin', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  for (let i = 0; i < 48; i += 1) fs.writeFileSync(world.source(`east-wing/notes/event-loop-${i}.md`), note({ id: `east-wing:event-loop-${i}`, title: `Invented ${i}`, body: 'Disposable scheduling fixture.' }))
+  let preparing = false, health = null, answeredDuringPreparation = false, carriedPlugin = false
+  const seam = async (input) => {
+    preparing = true
+    carriedPlugin ||= Array.isArray(input.plugin?.files)
+    try {
+      return await prepareViewCooperatively({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (phase === 'emit-note' && health === null) {
+          const record = recordOf(world)
+          // A long deadline: whether the answer came while the view was being prepared is what is asserted, and a
+          // deadline a loaded host could miss would say nothing about that.
+          health = probeHealth({ host: record.host, port: record.port, timeoutMs: 120000 }).then((answer) => { answeredDuringPreparation = preparing; return answer })
+        }
+      } } })
+    } finally { preparing = false }
+  }
+  const { service, record } = await inProcessService(t, world, { engineOptions: { seams: { prepareViewCooperatively: seam } } })
+  await service.tickNow()
+  assert.ok(health)
+  const answer = await health
+  assert.equal(answer.kind, 'health')
+  assert.equal(answer.body.runtimeId, record.runtimeId)
+  assert.equal(answeredDuringPreparation, true)
+  assert.equal(carriedPlugin, true)
+})
+
+test('a service handed the production seams with prepareView replaced prepares through that replacement, plugin included', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const plugins = []
+  const replacement = (input) => { plugins.push(Array.isArray(input.plugin?.files)); return DEFAULT.prepareView(input) }
+  const { service } = await inProcessService(t, world, { engineOptions: { seams: { ...createProductionSeams(), prepareView: replacement } } })
+  const outcome = await service.tickNow()
+  assert.equal(outcome.ok, true, JSON.stringify(outcome).slice(0, 300))
+  assert.deepEqual([world.scope(outcome.report).state, plugins], ['current', [true]], 'the cooperative preparation that ships does not stand in for a replaced prepareView, and the replacement is handed the plugin')
+})
 
 function assertNothingSensitive(world, texts, bearer) {
   const forbidden = [world.dir, TMP, os.homedir(), process.execPath, REPOSITORY_ROOT, 'Lantern', 'Compass', 'Tide', 'notes/', 'logs/', '.md', 'east-wing', 'west-wing', 'sounding']
