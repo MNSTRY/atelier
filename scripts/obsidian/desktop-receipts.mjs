@@ -55,6 +55,7 @@ import { FULL_SCOPE, absentAdapter, createEngineSeams, deriveWorkspace, loadProj
 import { PROPOSED_TARGETS, waitUntil, warmChangeSummary } from './lib/measure.mjs'
 import { buildReceipt, evidenceFileName, writeGateReceipt } from './lib/receipts.mjs'
 import { bindLayoutToVault, createAppEditor, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, initialiseRepositories, prepareWorkspace, stripProjectEnv } from './lib/service-world.mjs'
+import { publicRecord } from '../../src/runtime/obsidian/service-record.mjs'
 
 export const DEFAULT_RECEIPT_DIR = path.join(REPOSITORY_ROOT, '.artifacts', 'obsidian', 'desktop')
 // The sentinels the production eligibility rule keeps out of a view the real service maintains (see the fixture's description).
@@ -123,6 +124,42 @@ export class IsolationRefusal extends Error {
   }
 }
 
+export function combineProcedureAndCleanupError(primary, cleanup) {
+  if (!primary) return cleanup
+  return new AggregateError([primary, cleanup], 'procedure failed and owned-service cleanup was not proven')
+}
+
+export function formatDesktopReceiptError(error) {
+  const label = `${error?.name ?? 'Error'}${error?.code ? ` [${error.code}]` : ''}: ${error?.message ?? error}`
+  return error instanceof AggregateError ? [label, ...error.errors.map(formatDesktopReceiptError)].join('\n') : label
+}
+
+export function desktopReceiptErrorExitCode(error) {
+  if (error instanceof AggregateError) return error.errors.some((item) => desktopReceiptErrorExitCode(item) === 2) ? 2 : 1
+  return error instanceof OutputRefusal || error instanceof IsolationRefusal ? 2 : 1
+}
+
+// The runner uses this outcome to retain every disposable root on refusal.
+export async function cleanupProcedureRuntime(runtime, { procedureError = null, ...budgets } = {}) {
+  try { return { cleanup: await cleanupOwnedRuntime(runtime, budgets), retainRoots: false, error: null } }
+  catch (error) { return { cleanup: null, retainRoots: true, error: combineProcedureAndCleanupError(procedureError, error) } }
+}
+
+const publicCleanupRecord = (record) => {
+  if (record === null || record === undefined || record.__error) return record
+  try {
+    return publicRecord(record)
+  } catch {
+    return Object.fromEntries(['runtimeId', 'pid', 'host', 'port', 'serviceName', 'workspaceId', 'executableDigest'].filter((key) => Object.hasOwn(record, key)).map((key) => [key, record[key]]))
+  }
+}
+
+const publicCleanupAnswer = (answer) => answer && typeof answer === 'object' && Object.hasOwn(answer, 'record') ? { ...answer, record: publicCleanupRecord(answer.record) } : answer
+
+const cleanupDetail = ({ graceful, gracefulError, status, forced, forceError, held, heldError, record, alive }) => ({
+  graceful, gracefulError, status, forced, forceError, held, heldError, record: publicCleanupRecord(record), alive,
+})
+
 // The service is a child owned by this run, so teardown cannot depend on a
 // healthy status document. A missing or malformed record makes the graceful
 // stop unavailable, but it must never erase the run's custody of the child.
@@ -137,7 +174,14 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 20_000,
   if (!Number.isFinite(heldTimeoutMs) || heldTimeoutMs < 0 || heldTimeoutMs > 5_000) throw new RangeError('held service cleanup timeout must be between 0 and 5000 ms')
   let graceful = null
   let gracefulError = null
-  try { graceful = await runtime.stop({ stopTimeoutMs: gracefulTimeoutMs }) } catch (error) { gracefulError = { name: error.name, message: error.message } }
+  try { graceful = publicCleanupAnswer(await runtime.stop({ stopTimeoutMs: gracefulTimeoutMs })) } catch (error) { gracefulError = { name: error.name, message: error.message } }
+  let held = null
+  let heldError = null
+  // The retained child handle is the cleanup authority even when the record
+  // is missing or malformed. Sweep it before any detached proof gate.
+  try { held = await runtime.stopHeld({ timeoutMs: heldTimeoutMs }) } catch (error) { heldError = { name: error.name, message: error.message } }
+  if (heldError) throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${heldError.message}`, cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, held, heldError, record: null, alive: null }))
+  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, held, heldError, record: null, alive: null }))
   let observed = null
   let observedLive = null
   let status = null
@@ -145,34 +189,30 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 20_000,
   let forceError = null
   const readRecord = () => {
     if (typeof runtime.record !== 'function') return null
-    try { return runtime.record() } catch (error) { return { __error: { name: error.name, message: error.message } } }
+    try { return publicCleanupRecord(runtime.record()) } catch (error) { return { __error: { name: error.name, message: error.message } } }
   }
   const readLive = (record) => {
     if (!record || record.__error || !Number.isInteger(record.pid) || typeof runtime.alive !== 'function') return null
     try { return Boolean(runtime.alive(record.pid)) } catch { return null }
   }
   if (typeof runtime.status === 'function') {
-    try { status = await runtime.status() } catch { status = null }
+    try { status = publicCleanupAnswer(await runtime.status()) } catch { status = null }
   }
   observed = readRecord()
   observedLive = readLive(observed)
   if (graceful?.stopped !== true && observedLive === true) {
-    try { forced = await runtime.stop({ stopTimeoutMs: heldTimeoutMs, force: true }) } catch (error) { forceError = { name: error.name, message: error.message } }
+    try { forced = publicCleanupAnswer(await runtime.stop({ stopTimeoutMs: heldTimeoutMs, force: true })) } catch (error) { forceError = { name: error.name, message: error.message } }
     observed = readRecord()
     observedLive = readLive(observed)
   }
   const explicitlyStopped = graceful?.stopped === true || (graceful?.state === 'stopped' && observedLive !== true && !observed?.__error) || (status?.state === 'stopped' && !status.record && observedLive !== true)
-  if (!explicitlyStopped && observedLive !== false && forced?.stopped !== true) {
-    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', { graceful, gracefulError, status, forced, forceError, record: observed, alive: observedLive })
+  const occupied = status?.state === 'occupied'
+  if (!explicitlyStopped && (occupied || observedLive !== false) && forced?.stopped !== true) {
+    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, held, heldError, record: observed, alive: observedLive }))
   }
-  let held
-  try { held = await runtime.stopHeld({ timeoutMs: heldTimeoutMs }) } catch (error) {
-    throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${error.message}`, { graceful, gracefulError, status, forced, forceError, record: observed, alive: observedLive })
-  }
-  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', { graceful, gracefulError, status, forced, forceError, held })
   const afterRecord = readRecord()
   const afterLive = readLive(afterRecord)
-  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', { graceful, gracefulError, status, forced, forceError, held, record: afterRecord, alive: afterLive })
+  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, held, heldError, record: afterRecord, alive: afterLive }))
   return { graceful, gracefulError, status, forced, forceError, observed: { record: observed, alive: observedLive }, held, after: { record: afterRecord, alive: afterLive } }
 }
 
@@ -864,15 +904,11 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
         // This service is the disposable one this run started. Graceful stop is
         // useful when its record is healthy, but the retained child handle is
         // the cleanup authority when the record is missing or malformed.
-        try {
-          const cleanup = await cleanupOwnedRuntime(runtime)
-          for (const gate of plan.gates) {
-            (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(cleanup, null, 2)}\n`) })
-          }
-        } catch (error) {
-          retainRoots = true
-          if (procedureError) throw new AggregateError([procedureError, error], 'procedure failed and owned-service cleanup was not proven')
-          throw error
+        const outcome = await cleanupProcedureRuntime(runtime, { procedureError })
+        retainRoots ||= outcome.retainRoots
+        if (outcome.error) throw outcome.error
+        for (const gate of plan.gates) {
+          (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(outcome.cleanup, null, 2)}\n`) })
         }
         if (runtime.logLines) for (const gate of plan.gates) (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-in-process.log`, bytes: Buffer.from(`${runtime.logLines.map((entry) => JSON.stringify(entry)).join('\n')}\n`) })
       }
@@ -949,5 +985,5 @@ async function main(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => { if (!error?.finalOutputHandled) console.error(`[desktop-receipts] ${error?.message ?? error}`); process.exitCode = error instanceof OutputRefusal || error instanceof IsolationRefusal ? 2 : 1 })
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => { if (!error?.finalOutputHandled) console.error(`[desktop-receipts] ${formatDesktopReceiptError(error)}`); process.exitCode = desktopReceiptErrorExitCode(error) })
 }

@@ -221,11 +221,16 @@ export function createServiceRuntime({
 // environment cannot do. Ownership, status and ticks go through the same
 // lifecycle API as for a detached service; a stop is the service's own
 // shutdown, awaited.
-export function createInProcessServiceRuntime({ loadProject, dataRoot, env, consent, adapterFactory, extensions, intervalMs = 60 * 60 * 1000, probeTimeoutMs, startTimeoutMs = 120 * 1000, entryPath = SERVICE_ENTRY_PATH, clock = () => new Date(), log = () => {} }) {
+export function createInProcessServiceRuntime({ loadProject, dataRoot, env, consent, adapterFactory, extensions, intervalMs = 60 * 60 * 1000, probeTimeoutMs, startTimeoutMs = 120 * 1000, entryPath = SERVICE_ENTRY_PATH, clock = () => new Date(), log = () => {}, runService = runMaintenanceService }) {
   const lifecycle = { loadProject, dataRoot, env, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
   const workspace = () => resolveServiceWorkspace({ project: loadProject(), dataRoot, env, create: true })
   let service = null
   let shutdownPromise = null
+  const awaitShutdown = async (timeoutMs) => {
+    let timer
+    try { return await Promise.race([shutdownPromise.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs) })]) }
+    finally { clearTimeout(timer) }
+  }
   const logLines = []
   const record = () => { const found = workspace(); return found?.workspaceRoot ? readServiceRecord({ workspaceRoot: found.workspaceRoot, workspaceId: found.workspaceId }) : null }
   return {
@@ -241,7 +246,7 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
         const port = await new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => { const { port: chosen } = server.address(); server.close(() => resolve(chosen)) }) })
         writeServiceSettings({ workspaceRoot, workspaceId, settings: { schema: SERVICE_SETTINGS_SCHEMA, workspaceId, host: '127.0.0.1', port, consent: { grantedAt: clock().toISOString(), actor: consent.actor, coverage: consent.coverage ?? 'service' }, updatedAt: clock().toISOString() } })
       }
-      service = await runMaintenanceService({ loadProject, dataRoot, env, adapterFactory, entryPath, intervalMs, clock, log: (entry) => { logLines.push(entry); log(entry) }, engineOptions: { ...(extensions ? { extensions } : {}), quietPeriodMs: 0 } })
+      service = await runService({ loadProject, dataRoot, env, adapterFactory, entryPath, intervalMs, clock, log: (entry) => { logLines.push(entry); log(entry) }, engineOptions: { ...(extensions ? { extensions } : {}), quietPeriodMs: 0 } })
       // The first tick runs in this process the moment the loop starts and holds the event loop through its synchronous
       // parts, so health may not answer at once. A detached service in that state reads `busy` (its command line
       // names the entry); this process's does not, so the status is asked again until the tick has let go.
@@ -258,10 +263,7 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
       const target = service
       const { identity } = target
       if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
-      const settled = await Promise.race([
-        shutdownPromise.then(() => true),
-        new Promise((resolve) => setTimeout(() => resolve(false), stopTimeoutMs)),
-      ])
+      const settled = await awaitShutdown(stopTimeoutMs)
       if (!settled) return { state: 'stopping', stopped: false, refused: true, reason: 'stop-timed-out', runtimeId: identity.runtimeId, pid: identity.pid }
       service = null
       shutdownPromise = null
@@ -273,10 +275,7 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
       const target = service
       const { identity } = target
       if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
-      const settled = await Promise.race([
-        shutdownPromise.then(() => true),
-        new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
-      ])
+      const settled = await awaitShutdown(timeoutMs)
       if (settled) { service = null; shutdownPromise = null }
       return { joined: settled, signals: [], remaining: settled ? [] : [identity.pid] }
     },

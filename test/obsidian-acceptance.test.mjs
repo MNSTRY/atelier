@@ -1428,7 +1428,7 @@ const { createProposalAdapterContribution } = await import('../src/projection/ob
 const { DESKTOP_EXT_KEY, ReceiptRefusal, buildReceipt, evidenceFileName, writeGateReceipt } = await import('../scripts/obsidian/lib/receipts.mjs')
 const { DEFAULT_SEED, PROFILES, generateScaleDataset, measureDerivation, planDataset } = await import('../scripts/obsidian/generate-scale.mjs')
 const {
-  DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, cleanupOwnedRuntime, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
+  DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, cleanupOwnedRuntime, cleanupProcedureRuntime, combineProcedureAndCleanupError, desktopReceiptErrorExitCode, formatDesktopReceiptError, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
   planProcedure, recordProcedureReceipts, runAp01, runAp02Membership, runAp04App,
 } = await import('../scripts/obsidian/desktop-receipts.mjs')
 const { SIGNED_NOTE, UNSIGNED_NOTE, createReceiptVerifierForOracleTests, formatTable, verifyReceiptSet } = await import('../scripts/obsidian/verify-receipts.mjs')
@@ -2622,20 +2622,15 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
 
 const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'service-entry.mjs')
 const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }]
-// Graceful stop and the identity-checked fallback serve unheld launcher services.
-// Every exit path also sweeps and joins held children, independent of the record.
+// Fixture teardown exercises the same cleanup authority as the production runner;
+// a deliberately damaged record may still refuse proof after its held child is
+// already joined, so that diagnostic refusal is safe to absorb here.
 const endLeftService = (runtime) => async () => {
-  try {
-    try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* fallback below */ }
-    let record
-    try { record = runtime.record() } catch { /* held children still joined below */ }
-    if (record && runtime.kill(record.pid, 'SIGKILL').sent !== true) {
-      const stopped = await runtime.stop({ stopTimeoutMs: 5000, force: true })
-      assert.ok(stopped.stopped || !runtime.alive(record.pid), 'unheld service cleanup must finish')
-    }
-  } finally {
+  try { await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 5000 }) }
+  catch (error) {
+    if (error?.code !== 'owned-service-cleanup-unverified') throw error
     const held = await runtime.stopHeld()
-    assert.equal(held.joined, true, 'held service cleanup must join every owned child')
+    assert.equal(held.joined, true, 'fixture teardown must join every owned child')
   }
 }
 
@@ -2653,17 +2648,20 @@ function serviceWorld(t, label, { scoped = false } = {}) {
 // The app of AP-03, faked: it "opens" any note and reads the vault file from disk, as the real probe reads app.vault.
 const diskApp = (vaultRoot) => ({ openNote: async (notePath) => `opened ${notePath}`, readIncludes: ({ path: notePath, needle }) => { try { return fs.readFileSync(noteFile(vaultRoot, notePath), 'utf8').includes(needle) } catch { return false } } })
 
-test('AP-03 production cleanup joins the owned child when the status record refuses graceful stop', async () => {
+test('AP-03 production cleanup sweeps the owned child before a malformed status record refuses proof', async () => {
   const calls = []
   const runtime = {
     async stop(options) { calls.push(['stop', options]); throw new Error('status record unavailable') },
     async stopHeld(options) { calls.push(['stopHeld', options]); return { joined: true, signals: [{ pid: 7, sent: true, through: 'handle' }], remaining: [] } },
-    record() { return null },
-    status() { return { state: 'stopped', record: null } },
+    record() { throw new Error('malformed record') },
+    status() { throw new Error('malformed record') },
   }
-  const result = await cleanupOwnedRuntime(runtime)
-  assert.equal(result.graceful, null)
-  assert.deepEqual(result.gracefulError, { name: 'Error', message: 'status record unavailable' })
+  await assert.rejects(() => cleanupOwnedRuntime(runtime), (error) => {
+    assert.equal(error.code, 'owned-service-cleanup-unverified')
+    assert.equal(error.detail.held.joined, true)
+    assert.deepEqual(error.detail.gracefulError, { name: 'Error', message: 'status record unavailable' })
+    return true
+  })
   assert.deepEqual(calls, [['stop', { stopTimeoutMs: 20000 }], ['stopHeld', { timeoutMs: 5000 }]])
 })
 
@@ -2691,7 +2689,7 @@ test('AP-03 production cleanup force-stops a detached service only after identit
     async stopHeld(options) { calls.push({ held: options }); return { joined: true, signals: [], remaining: [] } },
   }
   const result = await cleanupOwnedRuntime(runtime)
-  assert.deepEqual(calls, [{ stopTimeoutMs: 20000 }, { stopTimeoutMs: 5000, force: true }, { held: { timeoutMs: 5000 } }])
+  assert.deepEqual(calls, [{ stopTimeoutMs: 20000 }, { held: { timeoutMs: 5000 } }, { stopTimeoutMs: 5000, force: true }])
   assert.equal(result.forced.stopped, true)
   assert.equal(result.after.alive, false)
 })
@@ -2706,6 +2704,47 @@ test('AP-03 production cleanup refuses a detached service when no stop proof exi
     () => cleanupOwnedRuntime(runtime),
     (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified',
   )
+})
+
+test('AP-03 cleanup preserves the procedure failure when cleanup also refuses', () => {
+  const primary = new Error('procedure failed first')
+  const cleanup = new IsolationRefusal('owned-service-cleanup-unverified', 'cleanup proof missing')
+  const combined = combineProcedureAndCleanupError(primary, cleanup)
+  assert.ok(combined instanceof AggregateError)
+  assert.deepEqual(combined.errors, [primary, cleanup])
+  const output = formatDesktopReceiptError(combined)
+  assert.match(output, /Error: procedure failed first/)
+  assert.match(output, /IsolationRefusal \[owned-service-cleanup-unverified\]/)
+  assert.match(output, /cleanup proof missing/)
+  assert.equal(desktopReceiptErrorExitCode(combined), 2)
+  assert.equal(desktopReceiptErrorExitCode(new AggregateError([primary])), 1)
+})
+
+test('AP-03 production cleanup keeps bearer data out of success and refusal evidence', async () => {
+  const record = { runtimeId: 'rt-stale', pid: 1234, ext: { bearer: 'synthetic-secret-marker' } }
+  const runtime = {
+    async stop() { return { state: 'stale-record', stopped: false, record } },
+    async status() { return { state: 'stale-record', record } },
+    record: () => record, alive: () => false,
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  const cleanup = await cleanupOwnedRuntime(runtime)
+  const success = JSON.stringify(cleanup)
+  assert.equal(success.includes('synthetic-secret-marker'), false)
+  assert.equal(success.includes('"ext"'), false)
+  assert.equal(success.includes('"bearer"'), false)
+  runtime.status = async () => ({ state: 'occupied', record })
+  const outcome = await cleanupProcedureRuntime(runtime, { procedureError: new Error('procedure failure') })
+  assert.equal(outcome.retainRoots, true)
+  assert.ok(outcome.error instanceof AggregateError)
+  assert.equal(outcome.error.errors[1].code, 'owned-service-cleanup-unverified')
+  const refusal = JSON.stringify(outcome.error.errors[1].detail)
+  assert.equal(refusal.includes('synthetic-secret-marker'), false)
+  assert.equal(refusal.includes('"ext"'), false)
+  runtime.status = async () => ({ state: 'stale-record', record })
+  const settled = await cleanupProcedureRuntime(runtime)
+  assert.equal(settled.retainRoots, false)
+  assert.equal(settled.error, null)
 })
 
 test('AP-03 interruption: a service is killed only when it answered healthy with a process number, and only through a handle the runtime holds', async (t) => {
@@ -2788,27 +2827,37 @@ for (const damaged of ['missing', 'malformed']) {
       const record = path.join(world.workspaceRoot, 'state', 'service', 'runtime.json')
       if (damaged === 'missing') fs.unlinkSync(record)
       else fs.writeFileSync(record, '{')
-      runtime.stop = async () => { throw new Error('synthetic stop timeout') }
-      await endLeftService(runtime)()
+      try {
+        const cleanup = await cleanupOwnedRuntime(runtime)
+        assert.equal(cleanup.held.joined, true)
+      } catch (error) {
+        assert.ok(error instanceof IsolationRefusal)
+        assert.equal(error.code, 'owned-service-cleanup-unverified')
+        assert.equal(error.detail.held.joined, true)
+      }
       assert.equal(runtime.alive(pid), false, 'missing or malformed records cannot hide a held child')
     } finally {
       const recovery = await runtime.stopHeld()
       assert.equal(recovery.joined, true, 'regression recovery must join its owned service')
+      // A malformed retained record is diagnostic state; remove only this test's
+      // damaged fixture after proving the real cleanup refusal and child join.
+      fs.rmSync(path.join(world.workspaceRoot, 'state', 'service', 'runtime.json'), { force: true })
     }
   })
 }
 
-test('AP-03 cleanup: unheld records use force stop and a failed held join fails cleanup', async () => {
-  const calls = []
-  const runtime = {
-    async stop(options) { calls.push(options); return { stopped: options.force === true } },
-    record: () => ({ pid: 4242 }), kill: () => ({ sent: false }), alive: () => true,
-    async stopHeld() { calls.push('held-sweep'); return { joined: true } },
-  }
-  await endLeftService(runtime)()
-  assert.deepEqual(calls, [{ stopTimeoutMs: 5000 }, { stopTimeoutMs: 5000, force: true }, 'held-sweep'])
-  runtime.stopHeld = async () => ({ joined: false })
-  await assert.rejects(endLeftService(runtime), /held service cleanup must join/)
+test('AP-03 production cleanup joins a real launcher-started unheld service', needsExchange, async (t) => {
+  const { runtime } = ap03ServiceWorld(t, 'ap03-unheld-cleanup')
+  const started = await runtime.startFromExitingLauncher()
+  const status = await runtime.status()
+  const pid = started.reported?.pid ?? status.record?.pid
+  assert.equal(started.reported?.state ?? status.state, 'healthy')
+  assert.equal(runtime.alive(pid), true)
+  assert.equal(runtime.kill(pid).sent, false, 'the launcher child is not a retained service handle')
+  const cleanup = await cleanupOwnedRuntime(runtime)
+  assert.equal(cleanup.graceful.stopped, true)
+  assert.equal(cleanup.held.joined, true)
+  assert.equal(runtime.alive(pid), false)
 })
 
 test('AP-03 cleanup: held sweep reports an unjoined live child without PID signalling', needsExchange, async (t) => {
@@ -2919,6 +2968,8 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
   const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05', { inProcess: true })
   assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md', 'north-desk/plans/mooring-notes.md'])
   const run = await runAp05({ world, views, runtime, command, operator: 'op-synthetic' })
+  const cleanup = await cleanupOwnedRuntime(runtime)
+  assert.equal(cleanup.held.joined, true, 'production cleanup also joins the real in-process AP-05 runtime')
   assert.deepEqual({ start: [run.steps.baseline.start.state, run.steps.baseline.start.started, run.steps.baseline.start.record.pid], restart: [run.steps.automatic.restart.stop.stopped, run.steps.automatic.restart.start.state, run.steps.automatic.restart.start.record.runtimeId !== run.steps.baseline.start.record.runtimeId], stopped: run.steps.retention.uninstall.serviceStatus.state, log: runtime.logLines.filter((entry) => entry.event === 'started').length }, { start: ['healthy', true, process.pid], restart: [true, 'healthy', true], stopped: 'stopped', log: 2 }, 'the in-process service body was started twice, proven by health, and stopped')
   assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => item.role) }, { passed: true, failures: [], roles: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention', null] })
   const { steps } = run
