@@ -1,15 +1,20 @@
 import assert from 'node:assert/strict'
+import childProcess from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { LOCAL_OVERLAY_ENV, resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { OBSIDIAN_EXT_KEY } from '../src/projection/obsidian/contracts.mjs'
 import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
 import { LOCAL_POINTER_SCHEMA, ensureWorkspaceIdentity, localPointerPath, workspaceStateRoot } from '../src/runtime/obsidian/machine-settings.mjs'
-import { readServiceRecord } from '../src/runtime/obsidian/service-record.mjs'
-import { resolveServiceWorkspace, runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
-import { DEFAULT_KEEP_FOR_MS, DEFAULT_LOAD_DEADLINE_MS, DEFAULT_RETRY_AFTER_MS, createViewPermission } from '../src/runtime/obsidian/view-permission.mjs'
+import { readLastStartup, readServiceRecord } from '../src/runtime/obsidian/service-record.mjs'
+import { runServiceProcess } from '../src/runtime/obsidian/service-main.mjs'
+import { resolveServiceWorkspace, runMaintenanceService, serviceWorkspaceInputs } from '../src/runtime/obsidian/service.mjs'
+import {
+  DEFAULT_KEEP_FOR_MS, DEFAULT_LOAD_DEADLINE_MS, DEFAULT_RETRY_AFTER_MS, DEFAULT_SLOW_LOAD_MS, STATUS_LOAD_EVENT, createLoadReport, createViewPermission,
+} from '../src/runtime/obsidian/view-permission.mjs'
 
 // Whether the project allows a view right now (view-permission.mjs), asked the
 // way the maintenance service asks before it tells a plugin what it stored.
@@ -63,7 +68,7 @@ function world(t, { dataRootFrom = 'injected', envOverlay = false } = {}) {
     advance: (ms) => { self.time += ms },
     // The permission as the service makes it: its loader, and the workspace resolved as at its start; time is the test's.
     permission: ({ loadProject = self.loadProject, resolveWorkspace = (project) => resolveServiceWorkspace({ project, dataRoot: injected, env }), ...times } = {}) => createViewPermission({
-      loadProject, resolveWorkspace, workspaceId: WORKSPACE_ID, workspaceRoot: self.workspaceRoot, now: () => self.time, ...times,
+      loadProject, resolveWorkspace, workspaceInputsOf: serviceWorkspaceInputs, workspaceId: WORKSPACE_ID, workspaceRoot: self.workspaceRoot, now: () => self.time, ...times,
     }),
     // Puts a link where `file` is, to `target`.
     link(file, target) { fs.rmSync(file, { recursive: true, force: true }); fs.symlinkSync(target, file) },
@@ -647,6 +652,178 @@ test('each load is told with how long it took and how it ended: times and codes 
   assert.deepEqual(Object.keys(promisedTold[0]).sort(), ['durationMs', 'outcome', 'promised'])
 })
 
+test('a promised load that answers, or is refused, only after its deadline with no request in between is told as given up, once, and counts as one failure', async (t) => {
+  for (const late of ['answer', 'fail']) {
+    const w = world(t)
+    const told = []
+    const loader = deferredLoader(w)
+    const permits = w.permission({ loadProject: loader.loadProject, onLoad: (entry) => told.push(entry) })
+    assert.equal(permits(VIEW), false)
+    w.advance(DEFAULT_LOAD_DEADLINE_MS + 5)
+    await loader[late]()
+    assert.deepEqual(told, [{ durationMs: DEFAULT_LOAD_DEADLINE_MS + 5, outcome: 'given-up', promised: true }], late)
+    assert.equal(permits(VIEW), false)
+    w.advance(DEFAULT_RETRY_AFTER_MS - 1)
+    assert.equal(permits(VIEW), false)
+    assert.equal(w.loads, 1, 'given up: not asked again at once')
+    // One failure waits two seconds; two in a row would wait four.
+    w.advance(1)
+    assert.equal(permits(VIEW), false)
+    assert.equal(w.loads, 2)
+    assert.equal(told.length, 1)
+  }
+})
+
+test('the load report writes a line for a load that failed, was given up or held the event loop, and for the first that answered after a failure; never one per load', () => {
+  const lines = []
+  const report = createLoadReport({ write: (line) => lines.push(line) })
+  const load = (outcome, durationMs = 120, promised = false) => report.onLoad({ durationMs, outcome, promised })
+  // A healthy service: every load answers in time. Nothing is written, however many there are.
+  for (let index = 0; index < 500; index += 1) load('answered')
+  assert.deepEqual(lines, [])
+  // A loader that keeps failing: the first, then when the row is 2, 4, 8, ... long.
+  for (let index = 0; index < 100; index += 1) load(index % 10 === 9 ? 'given-up' : 'failed', 30, index % 10 === 9)
+  assert.deepEqual(lines.map((line) => line.inARow), [1, 2, 4, 8, 16, 32, 64])
+  assert.deepEqual(lines[0], { event: 'status-project-loaded', durationMs: 30, outcome: 'failed', promised: false, inARow: 1 })
+  assert.equal(STATUS_LOAD_EVENT, 'status-project-loaded')
+  // The first that answers after it, once.
+  lines.length = 0
+  load('answered')
+  load('answered')
+  assert.deepEqual(lines, [{ event: 'status-project-loaded', durationMs: 120, outcome: 'answered', promised: false, afterFailures: 100 }])
+  // A load that answered at once and took a second or more held the listener's event loop that long; a promised one
+  // held nothing. Slow loads in a row are written on the same doubling row.
+  lines.length = 0
+  load('answered', DEFAULT_SLOW_LOAD_MS - 1)
+  load('answered', 60_000, true)
+  assert.deepEqual(lines, [])
+  for (let index = 0; index < 40; index += 1) load('answered', DEFAULT_SLOW_LOAD_MS + index)
+  assert.deepEqual(lines.map(({ slow, inARow, durationMs }) => [slow, inARow, durationMs]), [[true, 1, 1000], [true, 2, 1001], [true, 4, 1003], [true, 8, 1007], [true, 16, 1015], [true, 32, 1031]])
+  load('answered')
+  load('answered', DEFAULT_SLOW_LOAD_MS)
+  assert.equal(lines.at(-1).inARow, 1, 'a load in time ends the row')
+  // Every load is counted, written or not.
+  assert.deepEqual(report.counts(), { answered: 546, failed: 90, givenUp: 10, slow: 41, longestMs: 60_000 })
+  assert.throws(() => createLoadReport({}), TypeError)
+})
+
+test('what the service logs of a status load names the event and holds times, codes and counts only: no path, view or message of a load that failed', (t) => {
+  const w = world(t)
+  const lines = []
+  const report = createLoadReport({ write: (line) => lines.push(line) })
+  let failing = false
+  const permits = w.permission({
+    loadProject: () => { if (failing) throw Object.assign(new Error(`ENOENT: no such file or directory, open '${w.configPath}'`), { code: 'ENOENT', path: w.configPath }); return w.loadProject() },
+    onLoad: report.onLoad,
+  })
+  assert.deepEqual(answers(permits, 4), [true])
+  assert.deepEqual(lines, [], 'a healthy start writes nothing')
+  failing = true
+  w.write(settings({ enabled: false }))
+  assert.equal(permits(VIEW), false)
+  failing = false
+  w.write(settings())
+  assert.equal(permits(VIEW), true)
+  assert.deepEqual(lines.map((line) => [line.event, line.outcome]), [['status-project-loaded', 'failed'], ['status-project-loaded', 'answered']])
+  for (const line of lines) {
+    assert.deepEqual(Object.keys(line).filter((key) => !['event', 'durationMs', 'outcome', 'promised', 'inARow', 'afterFailures', 'slow'].includes(key)), [])
+    for (const [key, value] of Object.entries(line)) assert.ok(key === 'event' || key === 'outcome' ? /^[a-z-]+$/.test(value) : typeof value === 'number' || typeof value === 'boolean', `${key} is a code, a number or a flag`)
+  }
+  const written = JSON.stringify(lines)
+  for (const word of [w.dir, w.configPath, VIEW, 'ENOENT', path.sep === '/' ? '/' : '\\']) assert.equal(written.includes(word), false, `a line holds ${word}`)
+})
+
+for (const [name, differing] of [
+  ['the data root its local overlay prefers', (project, w) => ({ ...project, localOverlay: { ...project.localOverlay, overlay: { ...project.localOverlay.overlay, preferences: { [OBSIDIAN_EXT_KEY]: { dataRoot: path.join(w.dir, 'data-elsewhere') } } } } })],
+  ['the folder its pointer is under', (project, w) => ({ ...project, configDir: path.join(w.dir, 'another-folder') })],
+  ['a repository it protects', (project, w) => ({ ...project, repos: [...project.repos, { name: 'extra', path: path.join(w.dir, 'extra'), external: false, readBoundary: 'team' }] })],
+]) {
+  test(`two loads that differ in ${name} are never taken for the same project: each is something the workspace is resolved from`, async (t) => {
+    const w = world(t)
+    const loader = deferredLoader(w)
+    const permits = w.permission({ loadProject: loader.loadProject })
+    await keepUnder(permits, loader, 3)
+    assert.equal(permits(VIEW), true)
+    w.write({ ...settings(), defaultScopeId: VIEW })
+    for (let round = 0; round < 6; round += 1) {
+      assert.equal(permits(VIEW), false)
+      assert.equal(loader.waiting(), 1, 'nothing is kept: a load is under way again')
+      const project = w.load()
+      await loader.answerWith(round % 2 === 0 ? project : differing(project, w))
+    }
+    // And the resolution reads nothing of a project but those inputs.
+    const whole = w.load()
+    assert.deepEqual(resolveServiceWorkspace({ project: serviceWorkspaceInputs(whole), dataRoot: w.dataRoot, env: w.env }), resolveServiceWorkspace({ project: whole, dataRoot: w.dataRoot, env: w.env }))
+    assert.deepEqual(Object.keys(serviceWorkspaceInputs(whole)).sort(), ['configDir', 'localOverlay', 'repos'])
+  })
+}
+
+const refusingRealpath = () => { throw Object.assign(new Error('EISDIR: illegal operation on a directory, realpath'), { code: 'EISDIR' }) }
+
+test('where the system resolves no path for a regular file that is there, the file is kept by its own path and its bytes', (t) => {
+  const w = world(t)
+  const permits = w.permission({ realpath: refusingRealpath })
+  assert.deepEqual(answers(permits, 20), [true])
+  assert.equal(w.loads, 3, 'kept, as where the system resolves it')
+  w.write(settings({ enabled: false }))
+  assert.equal(permits(VIEW), false, 'its bytes decide')
+  w.write(settings())
+  assert.deepEqual(answers(permits, 20), [true])
+  assert.equal(w.loads, 6, 'one load while it was off, two to keep it again')
+  // A file that appears is still a change, and a folder in a file's place still vouches for nothing.
+  writeJson(path.join(w.projectDir, 'atelier.workspace.local.json'), { preferences: {} })
+  assert.deepEqual(answers(permits, 5), [true])
+  assert.equal(w.loads, 8)
+  fs.mkdirSync(path.join(w.projectDir, 'repo-access.v1.json'))
+  assert.deepEqual(answers(permits, 5), [true])
+  assert.equal(w.loads, 13, 'loaded at every request')
+})
+
+test('where the system resolves no path, a link still vouches for nothing: nobody can say where it leads', { skip: noLinks }, (t) => {
+  const w = world(t)
+  const kept = path.join(w.dir, 'dotfiles', 'atelier.project.json')
+  fs.mkdirSync(path.dirname(kept), { recursive: true })
+  fs.renameSync(w.configPath, kept)
+  w.link(w.configPath, kept)
+  const permits = w.permission({ realpath: refusingRealpath })
+  assert.deepEqual(answers(permits, 10), [true])
+  assert.equal(w.loads, 10, 'never kept')
+})
+
+const SERVICE_ENTRY = fileURLToPath(new URL('./support/obsidian-maintenance/service-entry.mjs', import.meta.url))
+for (const kind of ['promise', 'refused-promise', 'thenable']) {
+  test(`started by a login item on a loader that answers a ${kind}, the service asks the loader once, records its typed refusal and ends cleanly`, (t) => {
+    const w = world(t)
+    const child = childProcess.spawnSync(process.execPath, [SERVICE_ENTRY, `--project=${w.configPath}`, `--data-root=${w.dataRoot}`, `--workspace-id=${WORKSPACE_ID}`, '--startup', `--loader-answers=${kind}`], { env: w.env, encoding: 'utf8', windowsHide: true, timeout: 120_000 })
+    assert.equal(child.status, 0, `a refusal under a login item ends with 0, so the service manager does not start it again at once: ${child.stdout}${child.stderr}`)
+    assert.equal(/unhandled|rejection/i.test(child.stderr), false, child.stderr)
+    const startup = readLastStartup({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID })
+    assert.deepEqual([startup?.outcome, startup?.code], ['refused', 'service-loader-not-synchronous'])
+    assert.deepEqual(child.stdout.split('\n').filter((line) => line.includes('loader-calls')).map((line) => JSON.parse(line).count), [1], 'one call serves the lookup of the workspace and the service\'s start')
+    assert.equal(readServiceRecord({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null)
+  })
+}
+
+test('under a login item a refused promise the loader answered is let go even when the service ends before it asks its loader', async (t) => {
+  const unhandled = []
+  const record = (reason) => unhandled.push(reason)
+  process.on('unhandledRejection', record)
+  const exitCode = process.exitCode
+  t.after(() => { process.off('unhandledRejection', record); process.exitCode = exitCode })
+  const w = world(t)
+  let asked = 0
+  // No adapter factory: the service throws, untyped, before its first call of the loader.
+  await runServiceProcess({
+    startup: true, loadProject: () => { asked += 1; return Promise.reject(new Error('the composition refused')) }, dataRoot: w.dataRoot, workspaceId: WORKSPACE_ID, env: w.env,
+    entryPath: path.join(w.dir, 'service-entry.mjs'),
+  })
+  await settled()
+  assert.deepEqual(unhandled, [])
+  assert.equal(asked, 1)
+  assert.equal(process.exitCode, 1, 'an error nobody typed is a crash, as before')
+  process.exitCode = exitCode
+})
+
 for (const [name, answer] of [
   ['a promise', (w) => Promise.resolve(w.load())],
   ['a promise that is refused', () => Promise.reject(new Error('the composition refused'))],
@@ -668,10 +845,13 @@ for (const [name, answer] of [
     // The same project from a loader that answers at once gets past that check, and stops at the next one: this machine
     // recorded no service settings for the workspace.
     await assert.rejects(start(() => w.load()), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'service-settings-absent')
+    // So does a project that merely has a member named `then` that is not a function: it answers no promise.
+    await assert.rejects(start(() => ({ ...w.load(), then: 'later' })), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'service-settings-absent')
   })
 }
 
-test('a permission is made with a loader and a workspace resolution, or not at all', () => {
-  assert.throws(() => createViewPermission({ resolveWorkspace: () => null, workspaceId: WORKSPACE_ID, workspaceRoot: TMP }), TypeError)
-  assert.throws(() => createViewPermission({ loadProject: () => ({}), workspaceId: WORKSPACE_ID, workspaceRoot: TMP }), TypeError)
+test('a permission is made with a loader, a workspace resolution and what that resolution reads, or not at all', () => {
+  assert.throws(() => createViewPermission({ resolveWorkspace: () => null, workspaceInputsOf: () => ({}), workspaceId: WORKSPACE_ID, workspaceRoot: TMP }), TypeError)
+  assert.throws(() => createViewPermission({ loadProject: () => ({}), workspaceInputsOf: () => ({}), workspaceId: WORKSPACE_ID, workspaceRoot: TMP }), TypeError)
+  assert.throws(() => createViewPermission({ loadProject: () => ({}), resolveWorkspace: () => null, workspaceId: WORKSPACE_ID, workspaceRoot: TMP }), TypeError)
 })

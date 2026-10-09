@@ -1837,7 +1837,12 @@ test('a view the project turns off or no longer declares is told nothing the ser
   assert.equal(plugin.lastObservedStatus, null, 'and the plugin remembers nothing of the view to show later')
   // The answer is the service's own, sealed: the plugin keeps its session and asks again at its next round.
   assert.equal(plugin.session.id, session)
-  assert.deepEqual((await world.statusDocument()).plugins.scopes.map(({ present, sessions }) => ({ present, sessions })), [{ present: true, sessions: 1 }])
+  const document = await world.statusDocument()
+  assert.deepEqual(document.plugins.scopes.map(({ present, sessions }) => ({ present, sessions })), [{ present: true, sessions: 1 }])
+  // The loads behind those answers are counted in the service's status: numbers only, and none of them failed.
+  assert.deepEqual(Object.keys(document.statusLoads).sort(), ['answered', 'failed', 'givenUp', 'longestMs', 'slow'])
+  assert.ok(Object.values(document.statusLoads).every((count) => Number.isInteger(count) && count >= 0) && document.statusLoads.answered >= 2, JSON.stringify(document.statusLoads))
+  assert.deepEqual([document.statusLoads.failed, document.statusLoads.givenUp], [0, 0])
 
   // Turned on again: told exactly what it was told before.
   changeSettings(world, (settings) => { settings.enabled = true })

@@ -79,13 +79,35 @@ export const EXIT_RELEASE_CHANGED = 75
 
 const printed = (entry) => { try { process.stdout.write(`${JSON.stringify(entry)}\n`) } catch { /* a closed log never ends the service */ } }
 
+// The loader's first answer, asked for once and handed to both who need it at a start under a login item: the lookup
+// of the workspace below, and the service's own start, which takes it as the answer to its first call. A loader that
+// answers a promise or another thenable is not waited for by either: the promise is let go here, so that a refusal of
+// it never goes unhandled and ends the process with an error where the service's typed refusal should end it cleanly.
+function firstAnswerOf(loadProject) {
+  let first
+  try { first = { project: loadProject() } } catch (error) { first = { error } }
+  const promised = typeof first.project?.then === 'function'
+  if (promised) Promise.resolve(first.project).catch(() => {})
+  let taken = false
+  return {
+    // The project, when the loader answered one at once; null when it threw or answered a promise.
+    project: () => (first.error === undefined && !promised ? first.project : null),
+    loadProject() {
+      if (taken) return loadProject()
+      taken = true
+      if (first.error !== undefined) throw first.error
+      return first.project
+    },
+  }
+}
+
 // The workspace of a service a login item started, when it can be found: where it keeps its log and records how its
-// start ended. When the project no longer leads to one (it moved, its pointer is gone), the workspace the unit names by
-// its data root and identity, if that exists; it is never created here. Null otherwise; a refusal is then printed
-// only, into the unit's own output file.
-function startupWorkspace({ loadProject, dataRoot, workspaceId, env = process.env, platform = process.platform }) {
+// start ended. When the project no longer leads to one (it moved, its pointer is gone, its loader answered no project
+// at once), the workspace the unit names by its data root and identity, if that exists; it is never created here. Null
+// otherwise; a refusal is then printed only, into the unit's own output file.
+function startupWorkspace({ project, dataRoot, workspaceId, env = process.env, platform = process.platform }) {
   try {
-    const workspace = resolveServiceWorkspace({ project: loadProject(), dataRoot, env, platform })
+    const workspace = project === null ? null : resolveServiceWorkspace({ project, dataRoot, env, platform })
     if (workspace?.workspaceRoot) return workspace
   } catch { /* the workspace the unit names, below */ }
   if (typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot) || typeof workspaceId !== 'string') return null
@@ -120,10 +142,11 @@ function recordStartup(workspace, { at, outcome, code }) {
 // and the manager restarts it after its throttle.
 export async function runServiceProcess(options) {
   const startup = options.startup === true
-  const workspace = startup ? startupWorkspace(options) : null
+  const first = startup && typeof options.loadProject === 'function' ? firstAnswerOf(options.loadProject) : null
+  const workspace = startup ? startupWorkspace({ ...options, project: first === null ? null : first.project() }) : null
   const log = workspace === null ? printed : workspaceLog(workspace.workspaceRoot)
   try {
-    const service = await runMaintenanceService({ log, invokedAs: process.argv[1], ...options })
+    const service = await runMaintenanceService({ log, invokedAs: process.argv[1], ...options, ...(first === null ? {} : { loadProject: first.loadProject }) })
     if (startup) recordStartup(workspace, { at: new Date().toISOString(), outcome: 'started', code: null })
     for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { void service.shutdown(`signal-${signal}`) })
     const { reason } = await service.done

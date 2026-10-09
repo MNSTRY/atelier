@@ -3,7 +3,7 @@ import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
-import { ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
+import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
 import { prepareView as productionPrepareView } from '../../projection/obsidian/materialize/index.mjs'
 import { preparePluginFiles } from '../../projection/obsidian/plugin-bridge/bundle.mjs'
 import { publishView as productionPublishView } from '../../projection/obsidian/publication/publisher.mjs'
@@ -23,7 +23,7 @@ import {
 import { createServiceServer } from './service-server.mjs'
 import { OPEN_EDIT_STATES, createMaintenanceStateStore } from './state-store.mjs'
 import { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
-import { createViewPermission } from './view-permission.mjs'
+import { createLoadReport, createViewPermission } from './view-permission.mjs'
 import { createFsWatcherFactory } from './watchers.mjs'
 
 // The maintenance service of one workspace, inside one process.
@@ -62,8 +62,22 @@ export const SERVICE_STATUS_SCHEMA = 'atelier-obsidian-service-status/v1'
 export const DEFAULT_SHUTDOWN_GRACE_MS = 30 * 1000
 export const RELEASE_CHANGED = 'release-changed'
 
+// What of a project its workspace is resolved from, as a project that holds nothing else: the folder its pointer is
+// under (readLocalPointer), the data root its local overlay prefers (resolveDataRoot), and the repositories private
+// state may not overlap (protectedRoots). resolveServiceWorkspace reads these and nothing else of a project, so two
+// projects with the same inputs resolve alike, and the plugin's status read compares exactly them (view-permission.mjs).
+export function serviceWorkspaceInputs(project) {
+  const preference = project?.localOverlay?.overlay?.preferences?.[OBSIDIAN_EXT_KEY]
+  return {
+    ...(typeof project?.configDir === 'string' ? { configDir: project.configDir } : {}),
+    repos: (Array.isArray(project?.repos) ? project.repos : []).map((repo) => ({ path: repo?.path, external: Boolean(repo?.external) })),
+    localOverlay: { overlay: { preferences: preference === undefined ? {} : { [OBSIDIAN_EXT_KEY]: preference } } },
+  }
+}
+
 // Where a workspace keeps its private state, without creating an identity.
-export function resolveServiceWorkspace({ project, dataRoot, env = process.env, platform = process.platform, create = false }) {
+export function resolveServiceWorkspace({ project: whole, dataRoot, env = process.env, platform = process.platform, create = false }) {
+  const project = serviceWorkspaceInputs(whole)
   const pointer = readLocalPointer(project)
   if (pointer === null) return null
   const requested = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId)
@@ -268,9 +282,12 @@ export async function runMaintenanceService(options = {}) {
   const healthStatus = () => (stopping ? 'stopped' : consecutiveFailures > 0 ? 'degraded' : 'healthy')
 
   // What is stored about a view is not permission to tell it: the project is asked as it is now (view-permission.mjs).
+  // Its loads are counted for the status document; the log gets a line only for one that failed, was given up or held
+  // the event loop, and for the first that answered after a failure.
+  const statusLoads = createLoadReport({ write: (entry) => log({ at: isoTime(clock), ...entry }) })
   const viewPermitted = createViewPermission({
-    loadProject, resolveWorkspace: (loaded) => resolveServiceWorkspace({ project: loaded, dataRoot, env, platform }), workspaceId, workspaceRoot,
-    onLoad: ({ durationMs, outcome, promised }) => log({ at: isoTime(clock), event: 'status-project-loaded', durationMs: Math.round(durationMs), outcome, promised }),
+    loadProject, resolveWorkspace: (loaded) => resolveServiceWorkspace({ project: loaded, dataRoot, env, platform }), workspaceInputsOf: serviceWorkspaceInputs,
+    workspaceId, workspaceRoot, onLoad: statusLoads.onLoad,
   })
   // One view as the plugin is told about it: its freshness entry with held notes counted, and its open pending edits.
   function pluginStatusOf(scopeId) {
@@ -303,6 +320,7 @@ export async function runMaintenanceService(options = {}) {
         return {
           schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(),
           plugins: pluginPresence({ sessions: pluginSessions, scopeIds: [...pluginChannel.bearers().keys()], entryOf: (scopeId) => currentPluginChoice({ workspaceRoot, workspaceId, scopeId }).state }),
+          statusLoads: statusLoads.counts(),
           ...(typeof appStatus === 'function' ? { app: appStatus() } : {}),
         }
       },
