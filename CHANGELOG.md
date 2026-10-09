@@ -43,6 +43,13 @@
   another scope, or unload. A republish that names a different channel resets
   the display to `connecting` without repeating an unchanged notice, and the
   plugin opens no channel before startup admits it or after unload.
+- The real-app acceptance run of the small-fixture desktop procedure
+  (`scripts/obsidian/desktop-receipts.mjs`, maintainer tooling that is not
+  shipped) ends the processes it started, removes the temporary directories it
+  created, and bounds the receipt and console output it keeps. It signals only
+  a process it spawned or a recorded child of one, and removes a directory only
+  while the path still names the one it created; otherwise it keeps the
+  directories and names them.
 
 ## 0.2.0-alpha.13
 
