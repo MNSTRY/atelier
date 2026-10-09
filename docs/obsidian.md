@@ -543,8 +543,11 @@ does not answer health in time, in a stretch of a tick that does not yield, is
 not stopped (`open` answers `busy`), and a listener that does not prove itself
 this workspace's service is never touched. While a view is being prepared and
 published the service does answer: `open` asks it for a tick that starts after
-the one in flight and waits for that tick as long as `--wait-ms` allows before
-it reports the view as it is, and `service stop` is accepted and ends the
+the one in flight and waits for that tick, two minutes at most unless
+`atelier obsidian open --wait-ms MS` sets another bound, before it reports the
+view as it is (one that read `current` is reported `updating`, with the reason
+`tick-still-running`, while that tick has not ended); and `service stop` is
+accepted and ends the
 service after the tick in flight or after its shutdown grace, whichever comes
 first. A publication cut short that way is settled by the publisher's restart
 recovery at the next one.
@@ -1046,13 +1049,26 @@ in the table are from before that change and have not been taken again on that
 corpus. Parts of a tick still run without yielding: reading the sources and
 building the canonical graph, capturing the source snapshot, observing source
 and vault files, the publisher's restart recovery, validating a prepared view
-and planning its units, and the read-back after a commit. A service in one of
-those does not answer until it ends, and is `busy` if that outlasts the probe.
-A request can hold the listener too: the plugin's status read loads the
-project on the event loop when a configuration file changed, unless the
-loader answers a promise. What the waits cost is one stat call per selected
-source after the preparation and one before the commit; a note reused from
-the preparation cache is still not read.
+and planning its units, the exchange probe, writing and syncing the journal
+before the candidates move, the look again at displaced files after the units
+(`recheckDisplacedFiles`), and the read-back after a commit. The comparison of
+kept notes with their candidates reads asynchronously, sixteen at a time, and
+does not hold the listener. A service in one of those stretches does not
+answer until it ends, and is `busy` if that outlasts the probe. A request can
+hold the listener too: the plugin's status read loads the project on the event
+loop when a configuration file changed, unless the loader answers a promise.
+
+What the waits cost. A wait comes after about 8 ms of work or 32 units,
+whichever is first, and around each one the engine checks that the tick's
+settings still hold: it reads and hashes every configuration file it observes
+(the project configuration, the repository access file, local overlays and,
+for a bound personal workspace, its inputs), reads and validates the machine
+settings, and asks the eligibility revision. Measured on six configuration
+files, that check took about 0.2 ms, twice per wait; a first publication of
+200 invented notes waited 463 times, so roughly 0.2 s of a 64 s tick, on a
+host with a load average above 200 (indicative only). The selected sources
+cost one stat call each after the preparation and one before the commit; a
+note reused from the preparation cache is still not read.
 
 ## Known limits
 

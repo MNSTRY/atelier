@@ -1,15 +1,27 @@
 import { performance } from 'node:perf_hooks'
+
+// What the caller of cooperative work stopped it with: its `signal`, or its
+// `guard` (the engine's check that the settings which selected a view still
+// hold). Such an error is marked, so whatever catches it on the way out can
+// tell it from a failure of the work itself and hand it on under its own code.
+const SCHEDULING_STOP = Symbol('atelier.cooperative-stop')
+const markedStop = (error) => {
+  if (error !== null && typeof error === 'object') { try { Object.defineProperty(error, SCHEDULING_STOP, { value: true }) } catch { /* a frozen error stays unmarked */ } }
+  return error
+}
+export const isSchedulingStop = (error) => error !== null && typeof error === 'object' && error[SCHEDULING_STOP] === true
+
 // Internal scheduling shared by preparation and publication. The budget is a
 // yield target, not a deadline: one checked unit and native fsync stay atomic.
 export function createCooperativeBudget({ budgetMs = 8, maxUnits = 32, signal, guard = null, onBurst = null } = {}) {
   if (!(Number.isFinite(budgetMs) && budgetMs > 0 && Number.isInteger(maxUnits) && maxUnits > 0)) throw new TypeError('finite positive scheduling budget required')
   let started = performance.now(), units = 0, maxUnitMs = 0, last = started
   const checkSignal = () => {
-    if (signal?.aborted) { const error = new Error('cooperative work cancelled at a completed boundary'); error.code = 'ABORT_ERR'; throw error }
+    if (signal?.aborted) { const error = new Error('cooperative work cancelled at a completed boundary'); error.code = 'ABORT_ERR'; throw markedStop(error) }
   }
   const check = () => {
     checkSignal()
-    guard?.()
+    if (guard) { try { guard() } catch (error) { throw markedStop(error) } }
   }
   const checkpoint = async (phase, force = false) => {
     const now = performance.now()

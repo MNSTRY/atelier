@@ -31,6 +31,7 @@ import {
   validatePayload,
 } from '../src/projection/obsidian/publication/index.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publication/test-seam.mjs'
+import { PUBLICATION_PRIMITIVES, publishViewForOracleTests } from '../src/projection/obsidian/publication/publisher.mjs'
 
 // The publisher refuses outright where no atomic exchange exists (Windows today),
 // so every case that needs a publication is skipped there with this reason. The
@@ -272,6 +273,57 @@ test('cooperative publication lets the event loop turn at every unit boundary, a
   assert.equal(defaults.state, 'committed')
   assert.ok(phases.includes('stage-candidate') && phases.includes('publish-unit'), JSON.stringify([...new Set(phases)]))
 })
+
+// The caller stops a publication between two candidates: its settings check refuses (a setting that selected the view
+// changed during the tick), or it cancels. The stop is reported under its own code, never as a staging failure, the
+// candidates are cleaned up, nothing in the vault is touched, and the next publication commits.
+const STAGING_STOPS = [['stage-candidate', 2, 'after one candidate is staged'], ['staging-complete', 1, 'once every candidate is staged'], ['move-candidate', 2, 'after one candidate moved to its exchange path, the journal written']]
+const stopsBy = {
+  'the settings check': () => {
+    const refusal = Object.assign(new Error('source selection or eligibility changed while a view was being published'), { code: 'mixed-read' })
+    let fire = false
+    return { arm: () => { fire = true }, scheduling: { guard: () => { if (fire) throw refusal } }, expected: (error) => error === refusal }
+  },
+  'a cancellation': () => {
+    const controller = new AbortController()
+    return { arm: () => controller.abort(), scheduling: { signal: controller.signal }, expected: (error) => error?.code === 'ABORT_ERR' }
+  },
+}
+async function stopDuringStaging(t, { phase, occurrence, stop, publisher }) {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const { arm, scheduling, expected } = stopsBy[stop]()
+  let seen = 0
+  const outcome = world.publish(viewOf('gen-stopped', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter(), {
+    ...(publisher ? { publisher } : {}),
+    scheduling: { ...scheduling, maxUnits: 1, onBurst: ({ phase: at }) => { if (at === phase && (seen += 1) === occurrence) arm() } },
+  })
+  return { world, outcome, expected, seen: () => seen }
+}
+for (const [phase, occurrence, when] of STAGING_STOPS) {
+  for (const stop of Object.keys(stopsBy)) {
+    test(`a stop by ${stop} during staging, ${when}, is reported as itself; the candidates are cleaned up and the vault is untouched`, needsExchange, async (t) => {
+      const { world, outcome, expected, seen } = await stopDuringStaging(t, { phase, occurrence, stop })
+      await assert.rejects(outcome, expected)
+      assert.equal(seen(), occurrence, `the stop came at ${phase}`)
+      assert.equal(world.store.readCurrent().generationId, 'gen-0001')
+      assert.deepEqual([world.read(NOTE), world.read(OTHER)], [BASE, BASE], 'nothing in the vault was touched')
+      assert.deepEqual(filesUnder(world.store.stagingRoot), [], 'no staged candidate is left')
+      assert.deepEqual(exchangeCandidateFiles(world), [], 'no candidate is left at an exchange path')
+      assertJournalsValid(world)
+      const next = await world.publish(viewOf('gen-after-stop', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), absentAdapter())
+      assert.deepEqual([next.state, world.store.readCurrent().generationId], ['committed', 'gen-after-stop'], JSON.stringify(next).slice(0, 300))
+      assert.deepEqual([world.read(NOTE), world.read(OTHER)], [CANDIDATE, CANDIDATE])
+      assertJournalsValid(world)
+    })
+    test(`mutation control: a staging catch that reports every error as a staging failure fails the oracle for a stop by ${stop}, ${when}`, needsExchange, async (t) => {
+      const broken = { ...PUBLICATION_PRIMITIVES, callerStoppedStaging: () => false }
+      const { outcome, seen } = await stopDuringStaging(t, { phase, occurrence, stop, publisher: (options) => publishViewForOracleTests(options, broken) })
+      const result = await outcome
+      assert.equal(seen(), occurrence)
+      assert.deepEqual([result.state, result.refusal?.code], ['refused', 'staging-failed'], 'the stop is reported as a staging failure, which the oracle above refuses')
+    })
+  }
+}
 
 test('a publication refused before its commit is not committed by the restart recovery of the next publication', needsExchange, async (t) => {
   const refusals = {

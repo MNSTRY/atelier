@@ -1,4 +1,4 @@
-import { createCooperativeBudget } from '../materialize/prepare-view.mjs'
+import { createCooperativeBudget, isSchedulingStop } from '../materialize/prepare-view.mjs'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -323,6 +323,9 @@ export function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = 
 export const PUBLICATION_PRIMITIVES = Object.freeze({
   // The one operation the `direct-unheld` path writes into the vault: a file created where nothing is.
   unheldWrites: (op) => op === 'create',
+  // Whether an error that stopped staging was the caller's stop (its settings check, or a cancellation), handed on
+  // under its own code once the candidates are cleaned up, rather than reported as a staging failure.
+  callerStoppedStaging: (error) => isSchedulingStop(error),
 })
 
 // Whether the `direct-unheld` path applies, after the adapter found an app it cannot coordinate with (see the head of
@@ -465,7 +468,8 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
         moveToExchangePath(store, journalId, unit, moved)
       }
     } catch (error) {
-      if (error instanceof PublicationRefusal) throw error
+      const stopped = rules.callerStoppedStaging(error)
+      if (error instanceof PublicationRefusal && !stopped) throw error
       // No payload has named any of these paths, so nothing was exchanged and they can only hold our own
       // candidates. In staging they are removed by name. In recovery a file is removed only when its bytes are
       // the candidate's; anything else stays for restart recovery, which the journal header points at it. Only
@@ -476,6 +480,9 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       }
       for (const file of created) fs.rmSync(file, { force: true })
       for (const directory of [stagingDir, store.unitsRoot(journalId)]) if (directory) try { fs.rmdirSync(directory) } catch { /* absent, or not empty */ }
+      // The caller stopped the publication between two candidates: nothing failed to stage, and its reason (a
+      // setting that changed during the tick, `mixed-read`, or a cancellation) is the one reported.
+      if (stopped) throw error
       refuse('staging-failed', 'the candidates could not be staged; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
     }
     await budget.checkpoint('journal-and-moves-complete', true)
