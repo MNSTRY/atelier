@@ -192,7 +192,9 @@
   losing its failure evidence. Cleanup remembers the children of a process
   whose custody could not be established, keeps its temporary roots while
   those children remain, and reserves time for graceful termination after
-  reading the process tree. The AP-03 test cleanup uses owned process handles.
+  reading the process tree. The AP-03 test cleanup uses held child handles
+  where available; otherwise its forced-stop fallback rechecks the healthy
+  runtime identity before signalling the recorded process.
 
 ## 0.2.0-alpha.13
 

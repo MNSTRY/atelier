@@ -2622,10 +2622,10 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
 
 const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'service-entry.mjs')
 const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }]
-// Ends whatever service an AP-03 case left running, and never by number: through the handle the runtime holds for a
-// service it started, otherwise by a forced stop, which asks the runtime to stop and proves the same runtime and number
-// again before it escalates. Registered after tempDir's removal hook, so by the time it runs the workspace may be gone:
-// every step tolerates that.
+// Ends a leftover AP-03 service through its held child handle where possible. For a service started by an exited
+// launcher, stopService's force fallback first asks it to stop, then re-checks the healthy runtime ID and PID before
+// signalling that PID. This fallback uses runtime proof, not a child handle. The workspace may already be gone
+// because tempDir's removal hook was registered first; every step tolerates that.
 const endLeftService = (runtime) => async () => {
   try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* tried again below */ }
   try {
