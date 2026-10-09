@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-authoring-projection.v1.schema.json",
+  "$comment": "contract revision 1.0.0",
+  "title": "atelier-authoring-projection@v1",
+  "description": "A display-safe description of a tenant authoring surface. It exposes capability and authority posture without exposing the tenant's rules, implementation paths, source queries, or private authoring payloads.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "projectionId",
+    "tenantRef",
+    "extensionPack",
+    "surface",
+    "capabilities",
+    "authority"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-authoring-projection@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "projectionId": {
+      "$ref": "#/$defs/stableRef"
+    },
+    "tenantRef": {
+      "$ref": "#/$defs/stableRef"
+    },
+    "extensionPack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^v[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container."
+        }
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surfaceRef",
+        "sourceRefs"
+      ],
+      "properties": {
+        "surfaceRef": {
+          "$ref": "#/$defs/stableRef"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "sourceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/stableRef"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectionOnly",
+        "localAuthoringState",
+        "publicationMutation",
+        "editorialGateMutation",
+        "runtimeMutation"
+      ],
+      "properties": {
+        "projectionOnly": {
+          "const": true
+        },
+        "localAuthoringState": {
+          "const": "consumer-owned"
+        },
+        "publicationMutation": {
+          "const": false
+        },
+        "editorialGateMutation": {
+          "const": false
+        },
+        "runtimeMutation": {
+          "const": false
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container."
+        }
+      }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Tenant-specific display fields belong here and remain governed by the consumer adapter."
+    }
+  },
+  "$defs": {
+    "stableRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "capability": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+    }
+  }
+}
