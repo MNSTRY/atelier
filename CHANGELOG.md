@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- AP-03 cleanup joins owned child handles even when the runtime status record is missing or malformed, and retains disposable roots when cleanup cannot be proven.
+
 ## 0.2.0-alpha.14
 
 - `atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged

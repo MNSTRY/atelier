@@ -1428,7 +1428,7 @@ const { createProposalAdapterContribution } = await import('../src/projection/ob
 const { DESKTOP_EXT_KEY, ReceiptRefusal, buildReceipt, evidenceFileName, writeGateReceipt } = await import('../scripts/obsidian/lib/receipts.mjs')
 const { DEFAULT_SEED, PROFILES, generateScaleDataset, measureDerivation, planDataset } = await import('../scripts/obsidian/generate-scale.mjs')
 const {
-  DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
+  DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, cleanupOwnedRuntime, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
   planProcedure, recordProcedureReceipts, runAp01, runAp02Membership, runAp04App,
 } = await import('../scripts/obsidian/desktop-receipts.mjs')
 const { SIGNED_NOTE, UNSIGNED_NOTE, createReceiptVerifierForOracleTests, formatTable, verifyReceiptSet } = await import('../scripts/obsidian/verify-receipts.mjs')
@@ -2652,6 +2652,29 @@ function serviceWorld(t, label, { scoped = false } = {}) {
 
 // The app of AP-03, faked: it "opens" any note and reads the vault file from disk, as the real probe reads app.vault.
 const diskApp = (vaultRoot) => ({ openNote: async (notePath) => `opened ${notePath}`, readIncludes: ({ path: notePath, needle }) => { try { return fs.readFileSync(noteFile(vaultRoot, notePath), 'utf8').includes(needle) } catch { return false } } })
+
+test('AP-03 production cleanup joins the owned child when the status record refuses graceful stop', async () => {
+  const calls = []
+  const runtime = {
+    async stop(options) { calls.push(['stop', options]); throw new Error('status record unavailable') },
+    async stopHeld(options) { calls.push(['stopHeld', options]); return { joined: true, signals: [{ pid: 7, sent: true, through: 'handle' }], remaining: [] } },
+  }
+  const result = await cleanupOwnedRuntime(runtime)
+  assert.equal(result.graceful, null)
+  assert.deepEqual(result.gracefulError, { name: 'Error', message: 'status record unavailable' })
+  assert.deepEqual(calls, [['stop', { stopTimeoutMs: 5000 }], ['stopHeld', { timeoutMs: 5000 }]])
+})
+
+test('AP-03 production cleanup refuses and retains custody when an owned child remains live', async () => {
+  const runtime = {
+    async stop() { return { state: 'stale-record' } },
+    async stopHeld() { return { joined: false, signals: [{ pid: 8, sent: false, through: 'handle' }], remaining: [8] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-incomplete' && error.detail.held.remaining[0] === 8,
+  )
+})
 
 test('AP-03 interruption: a service is killed only when it answered healthy with a process number, and only through a handle the runtime holds', async (t) => {
   const failures = []

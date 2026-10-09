@@ -123,6 +123,24 @@ export class IsolationRefusal extends Error {
   }
 }
 
+// The service is a child owned by this run, so teardown cannot depend on a
+// healthy status document. A missing or malformed record makes the graceful
+// stop unavailable, but it must never erase the run's custody of the child.
+// The retained handle is the only authority used by stopHeld; an incomplete
+// join refuses cleanup and callers must retain the disposable roots.
+export async function cleanupOwnedRuntime(runtime, { timeoutMs = 5000 } = {}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new RangeError('owned service cleanup timeout must be between 0 and 5000 ms')
+  let graceful = null
+  let gracefulError = null
+  try { graceful = await runtime.stop({ stopTimeoutMs: timeoutMs }) } catch (error) { gracefulError = { name: error.name, message: error.message } }
+  let held
+  try { held = await runtime.stopHeld({ timeoutMs }) } catch (error) {
+    throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${error.message}`, { graceful, gracefulError })
+  }
+  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', { graceful, gracefulError, held })
+  return { graceful, gracefulError, held }
+}
+
 // ---------------------------------------------------------------------------
 // Planning (pure)
 // ---------------------------------------------------------------------------
@@ -702,6 +720,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
   const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-desktop-'))
   const startedAt = isoNow()
   const instances = []
+  let retainRoots = false
   const launch = async (layout, options = {}) => {
     const app = new Instance(layout)
     const launchedAtMs = Date.now()
@@ -803,8 +822,18 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
           timingsByGate.G17 = { launchedAt: new Date(full.launchedAtMs).toISOString(), derivation: derivations, ...run.timings, failures: run.failures }
         }
       } finally {
-        // The service is the disposable one this run started; its record names it, and only it is stopped.
-        try { const status = await runtime.status(); if (status.state === 'healthy') await runtime.stop({ stopTimeoutMs: 20000 }) } catch { /* recorded in the service log */ }
+        // This service is the disposable one this run started. Graceful stop is
+        // useful when its record is healthy, but the retained child handle is
+        // the cleanup authority when the record is missing or malformed.
+        try {
+          const cleanup = await cleanupOwnedRuntime(runtime)
+          for (const gate of plan.gates) {
+            (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(cleanup, null, 2)}\n`) })
+          }
+        } catch (error) {
+          retainRoots = true
+          throw error
+        }
         if (runtime.logLines) for (const gate of plan.gates) (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-in-process.log`, bytes: Buffer.from(`${runtime.logLines.map((entry) => JSON.stringify(entry)).join('\n')}\n`) })
       }
       plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layouts.full.home, isolatedProfile: layouts.full.profile, workspaceDir, dataRoot })
@@ -839,10 +868,10 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
     return { written: recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, dataset }), plan }
   } finally {
     for (const app of instances) await app.quit().catch(() => {})
-    if (!args.keep) {
+    if (!args.keep && !retainRoots) {
       fs.rmSync(temp, { recursive: true, force: true })
       for (const app of instances) fs.rmSync(app.layout.root, { recursive: true, force: true })
-    } else console.log(`[desktop-receipts] kept ${temp}${instances.map((app) => ` ${app.layout.root}`).join('')}`)
+    } else console.log(`[desktop-receipts] kept ${temp}${instances.map((app) => ` ${app.layout.root}`).join('')}${retainRoots ? ' (cleanup incomplete; roots retained)' : ''}`)
   }
 }
 
