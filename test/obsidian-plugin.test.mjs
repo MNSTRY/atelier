@@ -277,6 +277,7 @@ const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
   '1.1.0': 'sha256:7a4ed9bd7a9092e55e874b6ac722bcb6c8fabefdf85470ba5ded6e3e083cb347',
   '1.1.1': 'sha256:ae67330e2b4b662efbcfe9288b97114053b99e31430409a4cdbffcb3cea4178f',
+  '1.1.2': 'sha256:416487aa61ca1b4cc794a06c63a53167116dd729c1a3266baa800bd0776b7a75',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
