@@ -1058,7 +1058,11 @@ kept notes with their candidates reads asynchronously, sixteen at a time, and
 does not hold the listener. A service in one of those stretches does not
 answer until it ends, and is `busy` if that outlasts the probe. A request can
 hold the listener too: the plugin's status read loads the project on the event
-loop when a configuration file changed, unless the loader answers a promise.
+loop when a configuration file changed, every two and a half minutes, and at
+every request while one of those files vouches for nothing. None of those
+loads is taken off the loop: the service starts only on a loader that answers
+at once, and refuses one that answers a promise. A load that holds the loop
+for a second or more is logged (`status-project-loaded`).
 
 What the waits cost. A wait comes after about 8 ms of work or 32 units,
 whichever is first, and around each one the engine checks that the tick's
