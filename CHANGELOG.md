@@ -152,9 +152,21 @@
   stale command-line socket there is removed. In the small-fixture run, a
   process first recorded from a process table passes lineage on only from the
   next read; a process the table shows, unrecorded, under a parent that
-  exited or changed during the read is noted, and the directories are kept;
-  and the app log copy's credit is charged back when a directory is kept
-  after all, with the excess over the output bound's allowance reported.
+  exited or changed during the read is remembered until it is seen gone, and
+  the directories are kept while it is there; and the app log copy's credit
+  is charged back when a directory is kept after all, with the excess over
+  the output bound's allowance reported.
+- The desktop acceptance procedures (`scripts/obsidian/desktop-receipts.mjs`,
+  maintainer tooling that is not shipped) interrupt AP-03's service only
+  after a healthy status, and only through the handle of the service process
+  the run started; any other number is refused and the step fails. A launch
+  is refused unless the instance's HOME lies inside a layout root the run
+  made and is not the user's own home, however it is reached. In the
+  small-fixture run, cleanup reads the process table until a read records
+  nothing new before its first signal, and the run records how many
+  processes one command-line call becomes. The event-loop benchmark
+  (`scripts/obsidian/benchmark-event-loop.mjs`) signals its child's process
+  group only while it still holds the child.
 
 ## 0.2.0-alpha.13
 
