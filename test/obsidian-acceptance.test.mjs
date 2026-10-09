@@ -262,6 +262,21 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     assert.deepEqual(watched.signals, [[11, 'SIGTERM'], [13, 'SIGTERM'], [11, 'SIGKILL'], [13, 'SIGKILL']])
   })
 
+  test('owned run: the reads before cleanup\'s first signal leave SIGTERM a grace of its own', async (t) => {
+    // A chain five helpers deep, and a table that takes a second to read: each read finds one more level. With a
+    // cleanup budget of 11 s SIGTERM is given 5.5 s, and the reads may use its first half as far as the last read
+    // predicts the next: two reads, then the first signal at 2 s, leaving 3.5 s before SIGKILL.
+    const f = fake(t, [row(10, SELF), row(11, 10), row(12, 11), row(13, 12), row(14, 13), row(15, 14)])
+    f.spawned(10, { gentle: true })
+    const read = f.custody.readTable
+    f.custody.readTable = async (...args) => { const rows = await read(...args); await f.custody.pause(1000); return rows }
+    let first = null
+    const send = f.custody.signal
+    f.custody.signal = (pid, name) => { first ??= { pid, name, at: f.custody.now(), reads: f.custody.tableReads }; send(pid, name) }
+    const result = await f.custody.execute(() => 'done')
+    assert.deepEqual([first, result.cleanup.joined], [{ pid: 11, name: 'SIGTERM', at: 2000, reads: 2 }, true])
+  })
+
   test('owned run: a grandchild first seen by cleanup is recorded and ended, even when its parent exits at the first signal', async (t) => {
     // 12 is the child of the app's helper 11. No read has been made before cleanup. 11 exits on SIGTERM, and 12, which
     // ignores SIGTERM, is left to the first process.
@@ -520,6 +535,48 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     g.rows.push(row(12, 1))
     const result = await g.custody.execute(() => 'done')
     assert.deepEqual([result.cleanup.joined, result.cleanup.unknown, g.signals, exists(second)], [true, [], [], false])
+  })
+
+  test('owned run: what a remembered process starts is remembered with it, so the child it leaves behind keeps the roots, and nothing is signalled', async (t) => {
+    // 11 is recorded, then exits while a table is being read that shows its child 12: 12 is remembered.
+    const orphanOf11 = async (f) => {
+      f.spawned(10, { gentle: true })
+      await f.custody.observe()
+      f.rows.push(row(12, 11, { command: '/owned/helper --child' }))
+      const release = holdRead(f)
+      const reading = f.custody.observe()
+      await turn()
+      f.end(11)
+      f.rows.splice(0, f.rows.length, ...f.rows.map((item) => (item.ppid === 11 ? { ...item, ppid: 1 } : item)))
+      release()
+      await reading
+      assert.deepEqual([...f.custody.orphans.keys()], [12])
+    }
+    // 12 starts 14, which a table shows under it; 12 then exits, and 14 is left to the first process.
+    const f = fake(t, [row(10, SELF), row(11, 10)])
+    const root = f.custody.allocateRoot('atelier-owned-test-')
+    await orphanOf11(f)
+    f.rows.push(row(14, 12, { command: '/owned/helper --daemon' }))
+    await f.custody.observe()
+    assert.deepEqual([...f.custody.orphans.keys()], [12, 14], 'remembered with its parent')
+    f.end(12)
+    f.rows.splice(0, f.rows.length, ...f.rows.map((item) => (item.ppid === 12 ? { ...item, ppid: 1 } : item)))
+    await f.custody.observe()
+    assert.deepEqual([...f.custody.orphans.keys()], [14], 'the parent is seen gone; the child it left is still remembered')
+    const error = await rejection(f.custody.execute(() => 'done'))
+    assert.deepEqual([f.signals, error.cleanup.unknown, error.cleanup.retainedRoots, exists(root), f.rows.map(({ pid }) => pid)], [[], ['process-join-incomplete', 'unrecorded-child-remains:14'], [root], true, [14]])
+    // A remembered process that exits while a table is being read: the table read its child 15's row while 12 was
+    // there, naming 12 as parent, and 12's after it had gone. 15 is remembered.
+    const g = fake(t, [row(10, SELF), row(11, 10)])
+    const second = g.custody.allocateRoot('atelier-owned-test-')
+    await orphanOf11(g)
+    g.rows.push(row(15, 12, { command: '/owned/helper --daemon' }))
+    g.end(12)
+    await g.custody.observe()
+    assert.deepEqual([...g.custody.orphans.keys()], [15])
+    g.rows.splice(0, g.rows.length, ...g.rows.map((item) => (item.ppid === 12 ? { ...item, ppid: 1 } : item)))
+    const kept = await rejection(g.custody.execute(() => 'done'))
+    assert.deepEqual([g.signals, kept.cleanup.unknown, exists(second)], [[], ['process-join-incomplete', 'unrecorded-child-remains:15'], true])
   })
 
   test('owned run: a held handle starts lineage only when its row names this process as parent and started when it was bound', async (t) => {
@@ -2565,7 +2622,17 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
 
 const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'service-entry.mjs')
 const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }]
-const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+// Ends whatever service an AP-03 case left running, and never by number: through the handle the runtime holds for a
+// service it started, otherwise by a forced stop, which asks the runtime to stop and proves the same runtime and number
+// again before it escalates. Registered after tempDir's removal hook, so by the time it runs the workspace may be gone:
+// every step tolerates that.
+const endLeftService = (runtime) => async () => {
+  try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* tried again below */ }
+  try {
+    const record = runtime.record()
+    if (record && runtime.kill(record.pid, 'SIGKILL').sent !== true) await runtime.stop({ stopTimeoutMs: 5000, force: true })
+  } catch { /* gone, or the workspace already removed */ }
+}
 
 // A synthetic workspace with real (empty) git repositories, its private state under a data root of its own.
 function serviceWorld(t, label, { scoped = false } = {}) {
@@ -2610,8 +2677,7 @@ test('AP-03 interruption: a service is killed only when it answered healthy with
 test('AP-03 runner: source refresh, dropped event with the null watcher, kills at owned points and a start from an exiting launcher, against a real service process', needsExchange, async (t) => {
   const { world, env } = serviceWorld(t, 'ap03')
   const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
-  // Registered after tempDir's removal hook, so by the time it runs the workspace may be gone: every step tolerates that.
-  t.after(async () => { try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* ended below */ } try { const record = runtime.record(); if (record && isAlive(record.pid)) process.kill(record.pid, 'SIGKILL') } catch { /* gone, or the workspace already removed */ } })
+  t.after(endLeftService(runtime))
   // Passed through, and recorded: the interruptions must not reach the service by its number.
   const kills = t.mock.method(process, 'kill')
   const run = await runAp03({ world, runtime, app: diskApp(world.vaultRootFor('scope-full')), adapterFactory: () => absentAdapter(), recoveryIntervalMs: 400, settleMs: 300, midTickDelayMs: 5 })
@@ -2631,6 +2697,26 @@ test('AP-03 runner: source refresh, dropped event with the null watcher, kills a
   // The evidence is what the receipt hashes: every role carries the wall clock of its step and the source digests.
   const refresh = JSON.parse(run.evidence[0].bytes.toString('utf8'))
   assert.ok(refresh.step.startedAt && refresh.step.endedAt && refresh.host.sourceDigests['north-desk/plans/harbor-plan.md'].startsWith('sha256:'))
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('AP-03 runner: a refused interruption fails the run, which still returns its failures and its evidence', needsExchange, async (t) => {
+  const { world, env } = serviceWorld(t, 'ap03-refused')
+  const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
+  t.after(endLeftService(runtime))
+  // The same runtime, except that it refuses every interruption, as it does for a service it does not hold.
+  const refusing = Object.assign(Object.create(runtime), { kill: (pid, signal) => ({ pid, signal, sent: false, reason: 'not-a-service-this-runtime-holds' }) })
+  const kills = t.mock.method(process, 'kill')
+  const run = await runAp03({ world, runtime: refusing, app: diskApp(world.vaultRootFor('scope-full')), adapterFactory: () => absentAdapter(), recoveryIntervalMs: 400, settleMs: 300, midTickDelayMs: 5 })
+  assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => item.role) }, {
+    passed: false,
+    failures: ['interruption: idle-between-ticks: the service was not interrupted (not-a-service-this-runtime-holds)', 'interruption: during-a-tick: the service was not interrupted (not-a-service-this-runtime-holds)'],
+    roles: ['source-refresh-trace', 'dropped-event-recovery', 'ownership-health', 'terminal-closure'],
+  })
+  assert.deepEqual(run.timings.interruptions, [{ point: 'idle-between-ticks', killSent: false, processGoneMs: null, retained: null }, { point: 'during-a-tick', killSent: false, processGoneMs: null, retained: null }])
+  const ownership = JSON.parse(run.evidence.find((item) => item.role === 'ownership-health').bytes.toString('utf8'))
+  assert.deepEqual(ownership.interruption.points.map((point) => [point.point, point.kill.sent, point.kill.reason, 'restart' in point]), [['idle-between-ticks', false, 'not-a-service-this-runtime-holds', false], ['during-a-tick', false, 'not-a-service-this-runtime-holds', false]])
+  assert.deepEqual([run.steps['launcher-exit'].finalStop.stopped, kills.mock.calls.filter((call) => call.arguments[1] !== 0).length], [true, 0], 'the service was stopped by its owner, and nothing was signalled')
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 

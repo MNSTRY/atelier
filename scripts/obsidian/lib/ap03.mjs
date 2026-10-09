@@ -215,7 +215,10 @@ export async function runAp03({
   ]
   const timings = {
     sourceToFileMs: refresh.fileUpdate.sourceToFileMs, sourceToAppMs: refresh.appReadback.sourceToAppMs,
-    droppedEventRecoveryMs: dropped.trials?.map((trial) => trial.recoveryMs) ?? null, interruptions: interruption.points.map(({ point, processGone, retained }) => ({ point, processGoneMs: processGone.elapsedMs, retained: retained.pendingEditsUnchanged && retained.journalsRetained && retained.objectsPresent })),
+    droppedEventRecoveryMs: dropped.trials?.map((trial) => trial.recoveryMs) ?? null,
+    // A point whose kill was skipped or refused has no process to see gone and no restart to compare: null, and its
+    // failure is already among the failures.
+    interruptions: interruption.points.map(({ point, kill, processGone, retained }) => ({ point, killSent: kill?.sent === true, processGoneMs: processGone?.elapsedMs ?? null, retained: retained ? retained.pendingEditsUnchanged && retained.journalsRetained && retained.objectsPresent : null })),
     launcherExit: launcher.launcher?.exit ?? null,
   }
   return { steps, evidence, timings, failures, passed: failures.length === 0, sourceFiles: Object.keys(sources).length, digestOfSteps: sha256Digest(Buffer.from(JSON.stringify(steps))) }
