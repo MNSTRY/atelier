@@ -68,13 +68,16 @@
   and building the canonical graph, the source snapshot, restart recovery and
   the read-back still run without yielding. `prepareView` stays synchronous
   and returns the same bytes. Across each wait the configuration files, the
-  machine settings and the eligibility revision are checked again, and every
-  selected source is read against its pin again before a prepared view is
-  returned and before its generation commits. A change refuses the generation
-  as `mixed-read`; neither that tick nor a later restart recovery commits it,
-  and the next tick prepares the view again. A cancelled preparation leaves
-  the preparation cache as it was, and publication keeps its locks, journal
-  and conditional writes.
+  machine settings and the eligibility revision are checked again, and after
+  a view is prepared and before its generation commits every selected source
+  is checked as observation checks it: by its stat hint, and by digest where
+  the hint moved. A change during the tick refuses the generation as
+  `mixed-read`; neither that tick nor a later restart recovery commits it,
+  and the next tick prepares the view again. A source that drifts under an
+  unchanged stat hint is still seen by the next full reconciliation, and a
+  note reused from the preparation cache is still not read. A cancelled
+  preparation leaves the preparation cache as it was, and publication keeps
+  its locks, journal and conditional writes.
 
 ## 0.2.0-alpha.13
 

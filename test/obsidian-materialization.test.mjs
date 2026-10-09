@@ -126,6 +126,23 @@ test('cooperative preparation preserves synchronous bytes and lets the event loo
   assert.deepEqual(actual, expected)
 })
 
+test('cooperative preparation leaves the second reading of its sources to a caller that says it checks them itself', async (t) => {
+  const snapshot = makeWorkspace(t)
+  const expected = prepare(snapshot, fullScope)
+  const read = snapshot.readSource
+  let reads = 0
+  snapshot.readSource = (repo, relative) => { reads += 1; return read(repo, relative) }
+  const phases = []
+  const actual = await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, scheduling: { maxUnits: 1, recheckSources: false, onBurst: ({ phase }) => phases.push(phase) } })
+  const emitted = reads
+  assert.deepEqual([phases.includes('recheck-source'), phases.includes('recheck-asset')], [false, false])
+  assert.deepEqual(actual, expected)
+  // Left on, every one of those sources is read a second time before the result is returned.
+  reads = 0
+  await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock })
+  assert.equal(reads, 2 * emitted)
+})
+
 test('cooperative preparation refuses a source changed after emission across a yield without replacing the cache', async (t) => {
   const snapshot = makeWorkspace(t)
   const cache = createPreparationCache()

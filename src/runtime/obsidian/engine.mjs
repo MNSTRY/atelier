@@ -15,7 +15,7 @@ import {
   assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
   readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
 } from './machine-settings.mjs'
-import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
+import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP } from './plugin-presence.mjs'
@@ -631,6 +631,37 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         }
       }
       let built = null
+      // Whether a selected source of a prepared view moved since this tick observed it, decided as observation
+      // decides (reconcile): a source that still has the stat hint it was indexed with is taken as unchanged, and one
+      // whose hint moved is read and must still be the pinned bytes. Bytes that drift under an unchanged hint stay
+      // within observation's own bound, as they do for the graph and for a reused note: the next full reconciliation
+      // sees them. It waits between sources, and the settings that selected the view are checked at each wait.
+      const assertSourcesUnmoved = async (prepared) => {
+        const startedMs = phaseTime()
+        try {
+          const budget = createCooperativeBudget({ guard: assertBindings })
+          budget.check()
+          const roots = new Map((project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => [repo.name, repo.path]))
+          const selected = new Set(prepared.manifest.notes.map((note) => note.nodeId))
+          const attachments = new Set(prepared.manifest.attachments.map((item) => {
+            const source = item.ext?.[OBSIDIAN_EXT_KEY]
+            return source?.kind === 'embedded-asset' ? sourceKey(source.repoId, source.assetPath) : null
+          }))
+          const nodes = built.snapshot.graph.nodes.filter((node) => selected.has(node.id))
+          const assets = (built.snapshot.graph.assets ?? []).filter((asset) => attachments.has(sourceKey(asset.repo, asset.path)))
+          const pins = new Map(built.snapshot.document.repositories.flatMap((repo) => repo.files.map((file) => [sourceKey(repo.repoId, file.path), file])))
+          for (const source of [...nodes, ...assets]) {
+            await budget.checkpoint('commit-source-recheck')
+            const key = sourceKey(source.repo, source.path)
+            const root = roots.get(source.repo)
+            if (root !== undefined && hasIndexedHint(index.get(key), path.join(root, ...source.path.split('/')), lstat)) continue
+            const bytes = built.snapshot.readSource(source.repo, source.path)
+            const pin = pins.get(key)
+            if (!pin || !Buffer.isBuffer(bytes) || bytes.length !== pin.byteLength || sha256Digest(bytes) !== pin.rawDigest) refuse('mixed-read', 'a selected source changed while its view was being prepared or published; its generation is not committed')
+          }
+          budget.check()
+        } finally { reportPhase('commit-source-recheck', startedMs) }
+      }
       try {
         if (personalRefusal !== null) refuse(personalRefusal, 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })
         // A personal workspace whose validity key is not confirmed yet is composed off the event loop, then built again.
@@ -681,9 +712,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
             existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId),
             heldNotePaths: held, layoutHeldNotePaths: layoutHeldOf(scopeId), viewScopeIds: scopes.map((item) => item.scope.scopeId),
-            scheduling: { guard: assertBindings },
+            // The cooperative preparation would read every selected source once more before it returns. The engine
+            // checks them itself, below and again before the commit, without opening a source observation would not.
+            scheduling: { guard: assertBindings, recheckSources: false },
           })
           assertBindings()
+          // Before anything is written: a source that moved while the view was being prepared refuses it here.
+          await assertSourcesUnmoved(prepared)
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
           diagnostics = (prepared.manifest.ext?.[OBSIDIAN_EXT_KEY]?.diagnostics ?? []).slice(0, 100)
           const preparedGenerationId = prepared.manifest.generationId
@@ -717,28 +752,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
           let result
           try {
-            const beforeCommit = async () => {
-              const startedMs = phaseTime()
-              try {
-                const budget = createCooperativeBudget({ guard: assertBindings })
-                budget.check()
-                const selected = new Set(prepared.manifest.notes.map(note => note.nodeId))
-                const attachments = new Set(prepared.manifest.attachments.map(item => {
-                  const source = item.ext?.[OBSIDIAN_EXT_KEY]
-                  return source?.kind === 'embedded-asset' ? sourceKey(source.repoId, source.assetPath) : null
-                }))
-                const nodes = built.snapshot.graph.nodes.filter(node => selected.has(node.id))
-                const assets = (built.snapshot.graph.assets ?? []).filter(asset => attachments.has(sourceKey(asset.repo, asset.path)))
-                const pins = new Map(built.snapshot.document.repositories.flatMap(repo => repo.files.map(file => [sourceKey(repo.repoId, file.path), file])))
-                for (const source of [...nodes, ...assets]) {
-                  await budget.checkpoint('commit-source-recheck')
-                  const bytes = built.snapshot.readSource(source.repo, source.path)
-                  const pin = pins.get(sourceKey(source.repo, source.path))
-                  if (!pin || !Buffer.isBuffer(bytes) || bytes.length !== pin.byteLength || sha256Digest(bytes) !== pin.rawDigest) refuse('mixed-read', 'a selected source changed during publication; its generation is not committed')
-                }
-                budget.check()
-              } finally { reportPhase('commit-source-recheck', startedMs) }
-            }
+            // Once more while the publisher holds its locks, before it says the publication settled.
+            const beforeCommit = () => assertSourcesUnmoved(prepared)
             result = await seams.publishView({
               preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
               ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),

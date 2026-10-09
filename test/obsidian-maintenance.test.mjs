@@ -257,6 +257,36 @@ test('cooperative engine refuses a source changed during publication before comm
   assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /Changed authored source during publication/)
 })
 
+test('the cooperative preparation keeps the stat-hint bound of observation: a source that changes under an unchanged stat hint is not opened, and only an emitted note is read', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const lstat = lyingStat()
+  const reads = []
+  const engine = world.engine({ lstat, fullReconciliationIntervalMs: FULL_INTERVAL, seams: {
+    prepareViewCooperatively: (input) => prepareViewCooperatively(input),
+    captureSnapshot: (input) => { const snapshot = DEFAULT.captureSnapshot(input); return { ...snapshot, readSource: (repo, relative) => { reads.push(`${repo}/${relative}`); return snapshot.readSource(repo, relative) } } },
+  } })
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  reads.length = 0
+  // As in the case of the synchronous preparation: the compass changes while its stat hint stays frozen, and the tide
+  // log changes visibly, so the view is prepared again.
+  const compass = world.source('east-wing/notes/compass.md')
+  lstat.freeze(compass)
+  fs.appendFileSync(compass, '\nSouth is painted white.\n')
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  let report = await engine.tick()
+  assert.deepEqual([report.full, world.scope(report).state], [false, 'current'], JSON.stringify(world.scope(report)))
+  // Neither the check after the preparation nor the one before the commit opens a source observation reports
+  // unchanged: the one read is the emission of the note whose pin moved.
+  assert.deepEqual(reads.splice(0), ['west-wing/logs/tide.md'])
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /Low water at six/)
+  assert.doesNotMatch(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+  world.advance(FULL_INTERVAL)
+  report = await engine.tick()
+  assert.deepEqual([report.full, world.scope(report).state], [true, 'current'])
+  assert.match(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+})
+
 test('an engine handed the production seams with prepareView replaced prepares through that replacement', needsExchange, async (t) => {
   const world = makeWorld(t)
   let replaced = 0

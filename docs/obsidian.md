@@ -1043,9 +1043,11 @@ building the canonical graph, capturing the source snapshot, observing source
 and vault files, the publisher's restart recovery, validating a prepared view
 and planning its units, and the read-back after a commit. A service in one of
 those does not answer until it ends, and is `busy` if that outlasts the probe.
-What yielding costs is reading: every selected source is read against its pin
-again before a prepared view is returned and again before its generation
-commits, where a note reused from the preparation cache was not read at all.
+A request can hold the listener too: the plugin's status read loads the
+project on the event loop when a configuration file changed, unless the
+loader answers a promise. What the waits cost is one stat call per selected
+source after the preparation and one before the commit; a note reused from
+the preparation cache is still not read.
 
 ## Known limits
 

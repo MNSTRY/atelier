@@ -1061,4 +1061,7 @@ export function withEligibility(graph, isEligible, isAssetEligible = null) {
 }
 
 function drainPreparation(iterator) { for (;;) { const step = iterator.next(); if (step.done) return step.value } }
-export async function prepareViewCooperatively(options = {}) { return runCooperatively(prepareSteps(REDACTION_RULES, options, true), options.scheduling) }
+// A wait lets a source change after it was emitted or reused, so the selected sources are read against their pins once
+// more before the result is returned. A caller that checks them itself, as the engine does by stat hint, turns that
+// second reading off with `scheduling.recheckSources: false`.
+export async function prepareViewCooperatively(options = {}) { return runCooperatively(prepareSteps(REDACTION_RULES, options, options.scheduling?.recheckSources !== false), options.scheduling) }
