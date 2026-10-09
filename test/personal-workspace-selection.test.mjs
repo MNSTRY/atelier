@@ -206,6 +206,94 @@ test('a restore interrupted after the manifest completes on a rerun of the same 
   assert.equal(fs.readdirSync(path.join(f.personalHome, 'restores')).length, 2, 'each attempt keeps its record')
 })
 
+test('two completed restores in sequence each keep what they replaced, each selection is the one confirmed for its generation, and no generation is rewritten', (t) => {
+  const f = fixture(t)
+  const home = f.personalHome
+  const authored = () => ({ manifest: fs.readFileSync(path.join(home, 'atelier.personal.json')), overlay: fs.readFileSync(path.join(home, 'atelier.overlay.json')) })
+  const digests = ({ manifest, overlay }) => ({ manifest: sha(manifest), overlay: sha(overlay) })
+  const kept = ({ manifest, overlay }) => ({ manifest: manifest.toString('base64'), overlay: overlay.toString('base64') })
+  const recorded = (generationId) => JSON.parse(fs.readFileSync(path.join(home, 'generations', generationId, 'inputs.json'), 'utf8'))
+  const restore = (generationId) => {
+    const plan = planPersonalRestore({ personalHome: home, generationId })
+    return { plan, result: restorePersonalInputs(plan, { personalHome: home, confirm: plan.confirm }) }
+  }
+  const restoreRecords = () => fs.readdirSync(path.join(home, 'restores')).map((name) => {
+    const bytes = fs.readFileSync(path.join(home, 'restores', name))
+    return { name, bytes, value: JSON.parse(bytes) }
+  })
+  const selectionRecord = (sequence) => fs.readFileSync(path.join(home, 'selections', `${String(sequence).padStart(6, '0')}.json`))
+  const held = () => { const { selected, sequence, head, eligible, reason } = readPersonalSelection({ personalHome: home }); return { selected, sequence, head, eligible, reason } }
+  const restoredTo = (generationId) => {
+    const now = authored()
+    assert.deepEqual(JSON.parse(now.manifest), recorded(generationId).manifest)
+    assert.deepEqual(JSON.parse(now.overlay), recorded(generationId).overlay)
+    return now
+  }
+  // Three generations. Each revision changes both authored files and widens nothing, so either restore replaces both.
+  const revise = (revision, note) => { f.manifest.revision = revision; f.overlay.annotations[0].note = note; f.save(); return f.materialize() }
+  const g1 = f.materialize()
+  const g2 = revise(2, 'Revised perspective')
+  const g3 = revise(3, 'A third perspective')
+  assert.equal(new Set([g1, g2, g3]).size, 3)
+  const generations = treeHash(path.join(home, 'generations'))
+  const third = authored()
+
+  // The first restore, to the first generation, and the person's selection of it.
+  const first = restore(g1)
+  assert.deepEqual(first.result, { generationId: g1, eligible: true, reason: null })
+  const afterFirst = restoredTo(g1)
+  assert.deepEqual(digests(afterFirst), first.plan.to)
+  assert.deepEqual(held(), { selected: null, sequence: undefined, head: 'genesis', eligible: false, reason: 'nothing-selected' }, 'a restore selects nothing')
+  const chosenFirst = f.select(g1)
+  assert.deepEqual([chosenFirst.generationId, chosenFirst.sequence], [g1, 1])
+  assert.deepEqual(held(), { selected: g1, sequence: 1, head: chosenFirst.head, eligible: true, reason: null })
+  const [firstRecord, ...others] = restoreRecords()
+  assert.deepEqual(others, [])
+  const firstSelection = selectionRecord(1)
+  assert.equal(treeHash(path.join(home, 'generations')), generations)
+
+  // The second restore, to the second generation. The selection made for the first is held, no longer eligible, and
+  // neither it nor its confirmation selects the second: that takes a confirmation of this generation against this head.
+  const second = restore(g2)
+  assert.deepEqual(second.result, { generationId: g2, eligible: true, reason: null })
+  const afterSecond = restoredTo(g2)
+  assert.deepEqual(digests(afterSecond), second.plan.to)
+  assert.deepEqual(held(), { selected: g1, sequence: 1, head: chosenFirst.head, eligible: false, reason: 'stale-generation' })
+  refuses(() => f.select(g1), 'stale-generation')
+  for (const confirm of [selectionConfirmDigest({ generationId: g1, previous: chosenFirst.head }), selectionConfirmDigest({ generationId: g2, previous: 'genesis' })]) {
+    refuses(() => selectPersonalGeneration({ personalHome: home, generationId: g2, confirm }), 'confirmation-mismatch')
+  }
+  assert.deepEqual(fs.readdirSync(path.join(home, 'selections')), ['000001.json'], 'a refused selection records nothing')
+  const chosenSecond = f.select(g2)
+  assert.deepEqual([chosenSecond.generationId, chosenSecond.sequence], [g2, 2])
+  assert.deepEqual(held(), { selected: g2, sequence: 2, head: chosenSecond.head, eligible: true, reason: null })
+
+  // The selection history: one record per confirmed choice, each naming its own generation, the second linked to the
+  // first, and the first exactly as it was written.
+  assert.deepEqual(selectionRecord(1), firstSelection)
+  assert.deepEqual(JSON.parse(firstSelection), { schema: 'atelier-personal-workspace-selection@v1', sequence: 1, previous: 'genesis', generationId: g1 })
+  assert.deepEqual(JSON.parse(selectionRecord(2)), { schema: 'atelier-personal-workspace-selection@v1', sequence: 2, previous: sha(firstSelection), generationId: g2 })
+  assert.deepEqual([sha(firstSelection), sha(selectionRecord(2))], [chosenFirst.head, chosenSecond.head])
+
+  // Two restore records, told apart by the generation each restored (their names do not order them). Each keeps the
+  // exact bytes it replaced: the first the person's own third revision, the second what the first restore wrote. The
+  // first is exactly as it was written.
+  const records = restoreRecords()
+  assert.equal(records.length, 2, 'each completed restore keeps its own record')
+  const recordOf = (generationId) => records.filter((record) => record.value.generationId === generationId)
+  assert.deepEqual([recordOf(g1).length, recordOf(g2).length], [1, 1])
+  assert.deepEqual(recordOf(g1)[0], firstRecord)
+  assert.deepEqual(recordOf(g1)[0].value, { schema: 'atelier-personal-workspace-restore@v1', generationId: g1, from: digests(third), to: first.plan.to, replaced: kept(third) })
+  assert.deepEqual(recordOf(g2)[0].value, { schema: 'atelier-personal-workspace-restore@v1', generationId: g2, from: first.plan.to, to: second.plan.to, replaced: kept(afterFirst) })
+
+  // No generation was rewritten, added or removed, by either restore or either selection; nothing temporary is left.
+  assert.equal(treeHash(path.join(home, 'generations')), generations)
+  assert.deepEqual(fs.readdirSync(path.join(home, 'generations')).sort(), [g1, g2, g3].sort())
+  const inventory = inventoryPersonalHome({ personalHome: home })
+  assert.deepEqual(new Map(inventory.generations.map((g) => [g.generationId, [g.eligible, g.reason]])), new Map([[g1, [false, 'stale-generation']], [g2, [true, null]], [g3, [false, 'stale-generation']]]))
+  assert.deepEqual([inventory.selections.records.length, inventory.selections.head, inventory.selections.corrupt, inventory.restores.length, inventory.staging.length, inventory.temporary.length], [2, chosenSecond.head, false, 2, 0, 0])
+})
+
 test('a hand-built or altered restore plan is refused, however its confirmation is computed', (t) => {
   const f = fixture(t)
   const g1 = f.materialize()
