@@ -194,7 +194,8 @@
   those children remain, and reserves time for graceful termination after
   reading the process tree. The AP-03 test cleanup uses held child handles
   where available; otherwise its forced-stop fallback rechecks the healthy
-  runtime identity before signalling the recorded process.
+  runtime identity before signalling the recorded process. Service cleanup
+  runs before its temporary workspace is removed.
 
 ## 0.2.0-alpha.13
 

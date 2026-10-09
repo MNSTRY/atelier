@@ -2624,8 +2624,8 @@ const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidi
 const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }]
 // Ends a leftover AP-03 service through its held child handle where possible. For a service started by an exited
 // launcher, stopService's force fallback first asks it to stop, then re-checks the healthy runtime ID and PID before
-// signalling that PID. This fallback uses runtime proof, not a child handle. The workspace may already be gone
-// because tempDir's removal hook was registered first; every step tolerates that.
+// signalling that PID. This fallback uses runtime proof, not a child handle. ap03ServiceWorld registers this cleanup
+// before temporary-directory removal, so the service record remains available throughout cleanup.
 const endLeftService = (runtime) => async () => {
   try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* tried again below */ }
   try {
@@ -2674,10 +2674,41 @@ test('AP-03 interruption: a service is killed only when it answered healthy with
   assert.deepEqual([runtime.kill(4242, 'SIGKILL'), runtime.kill(process.pid), runtime.kill(null), kills.mock.calls.length], [{ pid: 4242, signal: 'SIGKILL', sent: false, reason: 'not-a-service-this-runtime-holds' }, { pid: process.pid, signal: 'SIGKILL', sent: false, reason: 'not-a-service-this-runtime-holds' }, { pid: null, signal: 'SIGKILL', sent: false, reason: 'not-a-service-this-runtime-holds' }, 0])
 })
 
+// Register service cleanup before serviceWorld registers removal of its data root.
+function ap03ServiceWorld(t, label) {
+  let runtime
+  t.after(async () => { if (runtime) await endLeftService(runtime)() })
+  const setup = serviceWorld(t, label)
+  const { world, env } = setup
+  runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
+  return { ...setup, runtime }
+}
+
+test('AP-03 cleanup: a deliberately left service ends before its temporary workspace is removed', needsExchange, async (t) => {
+  let runtime, pid, dir
+  // Regression-failure recovery uses only the unreaped child handle, even if a mutation removes the record first.
+  t.after(async () => {
+    if (!runtime || !pid) return
+    runtime.kill(pid, 'SIGKILL')
+    const deadline = Date.now() + 5000
+    while (runtime.alive(pid) && Date.now() < deadline) await new Promise((resolve) => { setTimeout(resolve, 25) })
+    assert.equal(runtime.alive(pid), false, 'regression cleanup must join its owned service')
+  })
+  await t.test('leave a started service for the registered after-hook', async (child) => {
+    const setup = ap03ServiceWorld(child, 'ap03-leftover')
+    ;({ runtime, dir } = setup)
+    const started = await runtime.start()
+    pid = started.record?.pid
+    assert.equal(started.state, 'healthy')
+    assert.ok(Number.isInteger(pid) && runtime.alive(pid))
+    assert.ok(fs.existsSync(dir))
+  })
+  assert.equal(runtime.alive(pid), false, 'cleanup must stop the service while its record is still readable')
+  assert.equal(fs.existsSync(dir), false, 'workspace removal follows service cleanup')
+})
+
 test('AP-03 runner: source refresh, dropped event with the null watcher, kills at owned points and a start from an exiting launcher, against a real service process', needsExchange, async (t) => {
-  const { world, env } = serviceWorld(t, 'ap03')
-  const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
-  t.after(endLeftService(runtime))
+  const { world, runtime } = ap03ServiceWorld(t, 'ap03')
   // Passed through, and recorded: the interruptions must not reach the service by its number.
   const kills = t.mock.method(process, 'kill')
   const run = await runAp03({ world, runtime, app: diskApp(world.vaultRootFor('scope-full')), adapterFactory: () => absentAdapter(), recoveryIntervalMs: 400, settleMs: 300, midTickDelayMs: 5 })
@@ -2701,9 +2732,7 @@ test('AP-03 runner: source refresh, dropped event with the null watcher, kills a
 })
 
 test('AP-03 runner: a refused interruption fails the run, which still returns its failures and its evidence', needsExchange, async (t) => {
-  const { world, env } = serviceWorld(t, 'ap03-refused')
-  const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
-  t.after(endLeftService(runtime))
+  const { world, runtime } = ap03ServiceWorld(t, 'ap03-refused')
   // The same runtime, except that it refuses every interruption, as it does for a service it does not hold.
   const refusing = Object.assign(Object.create(runtime), { kill: (pid, signal) => ({ pid, signal, sent: false, reason: 'not-a-service-this-runtime-holds' }) })
   const kills = t.mock.method(process, 'kill')
