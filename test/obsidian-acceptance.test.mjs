@@ -2742,6 +2742,28 @@ test('AP-03 fixture teardown does not absorb a live or occupied service refusal'
     alive() { return true },
   }
   await assert.rejects(() => endLeftService(flaggedLastKnownLiveRuntime)(), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === true)
+
+  let mixedPidForced = false
+  const mixedPidLiveRuntime = {
+    async stop(options) {
+      if (options.force === true) { mixedPidForced = true; return { state: 'stopped', stopped: true } }
+      return { state: 'busy', stopped: false, record: { pid: 13 } }
+    },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return mixedPidForced ? null : { pid: 14 } },
+    alive(pid) { return pid === 14 },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(mixedPidLiveRuntime), (error) => error instanceof IsolationRefusal && error.detail.forceAlive === true)
+
+  const unprovenHeldPidRuntime = {
+    async stop() { return { state: 'stale-record', stopped: false, record: { pid: 15 } } },
+    async stopHeld() { return { joined: true, heldCount: 1, handleKind: 'child-handle', signals: [{ pid: 99, sent: true, through: 'handle' }], remaining: [] } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return { pid: 15 } },
+    alive() { return null },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(unprovenHeldPidRuntime), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === null)
 })
 
 test('AP-03 production cleanup force-stops a detached service only after identity proof', async () => {

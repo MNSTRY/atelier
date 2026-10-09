@@ -205,13 +205,14 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
   observed = readRecord()
   observedLive = readLive(observed)
   const lastKnownPids = [...new Set([graceful?.record?.pid, graceful?.pid, status?.record?.pid, observed?.pid].filter((pid) => Number.isInteger(pid)))]
-  const lastKnownAlive = lastKnownPids.map((pid) => {
+  const lastKnownAliveStates = lastKnownPids.map((pid) => {
     if (typeof runtime.alive !== 'function') return null
     try {
       const result = runtime.alive(pid)
       return typeof result === 'boolean' ? result : null
     } catch { return null }
-  }).find((result) => result !== null) ?? null
+  })
+  const lastKnownAlive = lastKnownAliveStates.includes(true) ? true : lastKnownAliveStates.includes(null) ? null : lastKnownAliveStates.length > 0 ? false : null
   if (graceful?.stopped !== true && observedLive === true) {
     const forcedPid = Number.isInteger(observed?.pid) ? observed.pid : null
     try { forced = publicCleanupAnswer(await runtime.stop({ stopTimeoutMs: heldTimeoutMs, force: true })) } catch (error) { forceError = { name: error.name, message: error.message } }
@@ -226,13 +227,18 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
   }
   const occupied = status?.state === 'occupied'
   const heldProof = (answer) => answer?.heldCount > 0 || answer?.handleKind === 'in-process-service'
-  const heldStopProof = held?.joined === true && (heldProof(held) || heldProof(graceful)) && (lastKnownAlive !== true || graceful?.pid === process.pid)
-  const knownStopped = lastKnownPids.length === 0 || lastKnownAlive === false || (heldStopProof && graceful?.pid === process.pid)
+  const heldPids = new Set([...(held?.signals ?? []), ...(held?.remaining ?? [])].map((item) => typeof item === 'number' ? item : item?.pid).filter((pid) => Number.isInteger(pid)))
+  const inProcessHeldProof = (heldProof(graceful) || held?.handleKind === 'in-process-service') && lastKnownPids.every((pid) => pid === process.pid)
+  const heldCoversLastKnown = lastKnownPids.every((pid) => heldPids.has(pid) || (inProcessHeldProof && pid === process.pid))
+  const heldStopProof = held?.joined === true && (heldProof(held) || heldProof(graceful)) && heldCoversLastKnown && (lastKnownAlive !== true || inProcessHeldProof)
+  const knownStopped = lastKnownPids.length === 0 || lastKnownAlive === false || (heldStopProof && inProcessHeldProof)
   const gracefulStopped = graceful?.stopped === true && knownStopped
   const gracefulStateStopped = graceful?.state === 'stopped' && graceful?.stopped !== false && observedLive !== true && !observed?.__error && knownStopped
   const statusStopped = status?.state === 'stopped' && !status.record && observedLive !== true && (heldStopProof || lastKnownPids.length === 0 || lastKnownAlive === false)
   const explicitlyStopped = gracefulStopped || gracefulStateStopped || statusStopped
-  if (occupied || (!explicitlyStopped && observedLive !== false) && (forced?.stopped !== true || forceAlive !== false)) {
+  const forceAttempted = forced !== null || forceError !== null
+  const forceProofSatisfied = !forceAttempted || forceAlive === false
+  if (occupied || !forceProofSatisfied || (!explicitlyStopped && observedLive !== false) && (forced?.stopped !== true || forceAlive !== false)) {
     throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: observed, alive: observedLive, lastKnownPids, lastKnownAlive }))
   }
   const afterRecord = readRecord()
