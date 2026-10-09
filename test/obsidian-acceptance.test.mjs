@@ -1421,6 +1421,7 @@ const { resolveExchange } = await import('../src/projection/obsidian/publication
 const { interruptService, runAp03 } = await import('../scripts/obsidian/lib/ap03.mjs')
 const { AP05_EDITS, AP05_SCOPES, createAp05RunnerForOracleTests, prepareAp05Workspace, runAp05 } = await import('../scripts/obsidian/lib/ap05.mjs')
 const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
+const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { createNullWatcherFactory } = await import('../src/runtime/obsidian/watchers.mjs')
 const { createSourceApplyContribution } = await import('../src/projection/obsidian/edits/contribution.mjs')
@@ -2628,7 +2629,7 @@ const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true 
 const endLeftService = (runtime) => async () => {
   try { await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 5000 }) }
   catch (error) {
-    if (error?.code !== 'owned-service-cleanup-unverified') throw error
+    if (error?.code !== 'owned-service-cleanup-unverified' || error.detail?.alive === true || error.detail?.status?.state === 'occupied') throw error
     const held = await runtime.stopHeld()
     assert.equal(held.joined, true, 'fixture teardown must join every owned child')
   }
@@ -2676,6 +2677,20 @@ test('AP-03 production cleanup refuses and retains custody when an owned child r
   await assert.rejects(
     () => cleanupOwnedRuntime(runtime),
     (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-incomplete' && error.detail.held.remaining[0] === 8,
+  )
+})
+
+test('AP-03 fixture teardown does not absorb a live or occupied service refusal', async () => {
+  const runtime = {
+    async stop() { return { stopped: false, state: 'busy' } },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+    status() { return { state: 'occupied' } },
+    record() { return { pid: 9 } },
+    alive() { return true },
+  }
+  await assert.rejects(
+    () => endLeftService(runtime)(),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.status.state === 'occupied',
   )
 })
 
@@ -2968,9 +2983,13 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
   const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05', { inProcess: true })
   assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md', 'north-desk/plans/mooring-notes.md'])
   const run = await runAp05({ world, views, runtime, command, operator: 'op-synthetic' })
+  // runAp05 stops between its retention assertions; restart the same runtime so
+  // cleanupOwnedRuntime is proven against a live in-process service as well.
+  const live = await runtime.start()
+  assert.equal(live.state, 'healthy')
   const cleanup = await cleanupOwnedRuntime(runtime)
-  assert.equal(cleanup.held.joined, true, 'production cleanup also joins the real in-process AP-05 runtime')
-  assert.deepEqual({ start: [run.steps.baseline.start.state, run.steps.baseline.start.started, run.steps.baseline.start.record.pid], restart: [run.steps.automatic.restart.stop.stopped, run.steps.automatic.restart.start.state, run.steps.automatic.restart.start.record.runtimeId !== run.steps.baseline.start.record.runtimeId], stopped: run.steps.retention.uninstall.serviceStatus.state, log: runtime.logLines.filter((entry) => entry.event === 'started').length }, { start: ['healthy', true, process.pid], restart: [true, 'healthy', true], stopped: 'stopped', log: 2 }, 'the in-process service body was started twice, proven by health, and stopped')
+  assert.equal(cleanup.held.joined, true, 'production cleanup joins a live real in-process AP-05 runtime')
+  assert.deepEqual({ start: [run.steps.baseline.start.state, run.steps.baseline.start.started, run.steps.baseline.start.record.pid], restart: [run.steps.automatic.restart.stop.stopped, run.steps.automatic.restart.start.state, run.steps.automatic.restart.start.record.runtimeId !== run.steps.baseline.start.record.runtimeId], stopped: run.steps.retention.uninstall.serviceStatus.state, log: runtime.logLines.filter((entry) => entry.event === 'started').length }, { start: ['healthy', true, process.pid], restart: [true, 'healthy', true], stopped: 'stopped', log: 3 }, 'the in-process service body was started twice, proven by health, restarted for live cleanup coverage, and stopped')
   assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => item.role) }, { passed: true, failures: [], roles: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention', null] })
   const { steps } = run
   assert.deepEqual({ identical: [steps['multi-vault'].identical.object.state, steps['multi-vault'].identical.object.operations.length, steps['multi-vault'].identical.object.pendingEdits.length], divergent: [steps['multi-vault'].divergent.object.state, steps['multi-vault'].divergent.object.conflictedOperations.length] }, { identical: ['pending', 1, 2], divergent: ['conflicted', 2] })
@@ -2991,6 +3010,39 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
   assert.ok(steps.retention.retained.vaultHolds.length >= 8 && steps.retention.retained.vaultHolds.every((item) => item.present) && steps.retention.retained.recoveryObjects.every((item) => item.present))
   assert.deepEqual(run.timings.sourceChangesSinceBaseline, ['north-desk/plans/quay-notes.md', 'north-desk/plans/shared-b.md', 'south-desk/tables/tide-table.md'], 'exactly the moved stale source, the automatic apply and the manual apply changed a source')
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('AP-05 production cleanup fails closed when a live in-process shutdown never settles', needsExchange, async (t) => {
+  const { world, env } = serviceWorld(t, 'ap05-stop-timeout', { scoped: true })
+  const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
+  let release
+  const runtime = createInProcessServiceRuntime({
+    ...context,
+    consent: { actor: 'op-synthetic', coverage: 'service' },
+    probeTimeoutMs: 100,
+    adapterFactory: () => absentAdapter(),
+    runService: async (input) => {
+      const service = await runMaintenanceService(input)
+      release = service.shutdown
+      return { ...service, shutdown: () => new Promise(() => {}) }
+    },
+  })
+  t.after(async () => { if (release) await release('test-cleanup') })
+  let started
+  try { started = await runtime.start() }
+  catch (error) {
+    if (error?.code === 'EPERM') return t.skip('host loopback is unavailable in this sandbox')
+    throw error
+  }
+  assert.equal(started.started, true)
+  const stop = await runtime.stop({ stopTimeoutMs: 10 })
+  assert.equal(stop.reason, 'stop-timed-out')
+  const held = await runtime.stopHeld({ timeoutMs: 10 })
+  assert.deepEqual([held.joined, held.remaining.length], [false, 1])
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 10, heldTimeoutMs: 10 }),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-incomplete' && error.detail.held.joined === false && error.detail.held.remaining.length === 1,
+  )
 })
 
 test('mutation control: a recorder blind to source digests accepts a manual-mode tick that wrote a source; the real recorder refuses it', needsExchange, async (t) => {
