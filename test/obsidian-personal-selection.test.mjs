@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import nodeTest, { after } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 // A person's confirmed selection, bound to the Obsidian maintenance engine: what is published follows the generation
 // the person confirmed (selectPersonalGeneration), and nothing else. One invented person, Ari, with two scratch
@@ -52,6 +53,10 @@ const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/st
 const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, personalSelectionOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
 const { SELECTION_PRIMITIVES, loadSelectedProject, loadSelectedProjectOffThread, locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
+const { serviceOptionsFromArgv } = await import('../src/runtime/obsidian/service-main.mjs')
+const { planLoginItem } = await import('../src/runtime/obsidian/login-item.mjs')
+const { readLastStartup } = await import('../src/runtime/obsidian/service-record.mjs')
+const { EXIT, FLAGS, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
 
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const test = (name, fn) => nodeTest(name, {
@@ -126,6 +131,12 @@ function makePerson(t) {
     return JSON.parse(fs.readFileSync(path.join(directory, JSON.parse(fs.readFileSync(path.join(directory, 'current.json'), 'utf8')).manifestFile), 'utf8'))
   }
   person.noteFile = (scopeId, nodeId) => path.join(person.vault(scopeId), person.manifestOf(scopeId).notes.find((note) => note.nodeId === nodeId).path)
+  // A command run with --personal-home and nothing else naming the project: the command's own loader and locator.
+  person.command = async (argv) => {
+    const out = []
+    const exit = await runObsidianCommandForOracleTests({ argv: [...argv, `--personal-home=${home}`, '--json'], seams: {}, dataRoot: person.dataRoot, env: process.env, cwd: base, clock, contributions: [], stdout: (text) => out.push(text), stderr: (text) => out.push(text), account: () => 'person-synthetic' })
+    return { exit, json: JSON.parse(out.join('\n')) }
+  }
   person.engine = ({ rules, ...options } = {}) => createMaintenanceEngine({
     loadProject: () => person.load(rules === undefined ? {} : { rules }), dataRoot: person.dataRoot, adapterFactory: absentAdapter, clock, randomBytes: person.randomBytes, quietPeriodMs: 0, env: process.env, ...options,
   })
@@ -340,4 +351,82 @@ test('the service resolves its workspace from the home alone when its loader ans
   assert.throws(() => locatePersonalHome({ personalHome: 'relative/home' }), refusedWith('path-not-absolute'))
   await new Promise((resolve) => { setImmediate(resolve) })
   assert.deepEqual(unhandled, [])
+})
+
+test('without --personal-home nothing changes: the service entry, the login item and the command name and load the project as before', () => {
+  const home = path.join(SCRATCH, 'home-synthetic')
+  const plain = serviceOptionsFromArgv(['--project=/srv/synthetic/harbor/atelier.project.json', '--adapter=obsidian-cli'])
+  assert.deepEqual(Object.keys(plain), ['loadProject', 'startup', 'adapter'], 'no locator: the service resolves its workspace from the loader, as before')
+  const bound = serviceOptionsFromArgv([`--personal-home=${home}`, '--adapter=obsidian-cli'])
+  assert.deepEqual(Object.keys(bound), ['loadProject', 'locateProject', 'startup', 'adapter'])
+  assert.equal(bound.locateProject().configDir, home)
+  for (const argv of [[`--personal-home=${home}`, '--project=/srv/synthetic/harbor/atelier.project.json'], ['--personal-home=relative/home'], []]) {
+    assert.throws(() => serviceOptionsFromArgv(argv), (error) => error.code === 'service-arguments-invalid', argv.join(' '))
+  }
+  const unit = (project) => planLoginItem({ platform: 'linux', project, workspaceRoot: path.join(SCRATCH, 'state'), workspaceId: 'ws-synthetic', dataRoot: '/srv/synthetic/data', label: 'atelier-obsidian-ws-synthetic', entryPath: '/srv/synthetic/service-main.mjs', nodePath: '/opt/synthetic/node' }).text
+  const ordinary = unit({ configPath: '/srv/synthetic/harbor/atelier.project.json', configDir: '/srv/synthetic/harbor' })
+  assert.ok(ordinary.includes('"--project=/srv/synthetic/harbor/atelier.project.json"') && !ordinary.includes('--personal-home'), ordinary)
+  const located = unit(bound.locateProject())
+  assert.ok(located.includes(`"--personal-home=${home}"`) && !located.includes('--project'), located)
+  assert.equal(FLAGS['personal-home'], 'value')
+})
+
+test('each refusal is typed and publishes nothing: status names it, a new engine tells every view, and the service is still found from the home', async (t) => {
+  const ari = makePerson(t)
+  const nothing = await ari.command(['status'])
+  assert.deepEqual([nothing.exit, nothing.json.error?.code], [EXIT.refused, 'nothing-selected'], JSON.stringify(nothing.json))
+  // Located from the home alone, the service's own status answers whatever the selection.
+  const service = await ari.command(['service', 'status'])
+  assert.deepEqual([service.exit, service.json.service?.state], [EXIT.ok, 'stopped'], JSON.stringify(service.json))
+  const usage = await ari.command(['status', '--project', path.join(ari.base, 'atelier.project.json')])
+  assert.deepEqual([usage.exit, usage.json.error?.code], [EXIT.refused, 'usage'])
+  ari.select()
+  const shown = await ari.command(['status'])
+  assert.deepEqual([shown.exit, shown.json.selection], [EXIT.ok, { generationId: ari.generationId, sequence: 1 }], JSON.stringify(shown.json))
+  const engine = ari.engine({ locateProject: ari.locate })
+  assert.ok(everyView(await engine.tick(), 'current'))
+  engine.stop()
+  const annotation = ari.noteFile('everything', 'personal-ari:annotation-harbor-thought')
+  const kept = fs.readFileSync(annotation)
+  const refusedEverywhere = async (code) => {
+    const status = await ari.command(['status'])
+    assert.deepEqual([status.exit, status.json.error?.code], [EXIT.refused, code], JSON.stringify(status.json))
+    const fresh = ari.engine({ locateProject: ari.locate })
+    const ticked = await fresh.tick()
+    fresh.stop()
+    assert.deepEqual([ticked.state, ticked.refusal?.code], ['refused', code], JSON.stringify(ticked))
+    assert.ok(ari.freshness().scopes.every((scope) => scope.state === 'stale' && scope.reason === code), JSON.stringify(ari.freshness().scopes))
+    assert.deepEqual(fs.readFileSync(annotation), kept, `${code}: the vault keeps the last confirmed content`)
+  }
+  const note = ari.overlay.annotations[0].note
+  reviseOverlay(ari)
+  await refusedEverywhere('stale-generation')
+  ari.overlay.annotations[0].note = note
+  ari.save()
+  const record = fs.readFileSync(ari.record(1))
+  fs.appendFileSync(ari.record(1), ' ')
+  await refusedEverywhere('selection-history-corrupt')
+  fs.writeFileSync(ari.record(1), record)
+  if (process.getuid?.() !== 0) {
+    const selections = path.dirname(ari.record(1))
+    fs.chmodSync(selections, 0o000)
+    try { await refusedEverywhere('personal-home-unavailable') } finally { fs.chmodSync(selections, 0o700) }
+  }
+  // A home that is gone refuses with the module's own code.
+  fs.renameSync(ari.home, `${ari.home}-moved`)
+  const gone = await ari.command(['status'])
+  fs.renameSync(`${ari.home}-moved`, ari.home)
+  assert.deepEqual([gone.exit, gone.json.error?.code], [EXIT.refused, 'root-missing'])
+  const again = await ari.command(['status'])
+  assert.equal(again.exit, EXIT.ok, JSON.stringify(again.json))
+})
+
+test('started by a login item on a personal home with nothing confirmed, the service finds its workspace from the home alone and records there how its start ended', (t) => {
+  const ari = makePerson(t)
+  const entry = fileURLToPath(new URL('./support/obsidian-maintenance/service-entry.mjs', import.meta.url))
+  // No workspace is named: only the home leads to it. No service settings are recorded, so the start refuses before it listens.
+  const child = childProcess.spawnSync(process.execPath, [entry, `--personal-home=${ari.home}`, `--data-root=${ari.dataRoot}`, '--startup'], { env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }, encoding: 'utf8', timeout: 120_000 })
+  assert.equal(child.status, 0, `${child.stdout}${child.stderr}`)
+  const startup = readLastStartup({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId })
+  assert.deepEqual([startup?.outcome, startup?.code], ['refused', 'service-settings-absent'])
 })

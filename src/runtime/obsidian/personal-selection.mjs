@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { PersonalWorkspaceRefusal, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
 import { ensureLocalState } from '@mnstry/atelier/project'
-import { assertPersonalSelection, loadBoundProject, loadBoundProjectOffThread, pinPersonalSelection } from '../../projection/obsidian/personal-workspace.mjs'
+import { assertPersonalSelection, loadBoundProject, loadBoundProjectOffThread, personalSelectionOf, pinPersonalSelection } from '../../projection/obsidian/personal-workspace.mjs'
 import { refuse } from './errors.mjs'
 
 // A person's confirmed selection, bound to the maintenance runtime.
@@ -51,6 +51,7 @@ export const SELECTION_PRIMITIVES = Object.freeze({
 })
 
 const SOURCE = Object.freeze({ source: 'personal-workspace' })
+const LOCATED = Symbol('atelier.obsidian.located-personal-home')
 
 // The record the history ends with. A history without one refuses.
 function confirmedHead(personalHome) {
@@ -74,10 +75,15 @@ function pinned(project, head, rules) {
 // pointer's or the caller's, and a home is outside every Git worktree. Synchronous; nothing is composed.
 export function locatePersonalHome({ personalHome } = {}) {
   if (typeof personalHome !== 'string' || !path.isAbsolute(personalHome) || path.resolve(personalHome) !== personalHome) refuse('path-not-absolute', 'a personal home is named by its absolute path', SOURCE)
-  const located = { configDir: personalHome }
+  const located = { configDir: personalHome, [LOCATED]: personalHome }
   located.localState = ensureLocalState(located, { write: false, env: { PATH: process.env.PATH } })
   return located
 }
+
+// The personal home a located or a loaded project follows, which a service it starts or a login item it installs is
+// given instead of a project (--personal-home); null for any other project.
+export const personalHomeOf = (project) => project?.[LOCATED] ?? personalSelectionOf(project)?.personalHome ?? null
+export { personalSelectionOf }
 
 // The project of the confirmed selection, for a loader that may block (a command run once). `bind` and `rules` are
 // test seams.

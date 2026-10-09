@@ -4,12 +4,17 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { firstString, parseArgs, resolveProjectConfig } from '../../project/config.mjs'
 import { workspaceStateRoot } from './machine-settings.mjs'
+import { loadSelectedProjectOffThread, locatePersonalHome } from './personal-selection.mjs'
 import { RELEASE_CHANGED, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
 
 // The process of the maintenance service. `start` runs it as a child; a unit
 // installed at the operating-system level runs it with `--startup`.
 //
-//   --project=<absolute atelier.project.json>   required
+//   --project=<absolute atelier.project.json>   required, unless a personal home is named instead
+//   --personal-home=<absolute directory>        instead of --project: the private home of a personal workspace. The
+//                                               service follows the generation its person confirmed there, composed off
+//                                               the event loop, and starts whether or not one is confirmed: it locates
+//                                               its workspace from the home alone (personal-selection.mjs)
 //   --data-root=<absolute directory>            optional; otherwise the pointer, the overlay or the platform default
 //   --workspace-id=<identifier>                 named by a login item: under `--startup`, where a refusal is recorded
 //                                               when the project no longer leads to a workspace
@@ -142,11 +147,14 @@ function recordStartup(workspace, { at, outcome, code }) {
 // and the manager restarts it after its throttle.
 export async function runServiceProcess(options) {
   const startup = options.startup === true
-  const first = startup && typeof options.loadProject === 'function' ? firstAnswerOf(options.loadProject) : null
+  // A located personal home is asked instead of the loader: the loader is then not asked before the service's engine.
+  const located = typeof options.locateProject === 'function'
+  const asked = located ? options.locateProject : options.loadProject
+  const first = startup && typeof asked === 'function' ? firstAnswerOf(asked) : null
   const workspace = startup ? startupWorkspace({ ...options, project: first === null ? null : first.project() }) : null
   const log = workspace === null ? printed : workspaceLog(workspace.workspaceRoot)
   try {
-    const service = await runMaintenanceService({ log, invokedAs: process.argv[1], ...options, ...(first === null ? {} : { loadProject: first.loadProject }) })
+    const service = await runMaintenanceService({ log, invokedAs: process.argv[1], ...options, ...(first === null ? {} : { [located ? 'locateProject' : 'loadProject']: first.loadProject }) })
     if (startup) recordStartup(workspace, { at: new Date().toISOString(), outcome: 'started', code: null })
     for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { void service.shutdown(`signal-${signal}`) })
     const { reason } = await service.done
@@ -172,13 +180,16 @@ function watchRelease(invokedAs) {
 export function serviceOptionsFromArgv(argv, { env = process.env } = {}) {
   const args = parseArgs(argv)
   const configPath = firstString(args.project)
-  if (!configPath || !path.isAbsolute(configPath)) throw Object.assign(new Error('--project must be the absolute path of a project configuration'), { code: 'service-arguments-invalid' })
+  const personalHome = firstString(args['personal-home'])
+  if (personalHome !== null && (configPath !== null || !path.isAbsolute(personalHome))) throw Object.assign(new Error('--personal-home must be the absolute path of a private home, given instead of --project'), { code: 'service-arguments-invalid' })
+  if (personalHome === null && (!configPath || !path.isAbsolute(configPath))) throw Object.assign(new Error('--project must be the absolute path of a project configuration'), { code: 'service-arguments-invalid' })
   const dataRoot = firstString(args['data-root']) ?? undefined
   const workspaceId = firstString(args['workspace-id']) ?? undefined
   const intervalMs = args['interval-ms'] === undefined ? undefined : Number(args['interval-ms'])
   if (intervalMs !== undefined && (!Number.isInteger(intervalMs) || intervalMs < 1)) throw Object.assign(new Error('--interval-ms must be a positive integer'), { code: 'service-arguments-invalid' })
   return {
-    loadProject: () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: path.dirname(configPath), env, writeLocalState: false }),
+    loadProject: personalHome !== null ? () => loadSelectedProjectOffThread({ personalHome }) : () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: path.dirname(configPath), env, writeLocalState: false }),
+    ...(personalHome === null ? {} : { locateProject: () => locatePersonalHome({ personalHome }) }),
     ...(dataRoot === undefined ? {} : { dataRoot }), ...(workspaceId === undefined ? {} : { workspaceId }), ...(intervalMs === undefined ? {} : { intervalMs }),
     ...(firstString(args['runtime-id']) ? { runtimeId: firstString(args['runtime-id']) } : {}),
     startup: args.startup === true, adapter: firstString(args.adapter),
