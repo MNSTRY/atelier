@@ -1712,11 +1712,12 @@ function serviceWorld(t) {
     source: (relative) => path.join(projectDir, relative),
     freshness: () => createMaintenanceStateStore({ workspaceRoot, workspaceId: WORKSPACE_ID }).readFreshness().scopes.find((entry) => entry.scopeId === SCOPE),
     // `port`: the listener of an earlier service, which a restart on this machine keeps (its settings name it).
-    async service({ adapterFactory = () => absentAdapter(), appStatus, seams = {}, port: keptPort } = {}) {
+    // `loadProject`: another loader of this project, for a test about the loader.
+    async service({ adapterFactory = () => absentAdapter(), appStatus, seams = {}, port: keptPort, loadProject: loader = loadProject } = {}) {
       const port = keptPort ?? await reservePort(t)
       writeServiceSettings({ workspaceRoot, workspaceId: WORKSPACE_ID, settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: new Date(START).toISOString(), ...CONSENT }, updatedAt: new Date(START).toISOString() } })
       const service = await runMaintenanceService({
-        loadProject, dataRoot, env, adapterFactory, entryPath: TEST_SERVICE_ENTRY, intervalMs: 60 * 60 * 1000, clock: world.clock,
+        loadProject: loader, dataRoot, env, adapterFactory, entryPath: TEST_SERVICE_ENTRY, intervalMs: 60 * 60 * 1000, clock: world.clock,
         engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }), randomBytes: fixedRandom, seams }, ...(appStatus ? { appStatus } : {}),
       })
       t.after(() => service.shutdown('test-teardown'))
@@ -1792,6 +1793,132 @@ test('the service publishes the plugin into the vault it maintains, and the plug
 
   plugin.unload()
   await waitFor(async () => (await world.statusDocument()).plugins.scopes[0].present === false, { label: 'the released lease' })
+})
+
+// What the plugin was told at its last round, as the service sealed it.
+const toldTo = (plugin) => ({ view: plugin.view.report.view, pendingEdits: plugin.view.report.pendingEdits })
+const NOTHING_TOLD = { view: null, pendingEdits: null }
+// The project's Obsidian settings, changed in place; no tick follows unless the test asks for one.
+function changeSettings(world, change) {
+  const config = JSON.parse(fs.readFileSync(world.configPath, 'utf8'))
+  change(config.ext[OBSIDIAN_EXT_KEY])
+  writeJson(world.configPath, config)
+}
+
+test('a view the project turns off or no longer declares is told nothing the service stored about it, before the next tick and after it; allowed again, it is told as before', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const service = await world.service()
+  assert.ok((await service.tickNow()).ok)
+  // An edit in the vault and a change at its source: the view is held for that edit, which is pending.
+  const notes = fs.readdirSync(world.vault, { recursive: true }).map(String).filter((relative) => relative.endsWith('.md') && !relative.startsWith('.obsidian'))
+  const edited = notes.map((relative) => path.join(world.vault, relative)).find((file) => fs.readFileSync(file, 'utf8').includes('High water at noon.'))
+  fs.appendFileSync(edited, '\nRead from the pier.\n')
+  fs.appendFileSync(world.source('harbor/notes/tides.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  assert.ok((await service.tickNow()).ok)
+  assert.deepEqual([world.freshness().state, world.freshness().heldNotes.length], ['held-for-your-edit', 1])
+
+  const { plugin, statusBar } = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBar(), 'Atelier: held (1)')
+  const stored = toldTo(plugin)
+  assert.deepEqual([stored.view.state, stored.view.heldNoteCount, typeof stored.view.generationId, stored.pendingEdits], ['held-for-your-edit', 1, 'string', { open: 1 }])
+  const session = plugin.session.id
+
+  // Turned off, and no tick: what the service stored still says held, with its generations and its counts.
+  changeSettings(world, (settings) => { settings.enabled = false })
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(statusBar(), 'Atelier: stale')
+  assert.equal(world.freshness().state, 'held-for-your-edit', 'nothing stored changed: it is only not told')
+  const rows = Object.fromEntries(plugin.statusRows())
+  assert.deepEqual([rows.Generation, rows['Prepared generation'], rows['Checked at'], rows['Held edits'], rows['Retained edits'], rows['Pending edits']], ['none yet', 'none yet', 'not yet', 'unknown', 'unknown', 'unknown'])
+  assert.equal(plugin.lastObservedStatus, null, 'and the plugin remembers nothing of the view to show later')
+  // The answer is the service's own, sealed: the plugin keeps its session and asks again at its next round.
+  assert.equal(plugin.session.id, session)
+  assert.deepEqual((await world.statusDocument()).plugins.scopes.map(({ present, sessions }) => ({ present, sessions })), [{ present: true, sessions: 1 }])
+
+  // Turned on again: told exactly what it was told before.
+  changeSettings(world, (settings) => { settings.enabled = true })
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), stored)
+  assert.equal(statusBar(), 'Atelier: held (1)')
+
+  // No longer declared, while the settings declare another view: the same.
+  changeSettings(world, (settings) => { settings.scopes = [{ scopeId: 'scope-other', mode: 'full', selector: { all: true } }] })
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  changeSettings(world, (settings) => { settings.scopes = [{ scopeId: SCOPE, mode: 'full', selector: { all: true } }] })
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), stored)
+
+  // Turned off through a tick: the service writes the view down as disabled and keeps its generations and counts with
+  // it. None of that is told either.
+  changeSettings(world, (settings) => { settings.enabled = false })
+  world.advance(1000)
+  assert.ok((await service.tickNow()).ok)
+  const written = world.freshness()
+  assert.deepEqual([written.state, written.reason, written.generationId, written.heldNotes.length], ['disabled', 'disabled-in-settings', stored.view.generationId, 1])
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(statusBar(), 'Atelier: stale')
+  assert.equal(plugin.session.id, session)
+})
+
+test('a loader that answers a promise never keeps the plugin waiting: until it has answered the view is told nothing, sealed, and the plugin keeps its session; then it is told what is stored', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  // A service resolves its workspace from its loader's own answer when it starts, so no service starts on a loader
+  // that only answers promises. This one answers at once until the service runs, then with a promise: resolved at once
+  // for a tick, and held back, until the test lets it go, for a status request.
+  let answers = 'at-once'
+  const held = []
+  const loader = () => {
+    if (answers === 'at-once') return world.loadProject()
+    if (answers === 'promised') return Promise.resolve().then(() => world.loadProject())
+    return new Promise((resolve) => { held.push(() => resolve(world.loadProject())) })
+  }
+  const letGo = async () => { held.shift()(); await sleep(0) }
+  const service = await world.service({ loadProject: loader })
+  answers = 'promised'
+  assert.ok((await service.tickNow()).ok)
+  assert.equal(world.freshness().state, 'current')
+
+  answers = 'held-back'
+  const { plugin, fake, statusBar } = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  // An answer that waited for the load would never come: nothing lets that load go before the plugin's request ends.
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(statusBar(), 'Atelier: stale')
+  const session = plugin.session.id
+  for (let round = 0; round < 3; round += 1) await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(held.length, 1, 'four rounds, one load under way')
+  // The first load tells which files decide the project; the second is the one their bytes vouch for.
+  await letGo()
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(held.length, 1)
+  await letGo()
+  await plugin.cycle()
+  assert.equal(statusBar(), 'Atelier: current')
+  assert.equal(toldTo(plugin).view.state, 'current')
+  assert.deepEqual(toldTo(plugin).pendingEdits, { open: 0 })
+  assert.equal(held.length, 0, 'kept: no further load')
+  // Never a refusal and never a timeout, so the plugin never took the service for gone and never shook hands again.
+  assert.equal(plugin.session.id, session)
+  assert.deepEqual(fake.record.notices, ['Atelier: this view is not current. "Atelier: show status" says why.', 'Atelier: this view is current again.'])
+
+  // Turned off while kept: nothing is told from the request that sees the change, before that load answers and after.
+  changeSettings(world, (settings) => { settings.enabled = false })
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(held.length, 1)
+  await letGo()
+  await plugin.cycle()
+  assert.deepEqual(toldTo(plugin), NOTHING_TOLD)
+  assert.equal(plugin.session.id, session)
 })
 
 test('with a location decided, the service keeps the allocated vault current, its plugin holds it open, a drifted plugin file is written again there, and the person\'s choice is read there', needsExchange, async (t) => {

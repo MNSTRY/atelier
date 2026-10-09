@@ -22,6 +22,7 @@ import {
 import { createServiceServer } from './service-server.mjs'
 import { OPEN_EDIT_STATES, createMaintenanceStateStore } from './state-store.mjs'
 import { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
+import { createViewPermission } from './view-permission.mjs'
 import { createFsWatcherFactory } from './watchers.mjs'
 
 // The maintenance service of one workspace, inside one process.
@@ -251,8 +252,11 @@ export async function runMaintenanceService(options = {}) {
 
   const healthStatus = () => (stopping ? 'stopped' : consecutiveFailures > 0 ? 'degraded' : 'healthy')
 
+  // What is stored about a view is not permission to tell it: the project is asked as it is now (view-permission.mjs).
+  const viewPermitted = createViewPermission({ loadProject, resolveWorkspace: (project) => resolveServiceWorkspace({ project, dataRoot, env, platform }), workspaceId, workspaceRoot })
   // One view as the plugin is told about it: its freshness entry with held notes counted, and its open pending edits.
   function pluginStatusOf(scopeId) {
+    if (!viewPermitted(scopeId)) return { view: null, pendingEdits: null }
     let entry = null
     try { entry = stateStore.readFreshness()?.scopes.find((item) => item.scopeId === scopeId) ?? null } catch (error) { if (!isTyped(error)) throw error; return { view: null, pendingEdits: null } }
     let open = null
