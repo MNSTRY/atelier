@@ -1021,11 +1021,16 @@ newly observed edit, without the engine's file cache, blocked 2.0 s, at a
 two-second target, as for an ordinary project. A service binding needs the
 first publication to yield to the event loop (or run off it), or a corpus small
 enough to stay within the probe. It also needs the service's start to wait for
-its loader: the service resolves its workspace from the loader's own answer
-when it starts, not from a promise of one, so it does not start on
-`loadBoundProjectOffThread` as it is. The plugin's status read already allows
-for such a loader without waiting for it (see "The channel" in
-[obsidian-plugin.md](obsidian-plugin.md)).
+its loader. Given a loader that answers a promise, such as
+`loadBoundProjectOffThread`, the service resolves its workspace from the
+promise rather than the project: it reads the workspace pointer under the
+working directory (`.atelier-local/obsidian.json` there), and checks the
+private state against no enrolled repository. It refuses to start
+(`service-workspace-not-prepared`) when that directory holds no pointer, and
+otherwise runs for the workspace that pointer names. `atelier obsidian start`
+starts the service in the root of the volume its entry is on. The plugin's
+status read already allows for such a loader without waiting for it (see "The
+channel" in [obsidian-plugin.md](obsidian-plugin.md)).
 
 ## Known limits
 
