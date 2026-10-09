@@ -19,9 +19,11 @@ import { fileDigest, noteFile, openEdits, privateStateSnapshot, sourceDigests } 
 //                      hook (createNullWatcherFactory); a source change with
 //                      no event is caught by digest reconciliation on a tick
 //   interruption       the disposable service is killed at owned points
-//                      (idle, and while a tick runs); after each restart the
-//                      retained state (pending edits, journals, preserved
-//                      bytes) is read back and compared
+//                      (idle, and while a tick runs), only when it answered
+//                      healthy and only through the handle of the process
+//                      this run started; after each restart the retained
+//                      state (pending edits, journals, preserved bytes) is
+//                      read back and compared
 //   launcher-exit      the service is started from a child that exits at
 //                      once; the runtime identifier and PID stay healthy
 //
@@ -34,6 +36,29 @@ export const AP03_DEFAULTS = Object.freeze({ scopeId: 'scope-full', nodeId: 'nor
 const text = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8')
 const tickSummary = (answer) => ({ requested: answer.requested, state: answer.state, reason: answer.reason ?? null, pending: answer.pending ?? false, tick: answer.tick ? { ok: answer.tick.ok, state: answer.tick.state, reason: answer.tick.reason ?? null, scopes: answer.tick.scopes ?? [] } : null })
 const statusSummary = (status) => ({ state: status.state, reason: status.reason ?? null, runtimeId: status.record?.runtimeId ?? null, pid: status.record?.pid ?? null, address: status.address ?? null, health: status.health ? { runtimeId: status.health.runtimeId, pid: status.health.pid, status: status.health.status } : null })
+
+// One interruption at an owned point. The service is killed only when the status read just before was healthy
+// with a process number, and the runtime kills only through the handle of a service process it started and still
+// holds (lib/service-world.mjs): a number it does not hold is never signalled. Either refusal is a failure of the
+// step, recorded with the reason; nothing is killed in its place.
+export async function interruptService({ runtime, point, check, clock = isoNow, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), midTickDelayMs = 5 }) {
+  const record = { point, before: statusSummary(await runtime.status()) }
+  const pid = record.before.pid
+  if (!check('interruption', record.before.state === 'healthy' && Number.isInteger(pid), `${point}: no healthy service to interrupt`)) {
+    record.kill = { pid, signal: 'SIGKILL', sent: false, reason: 'no-healthy-service' }
+    return record
+  }
+  let inFlight = null
+  if (point === 'during-a-tick') {
+    inFlight = runtime.tick({ tickTimeoutMs: 5000 }).then((answer) => ({ answer: tickSummary(answer) }), (error) => ({ error: error.message }))
+    await sleep(midTickDelayMs)
+  }
+  record.killedAt = clock()
+  record.kill = runtime.kill(pid, 'SIGKILL')
+  if (inFlight !== null) record.tickInFlight = await inFlight
+  check('interruption', record.kill.sent === true, `${point}: the service was not interrupted (${record.kill.reason ?? 'the signal was not delivered'})`)
+  return record
+}
 
 export async function runAp03({
   world, runtime, app, adapterFactory, createEngine = createMaintenanceEngine, now = Date.now, clock = isoNow, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -132,19 +157,10 @@ export async function runAp03({
   check('interruption', openEdits(reference).length >= 1, 'no pending edit was queued from the vault edit')
   check('interruption', reference.retainedObjects.every((item) => item.present), 'a preserved object is missing before any interruption')
   for (const point of ['idle-between-ticks', 'during-a-tick']) {
-    const record = { point, before: statusSummary(await runtime.status()) }
+    const record = await interruptService({ runtime, point, check, clock, sleep, midTickDelayMs })
+    // Nothing was killed: what follows would describe a service that was never interrupted.
+    if (record.kill.sent !== true) { interruption.points.push(record); continue }
     const pid = record.before.pid
-    check('interruption', record.before.state === 'healthy' && Number.isInteger(pid), `${point}: no healthy service to interrupt`)
-    if (point === 'during-a-tick') {
-      const inFlight = runtime.tick({ tickTimeoutMs: 5000 }).then((answer) => ({ answer: tickSummary(answer) }), (error) => ({ error: error.message }))
-      await sleep(midTickDelayMs)
-      record.killedAt = clock()
-      record.kill = runtime.kill(pid, 'SIGKILL')
-      record.tickInFlight = await inFlight
-    } else {
-      record.killedAt = clock()
-      record.kill = runtime.kill(pid, 'SIGKILL')
-    }
     const gone = await waitUntil(() => !runtime.alive(pid), { timeoutMs: 10000, intervalMs: 50 })
     record.processGone = { met: gone.met, elapsedMs: gone.elapsedMs }
     record.afterKill = statusSummary(await runtime.status())

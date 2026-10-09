@@ -29,6 +29,18 @@
 // Without --run-isolated-app the plan and manual steps are printed and no
 // application starts. --keep leaves the synthetic workspace, the data root and
 // the isolated instance roots in place, which the manual sleep/wake step needs.
+//
+// Before the first run with the app, by hand: how many processes the installed
+// command-line tool becomes decides how often the owned run meets a process it
+// cannot record (lib/instance.mjs, Limits). It cannot be measured without the
+// app, which the tool talks to, so the run measures it itself: right after its
+// isolation checks, AP-01 holds one `eval` call open in the app and reads the
+// process table once while it runs, and G07-owned-cleanup.json records the
+// count as `cliProcessShape`. Before that run, a reading that starts neither
+// the app nor the tool: `file "$APP_DIR/obsidian-cli"` (APP_DIR as in
+// lib/instance.mjs). A script is
+// read with `cat` and names what it runs; a binary linked against the
+// Electron framework (`otool -L`) is likely to start helpers of its own.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -590,11 +602,12 @@ async function commitShortenedFailure({ custody, writeConsole = writeConsoleDefa
 // The final output of the owned small-fixture run, committed while its roots still exist: the receipt with what
 // the run observed, how its cleanup ended and the app log. The log's copy is credited against the app output
 // already counted only when the cleanup was verified and the roots are not asked to be kept, that is, when the
-// root that holds the original is about to be removed. `writeConsole` is for tests; the run writes to stdout.
-export async function finalizeOwnedSmallFixture({ custody, plan, keep = false, json = false, receiptDir, operator, candidate, host, gate, evidence = [], passed = false, capabilities, timings = {}, layoutRoot = null, startedAt, writeConsole }, cleanup, runError) {
+// root that holds the original is about to be removed. The command-line process shape the run read is kept beside
+// the cleanup. `writeConsole` is for tests; the run writes to stdout.
+export async function finalizeOwnedSmallFixture({ custody, plan, keep = false, json = false, receiptDir, operator, candidate, host, gate, evidence = [], passed = false, capabilities, timings = {}, layoutRoot = null, cliProcessShape = null, startedAt, writeConsole }, cleanup, runError) {
   const verified = !runError && cleanup.joined
   const recordedCapabilities = verified ? capabilities : { ...capabilities, qualified: false }
-  const control = { error: runError?.message ?? null, cleanup, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, nativeOutput: custody.nativeUsed, failureReserve: custody.failureOutputReserve } }
+  const control = { error: runError?.message ?? null, cleanup, cliProcessShape, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, nativeOutput: custody.nativeUsed, failureReserve: custody.failureOutputReserve } }
   const recorded = [...evidence, { role: null, name: `${gate}-owned-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(control, null, 2)}\n`) }]
   const appLog = layoutRoot ? appLogEvidence({ gate, root: layoutRoot, rootWillBeRemoved: cleanup.joined && !keep }) : null
   if (appLog) recorded.push(appLog)
@@ -621,7 +634,7 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
   const startedAt = isoNow()
   // What a run that never reached capability discovery records: an unqualified app and CLI.
   let capabilities = { app: { name: 'Obsidian', version: null, installerVersion: null }, cli: { version: null }, lastSavedData: {}, errors: [], qualified: false }
-  let evidence = [], timings = {}, passed = false, layout = null
+  let evidence = [], timings = {}, passed = false, layout = null, cliProcessShape = null
   try {
     return (await custody.execute(async () => {
       const temp = custody.allocateRoot('atelier-desktop-')
@@ -638,6 +651,8 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
       await app.launch()
       await assertIsolatedInstance(app)
       if (await declineTrustPrompt(app) === 'not-declined') throw new IsolationRefusal('community-plugins-on', 'the vault\'s trust prompt was answered with community plugins on; these procedures prove the command-line path')
+      // How many processes one command-line call becomes, read while the app holds one call open; recorded, never a gate.
+      cliProcessShape = await app.cliProcessShape()
       capabilities = await assertAppFloor(await discoverCapabilities(app))
       timings = { launchedAt, derivation: derived.timings }
       const run = await runAp01({ instance: app, manifest: derived.manifest })
@@ -646,7 +661,7 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
       timings = { ...timings, ...run.timings, comparison: run.comparison }
       plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layout.home, workspaceDir })
     }, { keep: Boolean(args.keep), finalize: (_value, cleanup, runError) => finalizeOwnedSmallFixture({ custody, plan, keep: Boolean(args.keep), json: Boolean(args.json), receiptDir, operator, candidate, host,
-      gate, evidence, passed, capabilities, timings, layoutRoot: layout?.root ?? null, startedAt }, cleanup, runError) })).value
+      gate, evidence, passed, capabilities, timings, layoutRoot: layout?.root ?? null, cliProcessShape, startedAt }, cleanup, runError) })).value
   } catch (error) {
     // Bounded, and paid from the reserve the output bound sets aside for it. This is a control line, not a receipt:
     // a run that refused its final output keeps every root, and the writer keeps whatever it had already written.
@@ -664,8 +679,9 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
 //   - their instances are signalled as lib/instance.mjs describes outside an owned run: through the handles
 //     spawn returned, and a process group only while its leader is still held; nothing is signalled by number
 //     there, and nothing below an app is ended by this runner;
-//   - AP-03 interrupts the service it started with SIGKILL by the number the service's own status reported a
-//     moment before, without reading that number back first (lib/ap03.mjs, through lib/service-world.mjs);
+//   - AP-03 interrupts the service only when its status was healthy with a process number, and only through the
+//     handle of a service process the runtime started and still holds (lib/ap03.mjs, lib/service-world.mjs): a
+//     number it does not hold is never signalled, and the interruption is recorded as a failure instead;
 //   - at the end the temporary directories this runner created (its own root, and each launched instance's
 //     root) are removed by path, with no check that the path still names the directory it created, and whether
 //     or not the instances were seen to end. Links inside them are removed as links.

@@ -25,9 +25,14 @@ export const sha256 = (value) => createHash('sha256').update(value).digest('hex'
 // disk-full case) while the app profile stays on a healthy one. With an owned
 // run, a root created here is that run's to remove and is recorded before it
 // is populated; a root the caller names stays the caller's. As before, only
-// an omitted root or data root is defaulted: an explicit null is refused.
+// an omitted root or data root is defaulted: an explicit null is refused. A
+// root created here is also the only place an instance's HOME may be (see
+// assertPrivateHome).
 export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
-  if (root === undefined) root = custody ? custody.allocateRoot('atelier-g00-') : io.mkdtempSync(path.join(io.realpathSync(os.tmpdir()), 'atelier-g00-'));
+  if (root === undefined) {
+    root = custody ? custody.allocateRoot('atelier-g00-') : io.mkdtempSync(path.join(io.realpathSync(os.tmpdir()), 'atelier-g00-'));
+    CREATED_ROOTS.set(realPath(root), directoryIdentity(io, root));
+  }
   if (dataRoot === undefined) dataRoot = root;
   const layout = { root, home: path.join(root, 'home'), profile: path.join(root, 'profile'), vault: path.join(dataRoot, 'vault'),
     staging: path.join(dataRoot, 'staging'), recovery: path.join(dataRoot, 'recovery') };
@@ -36,6 +41,38 @@ export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
   io.writeFileSync(path.join(layout.profile, 'obsidian.json'), JSON.stringify({
     vaults: { atelierg00synthetic: { path: layout.vault, ts: Date.now(), open: true } }, cli: true, updateDisabled: true }));
   return layout;
+}
+
+// The layout roots createLayout made in this process: real path -> device and file number when it was made.
+const CREATED_ROOTS = new Map();
+// The path the system resolves, links included; on macOS in the case the volume stores it.
+const realPath = (target) => { try { return fs.realpathSync.native(target); } catch { return path.resolve(target); } };
+// macOS and Windows volumes ignore case by default, so a path that differs only in case may name the same directory.
+const foldCase = (value) => (process.platform === 'darwin' || process.platform === 'win32' ? value.toLowerCase() : value);
+// Device and file number, links followed: a HOME reached through a link is the directory the link leads to.
+const reachedIdentity = (target) => { try { const stat = fs.statSync(target, { bigint: true }); return `${stat.dev}:${stat.ino}`; } catch { return null; } };
+const ownHomes = () => {
+  const homes = [os.homedir(), process.env.HOME];
+  try { homes.push(os.userInfo().homedir); } catch { /* no account entry to read */ }
+  return homes.filter((home) => typeof home === 'string' && home !== '');
+};
+
+// An instance's HOME holds the command-line socket that launch removes, and the app it starts listens there. It must
+// not be this user's own HOME, however it is reached (the account's home, os.homedir(), $HOME, through a link, or in
+// another case), and it must lie inside a layout root this process made that is still that directory.
+export function assertPrivateHome(home) {
+  const real = realPath(home);
+  const identity = reachedIdentity(home);
+  for (const own of ownHomes()) {
+    if ((identity !== null && identity === reachedIdentity(own)) || foldCase(real) === foldCase(realPath(own))) throw new Error('Refusing: the instance HOME is this user\'s own');
+  }
+  const inside = [...CREATED_ROOTS].some(([root, recorded]) => {
+    let current;
+    try { current = directoryIdentity(fs, root); } catch { return false; }
+    const relative = path.relative(foldCase(root), foldCase(real));
+    return recorded !== null && current === recorded && relative !== '' && relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative);
+  });
+  if (!inside) throw new Error('Refusing: the instance HOME is not inside a layout root this process created');
 }
 
 // ---------------------------------------------------------------------------
@@ -78,13 +115,17 @@ export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
 //     run's (held, or answering with its recorded identity). The run
 //     therefore learns its tree one level per read: the child of a helper is
 //     recorded at the earliest by the read after the one that recorded the
-//     helper. The children of a process that exits before they are recorded
-//     cannot be recorded at all. Such a process, and one that detaches itself
-//     from the app between two reads, is never signalled. When a table still
-//     shows it under a parent that was the run's before that read began and
-//     has exited, or changed, by its end, the run notes it and keeps the
-//     roots; otherwise it is reported, and the roots kept, only if its
-//     command line names one of the run's directories.
+//     helper. Before its first signal, cleanup reads again until a read
+//     records nothing new (within the time SIGTERM is given), so what is there
+//     when cleanup begins is recorded before any parent is ended. The children
+//     of a process that exits before they are recorded cannot be recorded at
+//     all. Such a process, and one that detaches itself from the app between
+//     two reads, is never signalled. When a table still shows it under a
+//     parent that was the run's before that read began and has exited, or
+//     changed, by its end, the run remembers it by identity until it is seen
+//     gone, and keeps the roots while it is there; otherwise it is reported,
+//     and the roots kept, only if its command line names one of the run's
+//     directories.
 //   - A recorded descendant is known by number, user, start time (to the
 //     second) and command. Another process with the same number, user and
 //     command that started within that same second would be taken for it.
@@ -111,10 +152,11 @@ export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
 //   - nothing below the app is ended by this module: a helper that leaves the
 //     app's group, or outlives an app that exited before the launch gave up,
 //     keeps running, and quitting leaves the helpers to the app's own shutdown;
-//   - the stale command-line socket under the instance's HOME is removed
-//     before each launch, and a HOME that is this user's own is refused first,
-//     so the socket of the person's own app is never removed. A HOME elsewhere
-//     is the caller's to choose, and its socket is removed by path.
+//   - the stale command-line socket under the instance's HOME is removed by
+//     path before each launch. A launch is refused first unless that HOME lies
+//     inside a layout root this process made and still holds, and is not this
+//     user's own however it is reached (assertPrivateHome), so the socket of
+//     the person's own app is never removed.
 // ---------------------------------------------------------------------------
 
 const PS_FIELDS = ['-o', 'pid=', '-o', 'ppid=', '-o', 'uid=', '-o', 'stat=', '-o', 'lstart=', '-o', 'command='];
@@ -195,13 +237,15 @@ export class OwnedRun {
     // aside for what a failed run still says: a failed receipt with shortened evidence, and a failure line.
     this.outputLimit = outputBytes; this.outputUsed = 0; this.failureOutputReserve = Math.min(256 * 1024, Math.floor(outputBytes / 16)); this.failureOutputUsed = 0;
     this.nativeUsed = 0; this.nativeCredited = 0; // app and command-line output counted as it arrived, and how much of it a final copy has replaced
-    this.outputOverAllowance = 0; // by how much what the run keeps exceeds its allowance, once a credit was charged back
+    this.outputOverAllowance = 0; this.outputCreditChargedBack = 0; // by how much what the run keeps exceeds its allowance once a credit was charged back, and that credit
     this.roots = new Map(); // path -> identity of the directory this run created there
     this.profiles = new Set(); // profile directories of the apps this run started; like the roots, observed and never a reason to signal
     this.children = new Set(); // processes this run spawned and has not yet seen closed, each held by its handle
     this.descendants = new Map(); // number -> identity of a process seen as the child of an owned process
     this.strays = new Map(); // number -> identity of a process tied to this run that it does not own, and so never signals
+    this.orphans = new Map(); // number -> identity of a process a table showed, unrecorded, under a parent that lapsed during the read
     this.unknown = new Set(); this.watchers = new Set(); this.reading = null; this.tableReads = 0;
+    this.lastRecorded = 0; // how many descendants the last read recorded for the first time
   }
 
   assertActive() { if (this.failure) throw this.failure; if (this.now() >= this.deadline) throw this.fail('Whole-run deadline exceeded'); }
@@ -272,7 +316,7 @@ export class OwnedRun {
     if (!cleanup.retained || this.nativeCredited === 0) return;
     const credit = this.nativeCredited;
     this.nativeCredited = 0; this.outputUsed += credit;
-    cleanup.outputCreditChargedBack = credit;
+    this.outputCreditChargedBack = credit; cleanup.outputCreditChargedBack = credit;
     const over = this.outputUsed - this.failureOutputUsed - this.outputAllowance;
     if (over > 0) { this.outputOverAllowance = over; cleanup.outputOverAllowance = over; }
   }
@@ -284,11 +328,11 @@ export class OwnedRun {
     return commit();
   }
   // What a failed run says when it can promise nothing else: bounded, paid from
-  // its own reserve, naming the roots it kept, and by how much what it keeps
-  // exceeds its allowance when a charged-back credit made it do so. It is not a receipt.
+  // its own reserve, naming the roots it kept and, when a credit was charged
+  // back, that credit and by how much what the run keeps exceeds its allowance. It is not a receipt.
   failureDiagnostic({ procedureId = null, error = null, retainedRoots = [] } = {}) {
     const base = { procedureId: procedureId === null ? null : String(procedureId).slice(0, 32), outcome: 'failed', closes: false, humanAcceptance: null, code: 'owned-run-failed', inspectEvidenceIfPresent: true,
-      ...(this.outputOverAllowance > 0 ? { outputOverAllowanceBytes: this.outputOverAllowance } : {}) };
+      ...(this.outputCreditChargedBack > 0 ? { outputCreditChargedBackBytes: this.outputCreditChargedBack } : {}), ...(this.outputOverAllowance > 0 ? { outputOverAllowanceBytes: this.outputOverAllowance } : {}) };
     const full = { ...base, message: String(error?.message ?? error ?? '').slice(0, 600), retainedRoots: retainedRoots.slice(0, 8).map((root) => String(root).slice(0, 256)) };
     const remaining = this.failureOutputReserve - this.failureOutputUsed;
     const text = [full, base].map((value) => `${JSON.stringify(value)}\n`).find((candidate) => Buffer.byteLength(candidate) <= remaining);
@@ -382,7 +426,9 @@ export class OwnedRun {
     // A number just found not to be itself is not recorded again from this table, which is older than that finding.
     const adoptable = (row) => !row.exited && row.pid > 1 && row.pid !== this.self && !held.has(row.pid) && !this.descendants.has(row.pid) && confirmed.get(row.pid) !== false && owned(row.ppid);
     // One pass: what may pass lineage on was fixed before this table was read, so nothing recorded here changes it.
-    for (const row of rows) if (adoptable(row) && row.uid === this.uid) this.descendants.set(row.pid, row);
+    let recordedNow = 0;
+    for (const row of rows) if (adoptable(row) && row.uid === this.uid) { this.descendants.set(row.pid, row); recordedNow += 1; }
+    this.lastRecorded = recordedNow;
     // What is tied to this run without being its own (a child that runs as another user, or anything whose
     // command line mentions one of the run's directories, such as a helper that detached itself from the app) is
     // remembered until it is seen gone, and is never signalled.
@@ -396,11 +442,16 @@ export class OwnedRun {
       if (adoptable(row) || places.some((place) => mentionsDirectory(row.command, place))) this.strays.set(row.pid, row);
     }
     // A process this table shows, unrecorded, under a number that lapsed during the read may be a child that
-    // number's process left behind, which can no longer be recorded. It is never signalled; it is noted, so the
-    // run does not claim a clean end and keeps its roots. A note signals nothing: a stale row can only keep a root.
+    // number's process left behind, which can no longer be recorded. It is never signalled. Like a stray it is
+    // remembered by identity until it is seen gone (or recorded after all), and while it is there the run does not
+    // claim a clean end and keeps its roots. Remembering signals nothing: a stale row can only keep a root.
+    for (const [pid, recorded] of this.orphans) {
+      const row = current.get(pid);
+      if (!row || row.exited || held.has(pid) || this.descendants.has(pid) || !sameProcess(recorded, row)) this.orphans.delete(pid);
+    }
     for (const pid of recordedBefore.keys()) if (!earlier(pid)) lapsed.add(pid);
     for (const row of rows) {
-      if (lapsed.has(row.ppid) && !row.exited && row.uid === this.uid && row.pid > 1 && row.pid !== this.self && !held.has(row.pid) && !this.descendants.has(row.pid)) this.unknown.add(`unrecorded-children:${row.ppid}`);
+      if (lapsed.has(row.ppid) && !row.exited && row.uid === this.uid && row.pid > 1 && row.pid !== this.self && !held.has(row.pid) && !this.descendants.has(row.pid) && !this.orphans.has(row.pid)) this.orphans.set(row.pid, row);
     }
   }
 
@@ -461,7 +512,7 @@ export class OwnedRun {
     this.watchers.clear();
   }
 
-  settled() { return this.children.size === 0 && this.descendants.size === 0 && this.strays.size === 0; }
+  settled() { return this.children.size === 0 && this.descendants.size === 0 && this.strays.size === 0 && this.orphans.size === 0; }
 
   // A spawned process whose streams did not close (a process the run cannot see still holds them, or it could
   // not be ended) must not keep this process alive once the run has reported it: its streams are closed on this
@@ -476,15 +527,19 @@ export class OwnedRun {
   async cleanup({ until = this.cleanupUntil ?? this.now() + this.cleanupMs } = {}) {
     this.cleanupUntil = until;
     this.stopWatching();
-    // The descendants are read before the first signal: once their parent is gone the lineage cannot be read.
     let readable = true;
     const read = async (step) => { try { await step(); } catch (error) { readable = false; if (!error.readback) this.unknown.add(`process-cleanup:${error.message}`); } };
     // Without a readable table only the spawned processes can be joined, and the run reports unknown custody.
     const done = () => (readable ? this.settled() : this.children.size === 0);
-    // A read that begins now, while what was spawned is still running: a read the watcher began earlier is older.
-    await read(() => this.observeFresh());
     // SIGTERM is given at most ten seconds and at most half the budget, so SIGKILL always has time of its own.
-    for (const [name, stage] of [['SIGTERM', this.now() + Math.max(0, Math.min(10000, (until - this.now()) / 2))], ['SIGKILL', until]]) {
+    const terminate = this.now() + Math.max(0, Math.min(10000, (until - this.now()) / 2));
+    // The descendants are read before the first signal: once their parent is gone the lineage cannot be read. A read
+    // that begins now, while what was spawned is still running (a read the watcher began earlier is older), and
+    // again until a read records nothing new, because each read learns one level of the tree. These reads use the
+    // time SIGTERM is given.
+    await read(() => this.observeFresh());
+    while (readable && this.lastRecorded > 0 && this.now() < terminate) await read(() => this.observeFresh());
+    for (const [name, stage] of [['SIGTERM', terminate], ['SIGKILL', until]]) {
       // Spawned processes are signalled through their handles, which needs no process table.
       for (const entry of this.children) this.signalChild(entry, name);
       if (readable) await read(() => { for (const pid of [...this.descendants.keys()]) { if (this.now() >= until) throw new Error('Cleanup deadline exceeded'); this.signalDescendant(pid, name); } });
@@ -500,6 +555,7 @@ export class OwnedRun {
     if (readable && !this.settled()) {
       this.unknown.add('process-join-incomplete');
       for (const pid of this.strays.keys()) this.unknown.add(`unowned-process-remains:${pid}`);
+      for (const pid of this.orphans.keys()) this.unknown.add(`unrecorded-child-remains:${pid}`);
     } else if (!readable && this.children.size > 0) this.unknown.add('process-join-incomplete');
     if (this.children.size > 0) this.release();
     return { joined: this.unknown.size === 0, unknown: [...this.unknown], roots: [...this.roots.keys()], outputBytes: this.outputUsed };
@@ -555,8 +611,7 @@ export class Instance {
   async launch({ readyTimeoutMs = 30000 } = {}) {
     this.custody?.assertActive();
     // The stale socket is removed next. Under this user's own HOME it would be the person's own app's.
-    const home = path.resolve(this.layout.home);
-    if ([os.homedir(), process.env.HOME].some((own) => typeof own === 'string' && own !== '' && path.resolve(own) === home)) throw new Error('Refusing: the instance HOME is this user\'s own');
+    assertPrivateHome(this.layout.home);
     this.custody?.profiles.add(this.layout.profile);
     fs.rmSync(this.socket, { force: true });
     const [command, ...leading] = this.launcher.app;
@@ -624,14 +679,16 @@ export class Instance {
   }
 
   // The same call under an owned run: this run's own child, held by its handle, its output counted against the
-  // run's bound as it arrives, and ended through that handle whatever the outcome.
-  async ownedCli(args) {
+  // run's bound as it arrives, and ended through that handle whatever the outcome. `onSpawn` is given the handle
+  // the turn the call is spawned.
+  async ownedCli(args, { onSpawn } = {}) {
     const custody = this.custody;
     custody.assertActive();
     let timer;
     const [command, ...leading] = this.launcher.cli;
     const child = spawn(command, [...leading, ...args], { env: this.env, stdio: ['ignore', 'pipe', 'pipe'] });
     const entry = custody.adopt(child);
+    onSpawn?.(entry);
     const completion = new Promise((resolve, reject) => {
       const stdout = [], stderr = [];
       for (const [stream, sink] of [[child.stdout, stdout], [child.stderr, stderr]]) stream?.on('data', (chunk) => {
@@ -648,6 +705,33 @@ export class Instance {
       // The CLI ignores SIGTERM while it waits on the app. A call that has already exited is not signalled.
       custody.signalChild(entry, 'SIGKILL');
     }
+  }
+
+  // How many processes one command-line call becomes. Under an owned run only, and read-only: the app holds one
+  // `eval` call open for `holdMs` (a promise it resolves later), and while that call, the run's own child, is
+  // still held, the run reads the table once as it always does and counts the rows under the call's number, its
+  // children and theirs as that table shows them. Nothing else is started and nothing is signalled. It needs the
+  // app, which answers the call, so it cannot be made before a launch; the run makes it right after its
+  // isolation checks. A call that ended before the read did is reported as such, and its count may be short.
+  async cliProcessShape({ holdMs = 3000 } = {}) {
+    const custody = this.custody;
+    if (!custody) throw new Error('The command-line process shape is read under an owned run only');
+    if (!Number.isSafeInteger(holdMs) || holdMs < 0) throw new Error('holdMs is a non-negative integer');
+    let entry = null;
+    const call = this.ownedCli(['eval', `code=new Promise((resolve)=>setTimeout(()=>resolve('held'),${holdMs}))`], { onSpawn: (spawned) => { entry = spawned; } });
+    call.catch(() => {});
+    // A call refused before it was spawned (the run has stopped) has nothing to read; its refusal is the answer.
+    if (entry === null) { await call; throw new Error('The command-line call was not spawned'); }
+    const shape = { pid: entry.child.pid, holdMs, readWhileHeld: false, processes: null, error: null };
+    try {
+      const rows = await custody.observeFresh();
+      shape.readWhileHeld = custody.unreaped(entry);
+      const under = new Set([shape.pid]);
+      for (let grew = true; grew;) { grew = false; for (const row of rows) if (!row.exited && !under.has(row.pid) && under.has(row.ppid)) { under.add(row.pid); grew = true; } }
+      shape.processes = under.size;
+    } catch (error) { shape.error = String(error.message).slice(0, 200); }
+    try { shape.answered = (await call).includes('=> held'); } catch (error) { shape.answered = false; shape.error ??= String(error.message).slice(0, 200); }
+    return shape;
   }
 
   async version() { return (await this.cli('version')).trim(); }
