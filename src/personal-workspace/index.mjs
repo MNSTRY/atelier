@@ -26,7 +26,7 @@ const resolvedInputs = new WeakSet()
 const plans = new WeakSet()
 const freeze = (v) => { if (v && typeof v === 'object') { Object.values(v).forEach(freeze); Object.freeze(v) } return v }
 
-export { selectPersonalGeneration, selectionConfirmDigest, readPersonalSelection, inventoryPersonalHome, planPersonalRestore, restorePersonalInputs } from './selection.mjs'
+export { selectPersonalGeneration, selectionConfirmDigest, readPersonalSelection, readPersonalSelectionHead, inventoryPersonalHome, planPersonalRestore, restorePersonalInputs } from './selection.mjs'
 export class PersonalWorkspaceRefusal extends Error {
   constructor(code) { super(`Personal workspace refused: ${code}`); this.name = 'PersonalWorkspaceRefusal'; this.code = code }
 }

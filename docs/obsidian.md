@@ -872,8 +872,9 @@ generationId })` in `src/projection/obsidian/personal-workspace.mjs`. Both
 arguments are explicit; neither is discovered from the environment or the
 working directory. A loader uses `loadBoundProject` with the same arguments,
 or `loadBoundProjectOffThread`, which composes in a worker thread; the engine
-awaits its loader. No command or service binds one yet: that waits for the selection seam that
-keeps one projection configuration per person.
+awaits its loader. The command, the service and the login item bind a personal
+home through `--personal-home`, which follows the generation the person
+confirmed there (see "A confirmed selection", below).
 
 - **One graph.** The binding is attached to the generation's resolved
   `atelier.project.json` under one symbol key. When a project carries it, the
@@ -994,6 +995,89 @@ keeps one projection configuration per person.
   in memory. A project configuration that declares it itself is refused at
   every build (`personal-binding-lost`, naming the key).
 
+### A confirmed selection
+
+`--personal-home DIR`, given instead of `--project` to `atelier obsidian`, to
+the service entry and in a login item's unit, binds the personal home DIR
+(`src/runtime/obsidian/personal-selection.mjs`). Without it, every argument,
+unit and loader is what it was.
+
+- **What is loaded.** The generation the person last confirmed with
+  `selectPersonalGeneration` (see [personal-workspace.md](personal-workspace.md)),
+  and nothing else. The loader reads the head of the selection history from
+  the history alone (`readPersonalSelectionHead`), loads the generation it
+  names through the route above (in a worker for the service, in the
+  command's thread for a command), then reads the head again. A head that
+  moved meanwhile refuses `personal-selection-changed`. Nothing here confirms
+  a selection or chooses one for the person.
+- **Nothing confirmed publishes nothing.** No record refuses
+  `nothing-selected`; a confirmed generation whose inputs were edited and not
+  confirmed again refuses `stale-generation`; a history whose hash chain does
+  not hold refuses `selection-history-corrupt`; a home whose history cannot be
+  read refuses `personal-home-unavailable`, and a home that is gone or not
+  private refuses with the module's own code (`root-missing`,
+  `not-private-location`, `root-symlinked`). Every other refusal of the
+  composition keeps its code. Nothing falls back to another generation or to
+  the project without a binding. The vault keeps what it last published from
+  a confirmed generation. `status`, `open` and `service start` load the
+  selection and refuse with its code; the service's freshness shows every view
+  `stale` with it, and its status document has it as the last tick's reason.
+  A confirmed selection is reported by `status` (`selection`: the generation
+  and the number of its record).
+- **The service starts whatever the selection.** A bound project's folder is
+  its private home, so the home alone locates the workspace
+  (`locatePersonalHome`): the service resolves its workspace from that at once
+  and starts, and its engine awaits the loader at each tick. Started by a login
+  item, the service asks the home, not the loader, for its workspace and log.
+  `service status` and `stop`, the ticks `open` asks for, `service unit
+  --remove` and `uninstall` locate the service the same way. When no project
+  loaded (a restart while nothing is confirmed), the engine locates the
+  workspace too, so each view published before says why nothing is published
+  now instead of keeping the previous run's `current`. A service given a loader
+  that answers a promise and no locator is still refused at start with
+  `service-loader-not-synchronous`, and so is one whose locator answers a
+  promise; a located value that names no folder refuses
+  `service-locator-invalid`. The workspace pointer is under the home, so a home
+  that is gone when the service starts leaves it no workspace to find
+  (`service-workspace-not-prepared`).
+- **Following the history.** A loaded project is pinned to the record it was
+  loaded under, and the engine observes that record and the place of the next
+  one as configuration. A confirmation is therefore loaded at the next tick, and
+  a history cut short is followed as it then stands: the head it ends with is
+  loaded, and composition decides whether its generation still holds. The
+  service keeps no head across a restart, so after one it cannot tell a cut
+  history from one never longer. At every full reconciliation the history is
+  read again, so a record before the last that no longer links, or a
+  confirmation that landed before the engine first looked at the record,
+  refuses with its code within the reconciliation interval. A confirmation
+  during a tick changes an observed file: the view being prepared or published
+  refuses `mixed-read` at its next wait, before its generation commits (one
+  already committed stays), so do the views after it, and the next tick
+  publishes under the new record. While the last load was refused, every tick
+  loads again: with nothing confirmed only the history is read, and with a
+  confirmed generation that no longer holds, one composition runs in a worker
+  per tick.
+- **A narrowing.** When the newly confirmed generation drops a source (a
+  repository withdrawn, a view narrowed), each view follows the publisher's
+  rule for notes that leave a view; this binding adds no rule. At the view's
+  next publication a generated note of the dropped source leaves the vault and
+  its bytes are moved to private recovery. A note the person edited, once the
+  engine has queued the edit, holds the whole view at the generation it last
+  published (`held-for-your-edit`, `publication-withheld-for-your-edit`): the
+  note is neither removed nor overwritten. A note edited during the
+  publication itself stays in the vault (`retained-edit`).
+- **Who may see.** The binding never decides it. It stays this machine's
+  audience setting, none by default, and `audience set` still refuses for a
+  bound project: until an audience is allowed some other way, a bound vault
+  shows no note. Deciding who may see a bound vault is not built.
+- **Reading the history on the service's event loop.** The head is one
+  directory listing and one bounded read per record. A record that is not a
+  regular file (a FIFO, a device) refuses `selection-history-corrupt` without
+  being waited on. A home that becomes unreadable while the engine holds a
+  project (its permissions changed, not removed) fails the tick when the
+  engine observes its files, as an unreadable configuration file does: nothing
+  is published, and the service reports the failed tick.
+
 Measured once on 2,156 notes in three repositories, with 50 annotations and five
 saved views (six views in all). The production contributions were loaded, as
 the service loads them, so the proposal adapter was registered. The host's load
@@ -1021,18 +1105,17 @@ again. While an edit stays open and shared sources are quiet, the adapter
 builds nothing more; under continuous change it builds once per tick until a
 quiet tick.
 
-**What remains before a service or `open` binds a personal workspace of this
-size.** The first publication blocks the event loop far longer than the
-service's five-second health probe: about ten minutes here. That is the
+**What a service binding needed.** The first publication blocked the event
+loop far longer than the service's five-second health probe: about ten minutes
+here. That is the
 publication path every project takes, not this route: an ordinary project of
 450 notes, measured the same way, blocked as long as a bound one. Preparing six
 views again blocked 4.5 s, under the probe. The proposal adapter's build of a
 newly observed edit, without the engine's file cache, blocked 2.0 s, at a
-two-second target, as for an ordinary project. A service binding needs the
-first publication to yield to the event loop (or run off it), or a corpus small
-enough to stay within the probe. It also needs the service's start to wait for
-its loader. The service resolves its workspace from the project its loader
-answers when it starts, and refuses a loader that answers a promise or any
+two-second target, as for an ordinary project. A service binding needed the
+first publication to yield to the event loop, which it now does (see "Since
+that measurement"), and a start that does not wait for its loader. The service
+resolves its workspace from the project its loader answers when it starts, and refuses a loader that answers a promise or any
 other thenable, such as `loadBoundProjectOffThread`, with
 `service-loader-not-synchronous`, before it reads anything from it, listens or
 records anything; a promise it was handed is let go, and its refusal, if it
@@ -1041,8 +1124,10 @@ service asks its loader once for both the lookup of its workspace and its own
 start. A loader that answers a promise there is never handed to the workspace
 resolution: the refusal is recorded in the workspace the unit names, and the
 process ends with 0, so the service manager does not start it again at once.
-The plugin's status read already allows for such a loader without waiting for
-it (see "The channel" in [obsidian-plugin.md](obsidian-plugin.md)).
+A service bound through `--personal-home` is given a locator as well, and starts
+from it (see "A confirmed selection"). The plugin's status read allows for such
+a loader without waiting for it (see "The channel" in
+[obsidian-plugin.md](obsidian-plugin.md)).
 
 **Since that measurement.** The engine prepares each view cooperatively and
 the publisher yields between complete units, so the service answers health and
@@ -1059,9 +1144,10 @@ does not hold the listener. A service in one of those stretches does not
 answer until it ends, and is `busy` if that outlasts the probe. A request can
 hold the listener too: the plugin's status read loads the project on the event
 loop when a configuration file changed, every two and a half minutes, and at
-every request while one of those files vouches for nothing. None of those
-loads is taken off the loop: the service starts only on a loader that answers
-at once, and refuses one that answers a promise. A load that holds the loop
+every request while one of those files vouches for nothing. For a project
+named by `--project` none of those loads is taken off the loop. For a bound
+personal home they compose in a worker, as the engine's loads do, and the read
+starts each one on the loop by reading the selection history. A load that holds the loop
 for a second or more is logged (`status-project-loaded`).
 
 What the waits cost. A wait comes after about 8 ms of work or 32 units,

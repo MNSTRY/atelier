@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
-import { PersonalWorkspaceRefusal, composePersonalWorkspace } from '@mnstry/atelier/personal-workspace'
+import { PersonalWorkspaceRefusal, composePersonalWorkspace, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
 import { ensureLocalState, resolveProjectConfig, validateProjectConfigDoc } from '@mnstry/atelier/project'
 import { buildCanonicalGraph } from '../../graph/graph.mjs'
-import { refuse } from '../../runtime/obsidian/errors.mjs'
+import { ObsidianMaintenanceRefusal, refuse } from '../../runtime/obsidian/errors.mjs'
 import { OBSIDIAN_EXT_KEY } from './contracts.mjs'
 
 // The one personal-workspace route of the Obsidian projection.
@@ -60,6 +60,9 @@ const BINDING = Symbol('atelier.obsidian.personal-workspace-binding')
 const ROUTES = new WeakMap()
 // The last validity key the composition confirmed for each binding: { inputs, facts }.
 const CONFIRMED = new WeakMap()
+// The selection record a binding was loaded under, when its loader followed the person's confirmed selection instead of
+// naming a generation itself (runtime/obsidian/personal-selection.mjs): { sequence, head, observe, recheck }.
+const SELECTED = new WeakMap()
 export const EVERYTHING_SCOPE_ID = 'everything'
 const EXT_SCHEMA = 'atelier-obsidian-ext-settings/v1'
 // The settings member of a bound project names its generation here. It survives any copy of the project (a structured
@@ -389,6 +392,12 @@ export async function validatePersonalWorkspace(project) {
   if (binding === null) return null
   const route = ROUTES.get(binding)
   if (route === undefined) return { ok: false, code: 'personal-binding-unrecognized' }
+  // A project pinned to a confirmed selection holds only while the history still ends, intact, with that selection's
+  // record: what observation of the record cannot see (a record before it broken, a confirmation that landed before
+  // the engine first looked) is seen here.
+  if (SELECTED.get(binding)?.recheck) {
+    try { assertPersonalSelection(project) } catch (error) { if (!(error instanceof ObsidianMaintenanceRefusal)) throw error; CONFIRMED.delete(binding); return { ok: false, code: error.code } }
+  }
   let composed
   if (route.offThread) composed = await composeInWorker(binding, route.worker)
   else {
@@ -400,12 +409,46 @@ export async function validatePersonalWorkspace(project) {
   return { ok: true, changed: previous?.inputs !== composed.key.inputs || previous?.facts !== composed.key.facts }
 }
 
+const selectionRecord = ({ personalHome }, sequence) => path.join(personalHome, 'selections', `${String(sequence).padStart(6, '0')}.json`)
+
+// Pins a bound project to the selection record it was loaded under, and answers the project. From then on the engine
+// observes that record and the place of the next one as configuration (personalWorkspaceInputs): a confirmation
+// appended to the history, or a history cut short, is a change. And every time the composition is asked again
+// (validatePersonalWorkspace) the history is read again and must still end with that record. `observe: false` and
+// `recheck: false` are test seams only, the mutation controls of each.
+export function pinPersonalSelection(project, { sequence, head }, { observe = true, recheck = true } = {}) {
+  SELECTED.set(personalWorkspaceBindingOf(project), Object.freeze({ sequence, head, observe, recheck }))
+  return project
+}
+
+// The selection a project is pinned to, as { personalHome, generationId, sequence, head }; null for any other project.
+export function personalSelectionOf(project) {
+  const binding = personalWorkspaceBindingOf(project)
+  const pinned = binding === null ? undefined : SELECTED.get(binding)
+  return pinned === undefined ? null : { personalHome: binding.personalHome, generationId: binding.generationId, sequence: pinned.sequence, head: pinned.head }
+}
+
+// Refuses `personal-selection-changed` unless the history still ends with the record this project is pinned to; a
+// history that cannot be read refuses with the module's own code. Nothing for a project that is not pinned.
+export function assertPersonalSelection(project) {
+  const pinned = personalSelectionOf(project)
+  if (pinned === null) return
+  let now
+  try { now = readPersonalSelectionHead({ personalHome: pinned.personalHome }) } catch (error) { asMaintenanceRefusal(error, 'the selection history of the personal workspace could not be read; nothing is used from it') }
+  if (now.sequence !== pinned.sequence || now.head !== pinned.head) refuse('personal-selection-changed', 'the confirmed selection of the personal workspace is no longer the one this project was loaded under; nothing is used from it', { source: 'personal-workspace' })
+}
+
 // The authored and generation files whose change means the binding must be asked again: the manifest, the overlay and
-// the bound generation's record. Observed as configuration by the engine. Empty for any other project.
+// the bound generation's record; and, for a project pinned to a selection, that selection's record and the place of the
+// next one. Observed as configuration by the engine. Empty for any other project.
 export function personalWorkspaceInputs(project) {
   const binding = personalWorkspaceBindingOf(project)
   if (binding === null) return []
-  return [path.join(binding.personalHome, 'atelier.personal.json'), path.join(binding.personalHome, 'atelier.overlay.json'), path.join(generationRoot(binding), 'generation.json')]
+  const pinned = SELECTED.get(binding)
+  return [
+    path.join(binding.personalHome, 'atelier.personal.json'), path.join(binding.personalHome, 'atelier.overlay.json'), path.join(generationRoot(binding), 'generation.json'),
+    ...(pinned?.observe ? [selectionRecord(binding, pinned.sequence), selectionRecord(binding, pinned.sequence + 1)] : []),
+  ]
 }
 
 // The repository of a bound project's private notes, or null. A vault edit to one of them is never applied into a

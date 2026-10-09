@@ -103,7 +103,10 @@ async function writeRecordPatiently(input) {
 
 export async function runMaintenanceService(options = {}) {
   const {
-    loadProject, dataRoot, adapterFactory, entryPath, runtimeId = `rt-${cryptoRandomBytes(16).toString('hex')}`, startup = false,
+    loadProject, dataRoot,
+    // What the workspace is resolved from at once, where the loader may answer a promise (locatePersonalHome): the service
+    // starts from it, and the engine awaits the loader at its ticks. Without it, the loader's own first answer is used.
+    locateProject = null, adapterFactory, entryPath, runtimeId = `rt-${cryptoRandomBytes(16).toString('hex')}`, startup = false,
     intervalMs = DEFAULT_TICK_INTERVAL_MS, maxBackoffMs = Math.max(DEFAULT_MAX_BACKOFF_MS, intervalMs), shutdownGraceMs = DEFAULT_SHUTDOWN_GRACE_MS,
     clock = () => new Date(), log = () => {}, pid = process.pid, randomBytes = cryptoRandomBytes, env = process.env, platform = process.platform,
     engineOptions = {}, createEngine = createMaintenanceEngine,
@@ -119,13 +122,15 @@ export async function runMaintenanceService(options = {}) {
   if (typeof adapterFactory !== 'function') throw new TypeError('the service needs an adapterFactory')
   if (typeof entryPath !== 'string') throw new TypeError('the service needs the path of its entry module')
 
-  // The workspace comes from the project the loader answers now. A loader that answers a promise is refused, typed, before
-  // anything is read from the promise (it has no pointer, no overlay and no repositories); its answer is let go unread.
-  const project = loadProject()
+  // The workspace comes from the project the loader answers now, or the locator. A loader without a locator, or a locator,
+  // that answers a promise is refused, typed, before anything is read from the promise (it has no pointer, no overlay and
+  // no repositories); its answer is let go unread. A located project names its folder, or is refused.
+  const project = locateProject === null ? loadProject() : locateProject()
   if (typeof project?.then === 'function') {
     Promise.resolve(project).catch(() => {})
     refuse('service-loader-not-synchronous', 'the service resolves its workspace from a project its loader answers at once; a loader that answers a promise is not supported when the service starts')
   }
+  if (locateProject !== null && typeof project?.configDir !== 'string') refuse('service-locator-invalid', 'the locator of this service answered no folder to resolve its workspace from')
   const workspace = resolveServiceWorkspace({ project, dataRoot, env, platform })
   if (!workspace?.workspaceRoot) refuse('service-workspace-not-prepared', 'this workspace has no private state yet; `start` prepares it')
   const { workspaceId, workspaceRoot } = workspace
@@ -206,7 +211,7 @@ export async function runMaintenanceService(options = {}) {
   const pluginAwareAdapterFactory = Object.assign((input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginReportOf(input.scope.scopeId) : null }), adapterFactory)
   const engine = createEngine({
     watcherFactory: createFsWatcherFactory(), ...engineOptions, seams: { ...(engineOptions.seams ?? {}), prepareView: prepareWithPlugin, prepareViewCooperatively: prepareCooperativelyWithPlugin, publishView: publishAndConfirm },
-    loadProject, dataRoot, adapterFactory: pluginAwareAdapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId },
+    loadProject, locateProject, dataRoot, adapterFactory: pluginAwareAdapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId },
   })
 
   const recordIsOurs = () => {

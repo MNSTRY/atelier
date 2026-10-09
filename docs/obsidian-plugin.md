@@ -409,9 +409,11 @@ every two seconds for every open vault, so the project is kept:
   deciding, within its time, while it is loaded again. A load that has not
   answered within two and a half minutes is given up and its later answer
   ignored, whether a request or that answer is the first to come after the
-  deadline. No command or service binds such a loader yet, and a service
-  refuses to start on one (see "Personal workspaces" in
-  [obsidian.md](obsidian.md)).
+  deadline. A service bound to a personal home (`--personal-home`) has such a
+  loader: it starts from the home alone, and its plugins are told about a view
+  once two of the loads that compose the confirmed generation have agreed. A
+  service given only a loader that answers a promise still refuses to start
+  (see "Personal workspaces" in [obsidian.md](obsidian.md)).
 - **A load that fails** (it throws, it is refused, it is given up, or a file
   vouches for nothing under a loader that answers a promise) ends whatever
   was kept, and is asked for again after two seconds, then four, up to
