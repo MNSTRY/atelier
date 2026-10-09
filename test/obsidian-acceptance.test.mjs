@@ -2631,7 +2631,8 @@ const endLeftService = (runtime) => async () => {
   catch (error) {
     const liveness = [error.detail?.alive, error.detail?.forceAlive, error.detail?.lastKnownAlive].filter((value) => value !== undefined)
     const allLivenessUnknown = liveness.length > 0 && liveness.every((value) => value === null)
-    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || !allLivenessUnknown || error.detail?.status?.state === 'occupied' || error.detail?.held?.joined !== true) throw error
+    const joinedHandleProof = error.detail?.held?.joined === true && (error.detail.held.heldCount > 0 || error.detail.held.handleKind === 'in-process-service' || error.detail.held.signals?.length > 0 || error.detail.held.remaining?.length > 0)
+    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || !allLivenessUnknown || error.detail?.status?.state === 'occupied' || !joinedHandleProof) throw error
     const held = await runtime.stopHeld()
     assert.equal(held.joined, true, 'fixture teardown must join every owned child')
   }
@@ -2712,7 +2713,7 @@ test('AP-03 fixture teardown does not absorb a live or occupied service refusal'
   const unknownRuntime = {
     fixtureMayAbsorbUnknownRefusal: true,
     async stop() { return { stopped: false, state: 'busy' } },
-    async stopHeld() { unknownStopHeldCalls += 1; return { joined: true, signals: [], remaining: [] } },
+    async stopHeld() { unknownStopHeldCalls += 1; return { joined: true, heldCount: 1, handleKind: 'child-handle', signals: [], remaining: [] } },
     status() { throw new Error('status unavailable') },
     record() { return { pid: 11 } },
     alive() { return null },
@@ -2755,6 +2756,28 @@ test('AP-03 fixture teardown does not absorb a live or occupied service refusal'
     alive(pid) { return pid === 14 },
   }
   await assert.rejects(() => cleanupOwnedRuntime(mixedPidLiveRuntime), (error) => error instanceof IsolationRefusal && error.detail.forceAlive === true)
+
+  const staleCurrentDeadRuntime = {
+    async stop() { return { state: 'busy', stopped: false, record: { pid: 21 } } },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stale-record', record: { pid: 22 } } },
+    record() { return { pid: 22 } },
+    alive(pid) { return pid === 21 },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(staleCurrentDeadRuntime), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === true)
+
+  let mixedPidForceApplied = false
+  const forceCurrentDeadOlderLiveRuntime = {
+    async stop(options) {
+      if (options.force === true) { mixedPidForceApplied = true; return { state: 'stopped', stopped: true } }
+      return { state: 'busy', stopped: false, record: { pid: 23 } }
+    },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stale-record', record: { pid: 24 } } },
+    record() { return mixedPidForceApplied ? null : { pid: 24 } },
+    alive(pid) { return pid === 23 || (pid === 24 && !mixedPidForceApplied) },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(forceCurrentDeadOlderLiveRuntime), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === true)
 
   const unprovenHeldPidRuntime = {
     async stop() { return { state: 'stale-record', stopped: false, record: { pid: 15 } } },
