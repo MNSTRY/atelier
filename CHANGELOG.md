@@ -63,6 +63,17 @@
   a process it spawned or a recorded child of one, and removes a directory only
   while the path still names the one it created; otherwise it keeps the
   directories and names them.
+- A project configuration file that is a link (one kept in a dotfiles
+  repository, say) no longer makes the Obsidian maintenance service load the
+  project, and run Git, at every status request a plugin makes. The service
+  compares what the loader reads through the link: the file it leads to and
+  that file's bytes, so a link pointed elsewhere is a change. A folder in a
+  file's place, or a link that leads nowhere or to a folder, still vouches for
+  nothing. The project the service keeps for those requests is taken only from
+  two loads in a row that agree over the same bytes, is loaded again every two
+  and a half minutes and never used past five. A loader that answers a promise
+  is given up after two and a half minutes, and a load that fails is asked for
+  again after two seconds, then four, up to thirty, unless a file changed.
 
 ## 0.2.0-alpha.13
 

@@ -8,6 +8,7 @@ import {
 import { applyEditLens, createEngineApplyOperation } from '../src/projection/obsidian/edits/index.mjs'
 import { PATH_REGISTRY_SCHEMA, allocateViewPaths, collisionKey, prepareView, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { viewsOfRegistry } from '../src/projection/obsidian/materialize/path-registry.mjs'
+import { PLUGIN_DIRECTORY, PLUGIN_ID, preparePluginFiles, readPluginSource } from '../src/projection/obsidian/plugin-bridge/index.mjs'
 import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
 import { planUnits } from '../src/projection/obsidian/publication/publisher.mjs'
 import { protectedRoots } from '../src/runtime/obsidian/machine-settings.mjs'
@@ -950,6 +951,153 @@ test('upgrade in automatic mode: an edit applied on the tick that would lay the 
   assert.deepEqual(Object.keys(vaultFiles(world)).filter((name) => name.startsWith('notes/') && !name.endsWith('/')), [], 'no layout 1 file is left behind')
   assert.ok(new Set(Object.values(treeListing(world.recovery()))).has(digestOf(edited)), 'the edited file is retained in recovery')
   assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /twice a minute/)
+})
+
+// A release as its service runs the engine: prepareView is handed Atelier's own plugin as that release ships it
+// (`source`; the plugin in this checkout when none is given). Nothing listens: the plugin's data file only names where
+// a service would answer.
+const releaseShipping = (source) => ({
+  prepareView: (input) => prepareView({ ...input, plugin: preparePluginFiles({ channel: { host: '127.0.0.1', port: 43123 }, scopeId: input.scope.scopeId, bearer: 'b'.repeat(43), ...(source ? { source } : {}) }) }),
+})
+// The plugin a later release ships: another version, with changed code.
+const LATER_PLUGIN = (() => {
+  const shipped = readPluginSource()
+  return { version: '99.0.0', files: shipped.files.map((file) => (file.name === 'main.js' ? { ...file, bytes: Buffer.concat([file.bytes, Buffer.from('\n// 99.0.0\n')]) } : file)) }
+})()
+
+test('upgrade across two releases, one vault: from layout 1 to this release and on to a changed one, the notes, each edit the person made and their own settings survive every hop, and nothing is deleted', needsExchange, async (t) => {
+  const world = upgradeWorld(t)
+  const inVault = (...parts) => path.join(world.vault(), ...parts)
+  const noteOf = (nodeId) => fs.readFileSync(world.noteFile(nodeId), 'utf8')
+  const jsonOf = (...parts) => JSON.parse(fs.readFileSync(inVault(...parts), 'utf8'))
+  // Every path under the settings folder but Atelier's own: the two policy files and its plugin's folder.
+  const OWNED = (relative) => relative === 'core-plugins.json' || relative === 'community-plugins.json' || relative.startsWith(`plugins/${PLUGIN_ID}`)
+  const ownSettings = () => treeListing(inVault('.obsidian'), { skip: OWNED })
+  const settle = async (engine) => { let report; for (let tick = 0; tick < 3; tick += 1) { world.advance(1000); report = await engine.tick() } return report.scopes[0] }
+  const applyEdit = async (nodeId) => {
+    const edit = world.editOf(nodeId)
+    const result = await world.sourceApply().apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    assert.deepEqual([result.status, result.code], ['applied', 'applied'])
+    return edit
+  }
+  // Every file a publication took out of the vault, by digest: the publisher moves it into the recovery area as
+  // `displaced.bin` (see "Where candidates are staged" in docs/obsidian-contract.md). `kept` names what must be among
+  // them from the hop that took it out onwards.
+  const displaced = () => new Set(Object.entries(treeListing(world.recovery())).filter(([name]) => name.endsWith('/displaced.bin')).map(([, digest]) => digest))
+  const kept = new Map()
+  const assertNothingDeleted = (hop) => { const now = displaced(); for (const [what, digest] of kept) assert.ok(now.has(digest), `${hop}: ${what} is kept in recovery`) }
+
+  // The earlier release publishes the vault, in layout 1.
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  assert.equal((await earlier.tick()).scopes[0].state, 'current')
+  earlier.stop()
+  assert.equal(world.manifest().schema, V1)
+  const earlierFiles = Object.entries(vaultFiles(world)).filter(([name]) => !name.endsWith('/'))
+  assert.ok(earlierFiles.length >= 3 && earlierFiles.every(([name]) => name.startsWith('notes/')))
+
+  // The person makes the vault their own: settings, a plugin of their choosing, a note Atelier never published, and
+  // an edit to a published note.
+  fs.mkdirSync(inVault('.obsidian', 'plugins', 'dataview'), { recursive: true })
+  fs.writeFileSync(inVault('.obsidian', 'appearance.json'), '{"theme":"moonstone","cssTheme":"Person"}\n')
+  fs.writeFileSync(inVault('.obsidian', 'app.json'), '{"spellcheck":false}\n')
+  fs.writeFileSync(inVault('.obsidian', 'plugins', 'dataview', 'data.json'), '{"theirs":true}\n')
+  const pluginListAsLeft = Buffer.from(JSON.stringify(['dataview', 'calendar']))
+  const coreSettingsAsLeft = Buffer.from(JSON.stringify({ graph: true, sync: true }))
+  fs.writeFileSync(inVault('.obsidian', 'community-plugins.json'), pluginListAsLeft)
+  fs.writeFileSync(inVault('.obsidian', 'core-plugins.json'), coreSettingsAsLeft)
+  fs.mkdirSync(inVault('Inbox'))
+  const ownNote = Buffer.from('# Errands\n\nOil for the lamp.\n')
+  fs.writeFileSync(inVault('Inbox', 'Errands.md'), ownNote)
+  const firstEdit = world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  const firstEditPath = path.relative(world.vault(), world.noteFile('east-wing:lantern')).split(path.sep).join('/')
+  let settingsAsLeft = ownSettings()
+  assert.deepEqual(Object.keys(settingsAsLeft).sort(), ['app.json', 'appearance.json', 'plugins/', 'plugins/dataview/', 'plugins/dataview/data.json'])
+  // What holds for the person's own things after any hop, whatever the release wrote beside them.
+  const assertThePersonsOwnSurvive = (hop) => {
+    assert.deepEqual(ownSettings(), settingsAsLeft, `${hop}: every settings path that is not Atelier's is byte-identical`)
+    assert.deepEqual(jsonOf('.obsidian', 'community-plugins.json'), ['dataview', 'calendar', PLUGIN_ID], `${hop}: the person's plugins stay enabled, in their order`)
+    assert.deepEqual(jsonOf('.obsidian', 'core-plugins.json'), { graph: true, sync: false, publish: false }, `${hop}: the person's own key is kept beside the policy's`)
+    assert.deepEqual(fs.readFileSync(inVault('Inbox', 'Errands.md')), ownNote, `${hop}: a note Atelier never published is untouched`)
+  }
+
+  // The first hop, to this release. The edited note holds the view in layout 1, exactly as the person left it.
+  const current = world.engine({ seams: releaseShipping() })
+  world.advance(1000)
+  assert.equal((await current.tick()).scopes[0].state, 'held-for-your-edit')
+  assert.equal(world.manifest().schema, V1)
+  assert.deepEqual(fs.readFileSync(inVault(firstEditPath)), firstEdit, 'the held note is untouched')
+  const first = await applyEdit('east-wing:lantern')
+  assert.equal(first.path, firstEditPath)
+  assert.equal((await settle(current)).state, 'current')
+  current.stop()
+  const afterFirstHop = world.manifest()
+  assert.deepEqual([afterFirstHop.schema, afterFirstHop.layoutVersion], [V2, 2])
+  assert.equal(afterFirstHop.ext[EXT].settings.pluginOwned.version, readPluginSource().version)
+  const pathsAfterFirstHop = Object.fromEntries(afterFirstHop.notes.map((note) => [note.nodeId, note.path]))
+  assert.deepEqual(pathsAfterFirstHop, { 'east-wing:compass': 'east-wing/notes/Compass rose.md', 'east-wing:lantern': 'east-wing/notes/Lantern room.md', 'west-wing:tide': 'west-wing/logs/Tide log.md' })
+  // The notes, the first edit in its source and in its note, and the bytes the person typed.
+  assert.match(fs.readFileSync(world.source('east-wing/notes/lantern.md'), 'utf8'), /twice a minute/)
+  assert.match(noteOf('east-wing:lantern'), /The lamp turns twice a minute\./)
+  assert.match(noteOf('east-wing:compass'), /North is painted red\./)
+  assert.match(noteOf('west-wing:tide'), /High water at noon\./)
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), first.objectRef)), firstEdit)
+  // No layout 1 file is left in the vault and none was deleted: each was moved to recovery, the edited one as the
+  // person left it. So were the two settings files the policy merged into, as the person had written them.
+  assert.deepEqual(Object.keys(vaultFiles(world)).filter((name) => name.startsWith('notes/') && !name.endsWith('/')), [])
+  for (const [name, digest] of earlierFiles) kept.set(name, name === firstEditPath ? digestOf(firstEdit) : digest)
+  kept.set('the plugin list as the person left it', digestOf(pluginListAsLeft))
+  kept.set('the core settings as the person left them', digestOf(coreSettingsAsLeft))
+  assertNothingDeleted('to this release')
+  assertThePersonsOwnSurvive('to this release')
+
+  // Between the releases the person goes on: a second edit, to another note, and a changed setting. A source changes too.
+  const secondEdit = world.editNote('west-wing:tide', 'High water at noon', 'High water at one')
+  fs.writeFileSync(inVault('.obsidian', 'appearance.json'), '{"theme":"obsidian","cssTheme":"Person"}\n')
+  fs.mkdirSync(inVault('.obsidian', 'snippets'))
+  fs.writeFileSync(inVault('.obsidian', 'snippets', 'person.css'), '.person { color: teal; }\n')
+  settingsAsLeft = ownSettings()
+  fs.appendFileSync(world.source('east-wing/notes/compass.md'), '\nSouth is painted white.\n')
+  const shippedMain = fs.readFileSync(inVault(PLUGIN_DIRECTORY, 'main.js'))
+  assert.deepEqual(shippedMain, readPluginSource().files.find((file) => file.name === 'main.js').bytes)
+  const compassAsPublished = fs.readFileSync(world.noteFile('east-wing:compass'))
+
+  // The second hop, to a changed release. The note the person is editing is left as it is while the release's own
+  // files and the changed source are published around it.
+  const later = world.engine({ seams: releaseShipping(LATER_PLUGIN) })
+  world.advance(1000)
+  assert.equal((await later.tick()).scopes[0].state, 'held-for-your-edit')
+  assert.deepEqual(fs.readFileSync(world.noteFile('west-wing:tide')), secondEdit, 'the held note is untouched')
+  assert.ok(fs.readFileSync(inVault(PLUGIN_DIRECTORY, 'main.js'), 'utf8').endsWith('// 99.0.0\n'), 'the held note does not keep the changed release out')
+  assert.match(noteOf('east-wing:compass'), /South is painted white\./)
+  const second = await applyEdit('west-wing:tide')
+  assert.equal((await settle(later)).state, 'current')
+  later.stop()
+  const afterSecondHop = world.manifest()
+  assert.deepEqual([afterSecondHop.schema, afterSecondHop.layoutVersion], [V2, 2])
+  assert.notEqual(afterSecondHop.generationId, afterFirstHop.generationId)
+  // The changed release is in: its plugin replaced the earlier one.
+  assert.equal(afterSecondHop.ext[EXT].settings.pluginOwned.version, LATER_PLUGIN.version)
+  assert.ok(fs.readFileSync(inVault(PLUGIN_DIRECTORY, 'main.js'), 'utf8').endsWith('// 99.0.0\n'))
+  // No note moved, and each holds what its source now says: both edits, and the line added at the source.
+  assert.deepEqual(Object.fromEntries(afterSecondHop.notes.map((note) => [note.nodeId, note.path])), pathsAfterFirstHop)
+  assert.match(fs.readFileSync(world.source('west-wing/logs/tide.md'), 'utf8'), /High water at one\./)
+  assert.match(fs.readFileSync(world.source('east-wing/notes/lantern.md'), 'utf8'), /twice a minute/)
+  assert.match(noteOf('east-wing:lantern'), /The lamp turns twice a minute\./)
+  assert.match(noteOf('west-wing:tide'), /High water at one\./)
+  assert.match(noteOf('east-wing:compass'), /North is painted red\.[\s\S]*South is painted white\./)
+  // The second edit became the published note, byte for byte; both edits are kept as the person typed them.
+  assert.deepEqual(fs.readFileSync(world.noteFile('west-wing:tide')), secondEdit)
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), second.objectRef)), secondEdit)
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), first.objectRef)), firstEdit)
+  assert.equal(world.pendingEdits().some((edit) => edit.closedAt === null), false, 'no edit is left queued')
+  // What this hop replaced was moved to recovery too, and nothing the first hop moved there was dropped by the second.
+  kept.set('the plugin file the changed release replaced', digestOf(shippedMain))
+  kept.set('the note the changed source replaced', digestOf(compassAsPublished))
+  assertNothingDeleted('to a changed release')
+  assertThePersonsOwnSurvive('to a changed release')
+  // The oracle can fail: a release that wrote into the person's settings would be seen.
+  fs.writeFileSync(inVault('.obsidian', 'appearance.json'), '{"theme":"moonstone"}\n')
+  assert.notDeepEqual(ownSettings(), settingsAsLeft)
 })
 
 test('prepareView keeps layout 1 exactly while the prior generation is in layout 1 and holds a note, and lays out again otherwise', (t) => {
