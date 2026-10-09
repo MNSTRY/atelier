@@ -474,7 +474,10 @@ const receiptLine = ({ receiptPath, receipt, validation }) => `[desktop-receipts
 // the existing writer and the console run. An evidence file that is a copy of
 // app output already counted as it arrived, and whose original is about to
 // be removed with the run's roots, is not counted a second time; everything
-// else is counted in full. An output that does not fit is refused whole: nothing of it
+// else is counted in full. That is a prediction: when a root is kept after all
+// (the console or a writer fails after the reservation, or a removal fails),
+// the run charges the credit back and says by how much what it keeps then
+// exceeds its allowance. An output that does not fit is refused whole: nothing of it
 // is written and nothing is shortened to fit. What is written instead is a
 // failed receipt from the reserve the bound sets aside, with its evidence
 // shortened and marked as shortened; when even that does not fit, nothing.
@@ -538,7 +541,7 @@ async function commitCompleteOutput({ custody, writeConsole = writeConsoleDefaul
 // The app log as evidence: a header line and the log the owned run wrote as the app's output arrived, every byte
 // of it counted then. When the root that holds the log is about to be removed, this copy replaces it and says
 // so; when the root is kept (asked for, or because cleanup could not be verified), both stay on disk and the
-// copy is counted in full.
+// copy is counted in full. A root kept only after the copy was credited has the credit charged back by the run.
 export function appLogEvidence({ gate, root, rootWillBeRemoved, io = fs }) {
   const log = path.join(root, 'app.log')
   if (!io.existsSync(log)) return null
@@ -584,6 +587,26 @@ async function commitShortenedFailure({ custody, writeConsole = writeConsoleDefa
   throw Object.assign(new Error('Whole-run output bound exceeded'), { code: 'output-budget-exceeded' })
 }
 
+// The final output of the owned small-fixture run, committed while its roots still exist: the receipt with what
+// the run observed, how its cleanup ended and the app log. The log's copy is credited against the app output
+// already counted only when the cleanup was verified and the roots are not asked to be kept, that is, when the
+// root that holds the original is about to be removed. `writeConsole` is for tests; the run writes to stdout.
+export async function finalizeOwnedSmallFixture({ custody, plan, keep = false, json = false, receiptDir, operator, candidate, host, gate, evidence = [], passed = false, capabilities, timings = {}, layoutRoot = null, startedAt, writeConsole }, cleanup, runError) {
+  const verified = !runError && cleanup.joined
+  const recordedCapabilities = verified ? capabilities : { ...capabilities, qualified: false }
+  const control = { error: runError?.message ?? null, cleanup, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, nativeOutput: custody.nativeUsed, failureReserve: custody.failureOutputReserve } }
+  const recorded = [...evidence, { role: null, name: `${gate}-owned-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(control, null, 2)}\n`) }]
+  const appLog = layoutRoot ? appLogEvidence({ gate, root: layoutRoot, rootWillBeRemoved: cleanup.joined && !keep }) : null
+  if (appLog) recorded.push(appLog)
+  // With --keep the manual steps name the kept workspace and instance; without it they keep their placeholders.
+  return commitOwnedOutput({ custody, plan, consolePlan: keep ? plan : planProcedure(plan.procedureId, { receiptDir, operator }), receiptDir, candidate, capabilities: recordedCapabilities, operator, host,
+    evidenceByGate: { [gate]: recorded }, passedByGate: { [gate]: verified ? passed : false }, timingsByGate: { [gate]: timings }, wallClock: { startedAt, endedAt: isoNow() }, json,
+    consoleNotes: keep ? [`[desktop-receipts] kept ${[...custody.roots.keys()].join(' ')}`] : [],
+    // Where the process table cannot be read (no /bin/ps, as on Windows) or a process remains, custody is unknown.
+    notes: cleanup.joined ? [] : [`The run could not verify that its processes ended (${cleanup.unknown.slice(0, 4).map((item) => String(item).slice(0, 160)).join('; ')}). Custody is unknown, so its directories are kept.`],
+    ...(writeConsole ? { writeConsole } : {}) })
+}
+
 // The small-fixture procedure as one owned run: its temporary roots, the
 // isolated app, the app's helper processes and every CLI call belong to one
 // lifecycle (lib/instance.mjs, OwnedRun) that ends them, bounds the output it
@@ -622,20 +645,8 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
       passed = run.passed
       timings = { ...timings, ...run.timings, comparison: run.comparison }
       plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layout.home, workspaceDir })
-    }, { keep: Boolean(args.keep), finalize: async (_value, cleanup, runError) => {
-      const verified = !runError && cleanup.joined
-      if (!verified) capabilities = { ...capabilities, qualified: false }
-      const control = { error: runError?.message ?? null, cleanup, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, nativeOutput: custody.nativeUsed, failureReserve: custody.failureOutputReserve } }
-      const recorded = [...evidence, { role: null, name: `${gate}-owned-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(control, null, 2)}\n`) }]
-      const appLog = layout ? appLogEvidence({ gate, root: layout.root, rootWillBeRemoved: cleanup.joined && !args.keep }) : null
-      if (appLog) recorded.push(appLog)
-      // With --keep the manual steps name the kept workspace and instance; without it they keep their placeholders.
-      return commitOwnedOutput({ custody, plan, consolePlan: args.keep ? plan : planProcedure(plan.procedureId, { receiptDir, operator }), receiptDir, candidate, capabilities, operator, host,
-        evidenceByGate: { [gate]: recorded }, passedByGate: { [gate]: verified ? passed : false }, timingsByGate: { [gate]: timings }, wallClock: { startedAt, endedAt: isoNow() }, json: Boolean(args.json),
-        consoleNotes: args.keep ? [`[desktop-receipts] kept ${[...custody.roots.keys()].join(' ')}`] : [],
-        // Where the process table cannot be read (no /bin/ps, as on Windows) or a process remains, custody is unknown.
-        notes: cleanup.joined ? [] : [`The run could not verify that its processes ended (${cleanup.unknown.slice(0, 4).map((item) => String(item).slice(0, 160)).join('; ')}). Custody is unknown, so its directories are kept.`] })
-    } })).value
+    }, { keep: Boolean(args.keep), finalize: (_value, cleanup, runError) => finalizeOwnedSmallFixture({ custody, plan, keep: Boolean(args.keep), json: Boolean(args.json), receiptDir, operator, candidate, host,
+      gate, evidence, passed, capabilities, timings, layoutRoot: layout?.root ?? null, startedAt }, cleanup, runError) })).value
   } catch (error) {
     // Bounded, and paid from the reserve the output bound sets aside for it. This is a control line, not a receipt:
     // a run that refused its final output keeps every root, and the writer keeps whatever it had already written.
@@ -649,6 +660,15 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
   }
 }
 
+// The other procedures do not run owned. Limits, stated rather than hidden:
+//   - their instances are signalled as lib/instance.mjs describes outside an owned run: through the handles
+//     spawn returned, and a process group only while its leader is still held; nothing is signalled by number
+//     there, and nothing below an app is ended by this runner;
+//   - AP-03 interrupts the service it started with SIGKILL by the number the service's own status reported a
+//     moment before, without reading that number back first (lib/ap03.mjs, through lib/service-world.mjs);
+//   - at the end the temporary directories this runner created (its own root, and each launched instance's
+//     root) are removed by path, with no check that the path still names the directory it created, and whether
+//     or not the instances were seen to end. Links inside them are removed as links.
 async function runIsolated({ plan, args, candidate, operator, host, receiptDir }) {
   if (plan.app === 'small-fixture') return runOwnedSmallFixture({ plan, args, candidate, operator, host, receiptDir })
   const { createLayout, Instance } = await import('../../experiments/obsidian-publication/lib/instance.mjs')

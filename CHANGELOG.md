@@ -143,6 +143,18 @@
   the service reads an explicit `prepareViewCooperatively: null` among its
   engine seams as the engine does: there is no cooperative preparation, so a
   replaced `prepareView` prepares the view.
+- The desktop acceptance procedures (`scripts/obsidian/desktop-receipts.mjs`,
+  maintainer tooling that is not shipped) no longer signal the isolated app
+  by its process number outside the small-fixture run: quitting signals it
+  through the handle spawn returned and waits on that handle, a launch that
+  gives up signals the app's process group only while that handle still
+  holds the app, and a launch under the user's own HOME is refused before the
+  stale command-line socket there is removed. In the small-fixture run, a
+  process first recorded from a process table passes lineage on only from the
+  next read; a process the table shows, unrecorded, under a parent that
+  exited or changed during the read is noted, and the directories are kept;
+  and the app log copy's credit is charged back when a directory is kept
+  after all, with the excess over the output bound's allowance reported.
 - `atelier obsidian`, the Obsidian maintenance service and its login item take
   `--personal-home DIR` instead of `--project`, and then follow the generation
   last confirmed in that private home of a personal workspace. The head of the
