@@ -2691,6 +2691,7 @@ function ap03ServiceWorld(t, label, { spawn = childProcess.spawn } = {}) {
 
 test('AP-03 cleanup: a deliberately left service ends before its temporary workspace is removed', needsExchange, async (t) => {
   let runtime, pid, dir
+  const cleanupStarts = []
   // Regression-failure recovery uses only the unreaped child handle, even if a mutation removes the record first.
   t.after(async () => {
     if (!runtime || !pid) return
@@ -2707,7 +2708,15 @@ test('AP-03 cleanup: a deliberately left service ends before its temporary works
     assert.equal(started.state, 'healthy')
     assert.ok(Number.isInteger(pid) && runtime.alive(pid))
     assert.ok(fs.existsSync(dir))
+    const stop = runtime.stop
+    runtime.stop = async (...args) => {
+      let recordReadable = false
+      try { recordReadable = runtime.record()?.pid === pid } catch { /* capture the failed ordering */ }
+      cleanupStarts.push({ directoryPresent: fs.existsSync(dir), recordReadable })
+      return stop(...args)
+    }
   })
+  assert.deepEqual(cleanupStarts[0], { directoryPresent: true, recordReadable: true }, 'cleanup must start before workspace and record removal')
   assert.equal(runtime.alive(pid), false, 'cleanup must stop the service while its record is still readable')
   assert.equal(fs.existsSync(dir), false, 'workspace removal follows service cleanup')
 })
