@@ -1036,9 +1036,13 @@ answers when it starts, and refuses a loader that answers a promise or any
 other thenable, such as `loadBoundProjectOffThread`, with
 `service-loader-not-synchronous`, before it reads anything from it, listens or
 records anything; a promise it was handed is let go, and its refusal, if it
-is refused, does not go unhandled. The plugin's status read already allows for
-such a loader without waiting for it (see "The channel" in
-[obsidian-plugin.md](obsidian-plugin.md)).
+is refused, does not go unhandled. Started by a login item (`--startup`), the
+service asks its loader once for both the lookup of its workspace and its own
+start. A loader that answers a promise there is never handed to the workspace
+resolution: the refusal is recorded in the workspace the unit names, and the
+process ends with 0, so the service manager does not start it again at once.
+The plugin's status read already allows for such a loader without waiting for
+it (see "The channel" in [obsidian-plugin.md](obsidian-plugin.md)).
 
 **Since that measurement.** The engine prepares each view cooperatively and
 the publisher yields between complete units, so the service answers health and
@@ -1054,7 +1058,11 @@ kept notes with their candidates reads asynchronously, sixteen at a time, and
 does not hold the listener. A service in one of those stretches does not
 answer until it ends, and is `busy` if that outlasts the probe. A request can
 hold the listener too: the plugin's status read loads the project on the event
-loop when a configuration file changed, unless the loader answers a promise.
+loop when a configuration file changed, every two and a half minutes, and at
+every request while one of those files vouches for nothing. None of those
+loads is taken off the loop: the service starts only on a loader that answers
+at once, and refuses one that answers a promise. A load that holds the loop
+for a second or more is logged (`status-project-loaded`).
 
 What the waits cost. A wait comes after about 8 ms of work or 32 units,
 whichever is first, and around each one the engine checks that the tick's
