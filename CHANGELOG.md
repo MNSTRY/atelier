@@ -43,6 +43,19 @@
   another scope, or unload. A republish that names a different channel resets
   the display to `connecting` without repeating an unchanged notice, and the
   plugin opens no channel before startup admits it or after unload.
+- The Obsidian maintenance service tells a plugin a view's stored freshness
+  and pending-edit count only while the project allows that view at the moment
+  of the request: its Obsidian settings are enabled and declare the view, and
+  its workspace pointer still names the workspace the service runs for.
+  Before, a view that was turned off or taken out of the settings was still
+  told what the service had stored, until the next tick and, for its
+  generations and counts, after it. The answer is now sealed as before with
+  `view` and `pendingEdits` null, so the plugin shows `Atelier: stale`, keeps
+  its session and asks again; anything that cannot be established (settings
+  that refuse, a project that does not load) is answered the same way. The
+  project is loaded again only when a file that decides it changed, compared
+  by content at every request. A loader that answers a promise is never
+  waited for: its view is told nothing until the load has answered.
 - The real-app acceptance run of the small-fixture desktop procedure
   (`scripts/obsidian/desktop-receipts.mjs`, maintainer tooling that is not
   shipped) ends the processes it started, removes the temporary directories it

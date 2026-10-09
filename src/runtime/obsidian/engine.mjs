@@ -137,7 +137,7 @@ const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
 // The configuration a tick observes. A project bound to a personal workspace adds the person's authored manifest and
 // overlay and its generation's record: a change to any of them is a configuration change, so every view is prepared
 // again, asks the composition, and is refused at once when the generation no longer holds.
-const configFilesOf = (project) => [...listConfigFiles(project), ...personalWorkspaceInputs(project).map((absolute) => ({ key: configKey(absolute), changeClass: 'config', absolute }))]
+export const configFilesOf = (project) => [...listConfigFiles(project), ...personalWorkspaceInputs(project).map((absolute) => ({ key: configKey(absolute), changeClass: 'config', absolute }))]
 
 // An editor adapter that `build` makes, synchronously or not, the first time the publisher calls it; a refusal of
 // `build` is thrown from that call, and `refusal()` answers it afterwards.

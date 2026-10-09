@@ -353,6 +353,34 @@ the vault's key without sending it, and the service proves it first
 | `POST /plugin/release` | `sessionId`, `counter`, `mac` | sealed: whether the session was released |
 | `POST /plugin/status` | `sessionId`, `counter`, `mac` | sealed: the view's state, reason, verification, committed and prepared generation, held notes (counted, not named), retained edits, open pending edits, and the service's own state |
 
+A status answer carries the view and its pending edits only while the project
+allows that view at the moment of the request, not as of the last tick
+(`src/runtime/obsidian/view-permission.mjs`): its Obsidian settings are
+enabled and declare the view, and its workspace pointer still names the
+workspace this service runs for, with its private state where the service
+keeps it. Otherwise the answer is still sealed and still carries the service's
+own state, but `view` and `pendingEdits` are `null`, which the plugin already
+reads as nothing known about the view. That covers a view turned off or taken
+out of the settings before the next tick, and the freshness a later tick
+writes for it, which keeps its generations and counts. It also covers anything
+that cannot be established: settings that refuse, a project that does not
+load, a pointer that cannot be read. The plugin then shows `Atelier: stale`
+with the reason "no freshness recorded", keeps its session and asks again at
+its next round; it is not told why, and it remembers nothing of the view to
+show later.
+
+The project is loaded again only when a file that decides it changed (the
+files the engine observes as configuration), compared at every request by a
+digest of their bytes; the pointer and the place of the private state are read
+at every request. Loading runs Git in child processes, which would otherwise
+happen every two seconds for every open vault. A file among them that is a
+link vouches for nothing, and the project is then loaded at every request. A
+loader that answers a promise is never waited for, because the plugin gives a
+request a second and a half: its view is told nothing until the load has
+answered, twice when the service has just started and once after a change,
+and a later request is answered from it. No command or service binds such a
+loader yet (see "Personal workspaces" in [obsidian.md](obsidian.md)).
+
 Refusals, before anything else is looked at: `Host` other than the listener's
 literal loopback authority, a cross-site `Origin` or `Sec-Fetch-Site`, a path
 other than one of the nine exactly (a query included), or another method (the
@@ -431,7 +459,9 @@ is authenticated, so they only ever decide what is shown.
   directory changed) and one HMAC per vault; at most four handshakes wait per
   view, and recorded challenges can keep them filled for at most about
   thirty seconds after a restart, since a challenge is answered only within
-  thirty seconds of the time it names.
+  thirty seconds of the time it names. A status request of a session costs a
+  read of the project's configuration files and of its workspace pointer; the
+  project itself is loaded again only when one of those files changed.
 - Egress. `plugins/` is in the egress scan, which fails a request whose target
   is not a literal loopback address, and the release audit requires the three
   plugin files in the package and scans them in the tarball.
@@ -513,6 +543,14 @@ note open in the editor.
   republished data, notice deduplication and recovery, and late answers after
   a channel change or unload. It opens no service or app and writes no plugin
   data. These tests complement the real-listener and real-app checks below.
+- `test/obsidian-view-permission.test.mjs` asks whether the project allows a
+  view the way the service asks before a status answer, over real project
+  files, the real loader and the real workspace resolution, with no service
+  or listener: every way a view or its workspace is withdrawn and given back;
+  one load per change however often a view is asked about; a change that
+  keeps a file's size and modification time; a change that lands during a
+  load; a configuration file that is a link; a loader that fails; and a loader
+  that answers a promise, one load at a time, including one that fails.
 - `test/obsidian-plugin.test.mjs` runs the shipped `main.js` in a stand-in app
   against a real listener on an ephemeral loopback port: parity of the
   plugin's constants and of every proof and MAC with the channel contract (a
@@ -542,7 +580,11 @@ note open in the editor.
   drift left for the person asked about once),
   and an upgrade; the service publishing the plugin and the plugin it
   published holding the view; qualification from a plugin report, with one
-  launch or two; and `status` and `open` reporting it. A spawn guard refuses
+  launch or two; `status` and `open` reporting it; a view the project turns
+  off or no longer declares, told nothing of what the service stored about
+  it, before the next tick and after it, and told as before once it is
+  allowed again; and a loader that answers a promise, never waited for, with
+  the plugin keeping its session meanwhile. A spawn guard refuses
   any child of the suite that could reach an Obsidian with the developer's
   own `HOME`.
 - The same file has three real-app tests, skipped unless
