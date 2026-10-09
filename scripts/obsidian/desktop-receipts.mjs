@@ -471,15 +471,32 @@ const receiptLine = ({ receiptPath, receipt, validation }) => `[desktop-receipts
 // receipt is first built by the pure builder (no file is written), then the
 // bytes of the receipts, of the evidence copies beside them and of the console
 // text are reserved together against the run's output bound, and only then do
-// the existing writer and the console run. An output that does not fit is
-// refused whole: nothing is written and nothing is shortened to fit.
-export async function commitOwnedOutput({ custody, plan, consolePlan = plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, recordedAt, json = false, consoleNotes = [],
-  writeConsole = (output) => new Promise((resolve, reject) => { process.stdout.write(output, (error) => (error ? reject(error) : resolve())) }) }) {
+// the existing writer and the console run. Evidence is charged only beyond the
+// app and command-line output already counted as it arrived, so no byte is
+// counted twice. An output that does not fit is refused whole: nothing of it
+// is written and nothing is shortened to fit. What is written instead is a
+// failed receipt from the reserve the bound sets aside, with its evidence
+// shortened and marked as shortened; when even that does not fit, nothing.
+export async function commitOwnedOutput(options) {
+  try {
+    return await commitCompleteOutput(options)
+  } catch (refusal) {
+    if (refusal?.code !== 'output-budget-exceeded') throw refusal
+    const reduced = await commitShortenedFailure(options)
+    throw Object.assign(new Error('The complete output exceeded the output bound; a failed receipt with shortened evidence was recorded instead'), { code: 'output-budget-exceeded', shortenedOutput: reduced })
+  }
+}
+
+const writeConsoleDefault = (output) => new Promise((resolve, reject) => { process.stdout.write(output, (error) => (error ? reject(error) : resolve())) })
+
+function stageOwnedOutput({ plan, consolePlan = plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, recordedAt, json = false, consoleNotes = [], notes = [] }, serialize) {
   const staged = []
   const written = recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, ...(recordedAt ? { recordedAt } : {}), writeReceipt: (input) => {
+    // The same input object is later given to the writer, notes included.
+    input.notes = [...input.notes, ...notes]
     const receipt = buildReceipt(input)
     const result = { receiptPath: path.join(input.receiptDir, `${input.gate}.json`), receipt, validation: validateAcceptanceReceipt(receipt, { gate: input.gate }) }
-    staged.push({ input, serialized: custody.serializeFinal(receipt) })
+    staged.push({ input, serialized: serialize(receipt) })
     return result
   } })
   const lines = []
@@ -488,22 +505,69 @@ export async function commitOwnedOutput({ custody, plan, consolePlan = plan, rec
     if (json) lines.push(staged[index].serialized.slice(0, -1))
   }
   const consoleText = `${[...lines, ...consoleNotes, ...planLines(consolePlan)].join('\n')}\n`
-  const bytes = staged.reduce((total, item) => total + Buffer.byteLength(item.serialized) + item.input.evidence.reduce((sum, entry) => sum + entry.bytes.length, 0), 0) + Buffer.byteLength(consoleText)
-  return custody.commitFinalOutput({ bytes, commit: async () => {
-    // The existing writer, given the inputs the reservation was computed from.
-    for (const item of staged) {
-      const actual = writeGateReceipt(item.input)
-      if (`${JSON.stringify(actual.receipt, null, 2)}\n` !== item.serialized) throw new Error('Receipt changed between reservation and writing')
+  const evidenceBytes = staged.reduce((total, item) => total + item.input.evidence.reduce((sum, entry) => sum + entry.bytes.length, 0), 0)
+  const bytes = staged.reduce((total, item) => total + Buffer.byteLength(item.serialized), 0) + Buffer.byteLength(consoleText)
+  return { written, staged, consoleText, bytes, evidenceBytes }
+}
+
+async function writeStagedOutput({ custody, written, staged, consoleText, plan, writeConsole }) {
+  // The existing writer, given the inputs the reservation was computed from.
+  for (const item of staged) {
+    const actual = writeGateReceipt(item.input)
+    if (`${JSON.stringify(actual.receipt, null, 2)}\n` !== item.serialized) throw new Error('Receipt changed between reservation and writing')
+  }
+  let timer
+  try {
+    await Promise.race([
+      writeConsole(consoleText),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Final console output did not complete in the cleanup budget')), Math.max(0, (custody.cleanupUntil ?? custody.deadline) - custody.now())) }),
+    ])
+  } finally { clearTimeout(timer) }
+  return { written, plan, outputHandled: true }
+}
+
+async function commitCompleteOutput({ custody, writeConsole = writeConsoleDefault, ...options }) {
+  const stage = stageOwnedOutput(options, (receipt) => custody.serializeFinal(receipt))
+  const { charge } = custody.finalCharge({ bytes: stage.bytes, evidenceBytes: stage.evidenceBytes })
+  return custody.commitFinalOutput({ bytes: stage.bytes, evidenceBytes: stage.evidenceBytes, commit: async () => ({ ...await writeStagedOutput({ custody, ...stage, plan: options.plan, writeConsole }), outputBytes: stage.bytes + stage.evidenceBytes, outputCharged: charge }) })
+}
+
+// Strings, lists and nesting cut to a fixed size, so a failed receipt that embeds them is bounded.
+export function shortenForReceipt(value, depth = 0) {
+  if (typeof value === 'string') return value.length > 512 ? `${value.slice(0, 512)}...[shortened from ${value.length} characters]` : value
+  if (value === null || typeof value !== 'object') return value
+  if (depth >= 6) return '[shortened]'
+  if (Array.isArray(value)) return [...value.slice(0, 32).map((item) => shortenForReceipt(item, depth + 1)), ...(value.length > 32 ? [`[${value.length - 32} more shortened]`] : [])]
+  return Object.fromEntries(Object.entries(value).slice(0, 64).map(([key, item]) => [key, shortenForReceipt(item, depth + 1)]))
+}
+export const SHORTENED_EVIDENCE_CAPS = Object.freeze([32 * 1024, 8 * 1024, 2 * 1024, 512, 0])
+
+// A failed receipt from the reserve: every evidence file cut to a cap, ending
+// with a line that says how much was kept, and the receipt's notes naming each
+// file that was cut. Smaller caps are tried until it fits.
+async function commitShortenedFailure({ custody, writeConsole = writeConsoleDefault, ...options }) {
+  for (const cap of SHORTENED_EVIDENCE_CAPS) {
+    const shortened = []
+    const cut = (item) => {
+      if (item.bytes.length <= cap) return item
+      shortened.push({ name: item.name, byteLength: item.bytes.length, keptBytes: cap })
+      return { ...item, bytes: Buffer.concat([item.bytes.subarray(0, cap), Buffer.from(`\n[shortened to fit the output bound: kept ${cap} of ${item.bytes.length} bytes]\n`)]) }
     }
-    let timer
-    try {
-      await Promise.race([
-        writeConsole(consoleText),
-        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Final console output did not complete in the cleanup budget')), Math.max(0, (custody.cleanupUntil ?? custody.deadline) - custody.now())) }),
-      ])
-    } finally { clearTimeout(timer) }
-    return { written, plan, outputHandled: true, outputBytes: bytes }
-  } })
+    const evidenceByGate = Object.fromEntries(Object.entries(options.evidenceByGate ?? {}).map(([gate, items]) => [gate, items.map(cut)]))
+    const gates = options.plan.gates
+    const notes = [...(options.notes ?? []),
+      'The complete output did not fit the run\'s output bound. This receipt records a failed run; its capabilities and timings are shortened.',
+      ...(shortened.length > 0 ? [`Evidence shortened to fit the output bound: ${shortened.slice(0, 8).map((item) => `${item.name} kept ${item.keptBytes} of ${item.byteLength} bytes`).join('; ')}${shortened.length > 8 ? `; and ${shortened.length - 8} more` : ''}.`] : [])]
+    const stage = stageOwnedOutput({ ...options, evidenceByGate, notes,
+      capabilities: { ...shortenForReceipt(options.capabilities ?? {}), qualified: false },
+      passedByGate: Object.fromEntries(gates.map((gate) => [gate, false])),
+      timingsByGate: Object.fromEntries(gates.map((gate) => [gate, shortenForReceipt(options.timingsByGate?.[gate] ?? null)])),
+      consoleNotes: [...(options.consoleNotes ?? []), '[desktop-receipts] the complete output exceeded the output bound; a failed receipt with shortened evidence was recorded'] }, (receipt) => `${JSON.stringify(receipt, null, 2)}\n`)
+    const bytes = stage.bytes + stage.evidenceBytes
+    if (bytes > custody.reducedAllowance) continue
+    return custody.commitFromReserve({ bytes, commit: async () => ({ ...await writeStagedOutput({ custody, ...stage, plan: options.plan, writeConsole }), outputBytes: bytes, shortened, cap }) })
+  }
+  throw Object.assign(new Error('Whole-run output bound exceeded'), { code: 'output-budget-exceeded' })
 }
 
 // The small-fixture procedure as one owned run: its temporary roots, the
@@ -547,14 +611,16 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
     }, { keep: Boolean(args.keep), finalize: async (_value, cleanup, runError) => {
       const verified = !runError && cleanup.joined
       if (!verified) capabilities = { ...capabilities, qualified: false }
-      const control = { error: runError?.message ?? null, cleanup, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, failureReserve: custody.failureOutputReserve } }
+      const control = { error: runError?.message ?? null, cleanup, outputBudget: { limit: custody.outputLimit, usedBeforeFinalCommit: custody.outputUsed, nativeOutput: custody.nativeUsed, failureReserve: custody.failureOutputReserve } }
       const recorded = [...evidence, { role: null, name: `${gate}-owned-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(control, null, 2)}\n`) }]
       const log = layout ? path.join(layout.root, 'app.log') : null
       if (log && fs.existsSync(log)) recorded.push({ role: null, name: `${gate}-app-${toIdentifier(path.basename(layout.root))}.log`, bytes: Buffer.concat([Buffer.from(`# app.log of ${layout.root}\n`), fs.readFileSync(log)]) })
       // With --keep the manual steps name the kept workspace and instance; without it they keep their placeholders.
       return commitOwnedOutput({ custody, plan, consolePlan: args.keep ? plan : planProcedure(plan.procedureId, { receiptDir, operator }), receiptDir, candidate, capabilities, operator, host,
         evidenceByGate: { [gate]: recorded }, passedByGate: { [gate]: verified ? passed : false }, timingsByGate: { [gate]: timings }, wallClock: { startedAt, endedAt: isoNow() }, json: Boolean(args.json),
-        consoleNotes: args.keep ? [`[desktop-receipts] kept ${[...custody.roots.keys()].join(' ')}`] : [] })
+        consoleNotes: args.keep ? [`[desktop-receipts] kept ${[...custody.roots.keys()].join(' ')}`] : [],
+        // Where the process table cannot be read (no /bin/ps, as on Windows) or a process remains, custody is unknown.
+        notes: cleanup.joined ? [] : [`The run could not verify that its processes ended (${cleanup.unknown.slice(0, 4).map((item) => String(item).slice(0, 160)).join('; ')}). Custody is unknown, so its directories are kept.`] })
     } })).value
   } catch (error) {
     // Bounded, and paid from the reserve the output bound sets aside for it. This is a control line, not a receipt:

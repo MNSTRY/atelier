@@ -24,10 +24,11 @@ export const sha256 = (value) => createHash('sha256').update(value).digest('hex'
 // dataRoot lets the vault, staging and recovery live on another volume (the
 // disk-full case) while the app profile stays on a healthy one. With an owned
 // run, a root created here is that run's to remove and is recorded before it
-// is populated; a root the caller names stays the caller's.
+// is populated; a root the caller names stays the caller's. As before, only
+// an omitted root or data root is defaulted: an explicit null is refused.
 export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
-  root ??= custody ? custody.allocateRoot('atelier-g00-') : io.mkdtempSync(path.join(io.realpathSync(os.tmpdir()), 'atelier-g00-'));
-  dataRoot ??= root;
+  if (root === undefined) root = custody ? custody.allocateRoot('atelier-g00-') : io.mkdtempSync(path.join(io.realpathSync(os.tmpdir()), 'atelier-g00-'));
+  if (dataRoot === undefined) dataRoot = root;
   const layout = { root, home: path.join(root, 'home'), profile: path.join(root, 'profile'), vault: path.join(dataRoot, 'vault'),
     staging: path.join(dataRoot, 'staging'), recovery: path.join(dataRoot, 'recovery') };
   for (const dir of [layout.home, layout.profile, path.join(layout.vault, 'notes'), layout.staging, layout.recovery]) io.mkdirSync(dir, { recursive: true });
@@ -47,8 +48,9 @@ export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
 //     handle reports an exit the process number cannot belong to anything
 //     else, and a handle that has reported one is never signalled;
 //   - a process further down is owned only by lineage: the process table
-//     showed it as the child of a process already owned, and its number, user,
-//     start time and command are read again immediately before every signal;
+//     showed it as the child of a process already owned. Immediately before
+//     every signal it is read back alone, and it is signalled only if its
+//     number, user, start time and command are still the ones recorded;
 //   - a directory is owned only when this run created it, and is removed only
 //     while the path still names that same directory (device and file number).
 // A process that merely names one of the run's directories on its command line
@@ -57,14 +59,21 @@ export function createLayout(root, dataRoot, { custody, io = fs } = {}) {
 // A process table that cannot be read is unknown custody, never proof of exit.
 //
 // Limits, stated rather than hidden. The deadline is cooperative: synchronous
-// work is not interrupted. Between a descendant's readback and its signal
-// there remains the time of one system call. A process that detaches itself
-// from the app and names none of the run's directories is not seen at all;
-// the app's output streams, which such a process inherits, must still close
-// before the run counts the app as gone.
+// work is not interrupted. A descendant's readback and its signal run in one
+// turn of this process, with nothing scheduled between them, but the readback
+// is a separate ps process: the time from ps reading the identity to the
+// signal is that process's exit and this one's return from waiting on it, a
+// few milliseconds on an idle host and more on a loaded one. A descendant that
+// exits inside that time and whose number is given to a new process at once
+// would be signalled; macOS offers no handle on a process that is not one's
+// own child that would close this. A process that detaches itself from the
+// app and names none of the run's directories is not seen at all; the app's
+// output streams, which such a process inherits, must still close before the
+// run counts the app as gone, and when they do not, the run stops waiting on
+// them so that it can end and report.
 // ---------------------------------------------------------------------------
 
-const PS_ARGS = ['-ww', '-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'uid=', '-o', 'stat=', '-o', 'lstart=', '-o', 'command='];
+const PS_FIELDS = ['-o', 'pid=', '-o', 'ppid=', '-o', 'uid=', '-o', 'stat=', '-o', 'lstart=', '-o', 'command='];
 // One row per process. The user number is signed (the unprivileged account is
 // negative on macOS). State Z is a process that has exited and only awaits
 // collection by its parent.
@@ -83,7 +92,32 @@ export function parseProcessTable(text) {
 }
 
 // LC_ALL=C keeps the start time in one format whatever the session's locale.
-export const readProcessTable = (timeout = 5000) => parseProcessTable(execFileSync('/bin/ps', PS_ARGS, { encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' } }));
+const psOptions = (timeout) => ({ encoding: 'utf8', timeout, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
+const psFailure = (what, error) => new Error(`${what} could not be read (${error.code ?? error.signal ?? error.status ?? 'failed'})`);
+
+// The whole table, read without blocking this process: on a busy desktop one
+// read takes most of a second, and the app's output must be read meanwhile.
+export const readProcessTable = (timeout = 5000) => new Promise((resolve, reject) => {
+  execFile('/bin/ps', ['-ww', '-A', ...PS_FIELDS], psOptions(timeout), (error, stdout) => {
+    if (error) { reject(psFailure('The process table', error)); return; }
+    try { resolve(parseProcessTable(stdout)); } catch (failure) { reject(failure); }
+  });
+});
+
+// One process, read synchronously so that its signal can follow in the same
+// turn. Null when no process holds the number (ps answers 1 and prints nothing).
+export function readOneProcess(pid, timeout = 5000) {
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error('A process number is a positive integer');
+  let text;
+  try { text = execFileSync('/bin/ps', ['-ww', '-p', String(pid), ...PS_FIELDS], { ...psOptions(timeout), stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch (error) {
+    if (error.status === 1 && String(error.stdout ?? '').trim() === '' && String(error.stderr ?? '').trim() === '') return null;
+    throw psFailure(`Process ${pid}`, error);
+  }
+  const rows = parseProcessTable(text);
+  if (rows.length !== 1 || rows[0].pid !== pid) throw new Error(`Process ${pid} could not be read (unexpected answer)`);
+  return rows[0];
+}
 
 const sameProcess = (a, b) => a.pid === b.pid && a.uid === b.uid && a.start === b.start && a.command === b.command;
 const namesProfile = (command, profile) => {
@@ -105,23 +139,29 @@ const directoryIdentity = (io, target) => {
   return stat.isSymbolicLink() || !stat.isDirectory() ? null : `${stat.dev}:${stat.ino}`;
 };
 const outputRefusal = () => Object.assign(new Error('Whole-run output bound exceeded'), { code: 'output-budget-exceeded' });
+// The room in the reserve kept for the failure line; the rest of the reserve may hold a failed receipt.
+export const FAILURE_LINE_BYTES = 4096;
 
 export class OwnedRun {
-  constructor({ readTable = readProcessTable, signal = (pid, name) => process.kill(pid, name), now = Date.now, pause = sleep, uid = process.getuid?.(), self = process.pid, io = fs,
+  constructor({ readTable = readProcessTable, readOne = readOneProcess, signal = (pid, name) => process.kill(pid, name), now = Date.now, pause = sleep, uid = process.getuid?.(), self = process.pid, io = fs,
     workMs = 900000, cleanupMs = 120000, watchMs = 1000, outputBytes = 64 * 1024 * 1024 } = {}) {
-    this.readTable = readTable; this.signal = signal; this.now = now; this.pause = pause; this.uid = uid; this.self = self; this.io = io;
+    this.readTable = readTable; this.readOne = readOne; this.signal = signal; this.now = now; this.pause = pause; this.uid = uid; this.self = self; this.io = io;
     this.deadline = now() + workMs; this.cleanupMs = cleanupMs; this.watchMs = watchMs;
-    this.outputLimit = outputBytes; this.outputUsed = 0; this.failureOutputReserve = Math.min(4096, Math.floor(outputBytes / 16)); this.failureOutputUsed = 0;
+    // The output bound: everything the run keeps, counted once. A reserve (a sixteenth, at most 256 KiB) is set
+    // aside for what a failed run still says: a failed receipt with shortened evidence, and a failure line.
+    this.outputLimit = outputBytes; this.outputUsed = 0; this.failureOutputReserve = Math.min(256 * 1024, Math.floor(outputBytes / 16)); this.failureOutputUsed = 0;
+    this.nativeUsed = 0; this.nativeCredited = 0; // app and command-line output counted as it arrived, and how much of it final evidence has reused
     this.roots = new Map(); // path -> identity of the directory this run created there
     this.profiles = new Set(); // profile directories of the apps this run started; like the roots, observed and never a reason to signal
     this.children = new Set(); // processes this run spawned and has not yet seen closed, each held by its handle
     this.descendants = new Map(); // number -> identity of a process seen as the child of an owned process
     this.strays = new Map(); // number -> identity of a process tied to this run that it does not own, and so never signals
-    this.unknown = new Set(); this.watchers = new Set();
+    this.unknown = new Set(); this.watchers = new Set(); this.reading = null; this.tableReads = 0;
   }
 
   assertActive() { if (this.failure) throw this.failure; if (this.now() >= this.deadline) throw this.fail('Whole-run deadline exceeded'); }
   fail(message) { return this.failure ??= new Error(message); }
+  readbackMs() { return Math.max(1, Math.min(5000, (this.cleanupUntil ?? this.deadline) - this.now())); }
 
   // -- directories ----------------------------------------------------------
 
@@ -154,7 +194,8 @@ export class OwnedRun {
     if (!Number.isSafeInteger(bytes) || bytes < 0 || this.outputUsed + bytes > this.outputAllowance) { const error = outputRefusal(); this.failure ??= error; throw error; }
     this.outputUsed += bytes;
   }
-  consume(bytes) { this.assertActive(); this.reserveOutput(bytes); }
+  // App and command-line output, counted as it arrives and before it is kept.
+  consume(bytes) { this.assertActive(); this.reserveOutput(bytes); this.nativeUsed += bytes; }
   // The bytes the receipt writer will write (two-space JSON and a newline). A
   // document that does not fit is refused whole; it is never shortened to fit.
   serializeFinal(value) {
@@ -162,8 +203,26 @@ export class OwnedRun {
     if (Buffer.byteLength(text) > this.outputAllowance - this.outputUsed) throw outputRefusal();
     return text;
   }
+  // What the final output adds to the bound. Evidence is mostly the app and command-line output already counted
+  // as it arrived, so it is charged only beyond that: every byte the run keeps is counted once.
+  finalCharge({ bytes = 0, evidenceBytes = 0 }) {
+    const credit = Math.min(evidenceBytes, this.nativeUsed - this.nativeCredited);
+    return { charge: bytes + evidenceBytes - credit, credit };
+  }
   // One reservation for everything the final output will write, made before any of it is written.
-  async commitFinalOutput({ bytes, commit }) { this.reserveOutput(bytes); return commit(); }
+  async commitFinalOutput({ bytes, evidenceBytes = 0, commit }) {
+    const { charge, credit } = this.finalCharge({ bytes, evidenceBytes });
+    this.reserveOutput(charge);
+    this.nativeCredited += credit;
+    return commit();
+  }
+  // What a failed receipt may use: the reserve, less the room kept for the failure line.
+  get reducedAllowance() { return Math.max(0, this.failureOutputReserve - this.failureOutputUsed - Math.min(FAILURE_LINE_BYTES, this.failureOutputReserve)); }
+  async commitFromReserve({ bytes, commit }) {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.reducedAllowance) throw outputRefusal();
+    this.failureOutputUsed += bytes; this.outputUsed += bytes;
+    return commit();
+  }
   // What a failed run says when it can promise nothing else: bounded, paid from
   // its own reserve, naming the roots it kept. It is not a receipt.
   failureDiagnostic({ procedureId = null, error = null, retainedRoots = [] } = {}) {
@@ -192,14 +251,23 @@ export class OwnedRun {
   unreaped(entry) { return Number.isInteger(entry.child.pid) && entry.child.exitCode === null && entry.child.signalCode === null; }
   signalChild(entry, name) { return this.unreaped(entry) ? entry.child.kill(name) : false; }
 
-  // Reads the process table once and brings the record of descendants up to date. Signals nothing.
+  // Reads the whole table, without blocking, and brings the record of descendants up to date. Signals nothing.
+  // A read already under way is shared: two never run at once.
   observe() {
-    const remaining = (this.cleanupUntil ?? this.deadline) - this.now();
+    this.reading ??= this.readAndRecord().finally(() => { this.reading = null; });
+    return this.reading;
+  }
+  async readAndRecord() {
     let rows;
     try {
-      if (remaining <= 0) throw new Error('Process readback deadline exceeded');
-      rows = this.readTable(Math.max(1, Math.min(5000, remaining)));
+      if ((this.cleanupUntil ?? this.deadline) - this.now() <= 0) throw new Error('Process readback deadline exceeded');
+      rows = await this.readTable(this.readbackMs());
     } catch (error) { this.unknown.add(`process-readback:${error.message}`); error.readback = true; throw error; }
+    this.tableReads += 1;
+    this.record(rows);
+    return rows;
+  }
+  record(rows) {
     const current = new Map(rows.map((row) => [row.pid, row]));
     // A recorded descendant that is gone, or has exited, is released: whatever holds that number later is not
     // this run's. One that answers with another identity is released too, and the run no longer claims a clean end.
@@ -227,21 +295,26 @@ export class OwnedRun {
       if (row.exited || row.pid === this.self || owned(row.pid) || this.strays.has(row.pid)) continue;
       if (adoptable(row) || places.some((place) => mentionsDirectory(row.command, place))) this.strays.set(row.pid, row);
     }
-    return rows;
   }
 
-  // A descendant has no handle, so its identity is read again immediately before every signal.
+  // A descendant has no handle. It is read back alone, synchronously, and signalled in the same turn only while
+  // its number, user, start time and command are still the ones recorded.
   signalDescendant(pid, name) {
-    this.observe();
-    if (!this.descendants.has(pid) || !Number.isInteger(pid) || pid <= 1 || pid === this.self) return false;
+    const recorded = this.descendants.get(pid);
+    if (!recorded || !Number.isInteger(pid) || pid <= 1 || pid === this.self) return false;
+    let current;
+    try { current = this.readOne(pid, this.readbackMs()); } catch (error) { this.unknown.add(`process-readback:${error.message}`); error.readback = true; throw error; }
+    if (!current || current.exited) { this.descendants.delete(pid); return false; }
+    if (!sameProcess(recorded, current)) { this.descendants.delete(pid); this.unknown.add(`changed:${pid}`); return false; }
     try { this.signal(pid, name); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
   }
 
-  // Reads a spawned process back from the process table: this run's own child, running the program it was asked
-  // to run. A child that cannot be read back stays held by its handle, and the run stops.
+  // Reads a spawned process back alone: this run's own child, of this user, running the program it was asked to
+  // run. A child that cannot be read back stays held by its handle, and the run stops.
   async bind(entry, { program, profile } = {}) {
     for (let attempt = 0; attempt < 10; attempt += 1) {
-      const row = this.observe().find((item) => item.pid === entry.child.pid);
+      let row;
+      try { row = this.readOne(entry.child.pid, this.readbackMs()); } catch (error) { this.unknown.add(`process-readback:${error.message}`); throw error; }
       if (row && !row.exited && row.uid === this.uid && row.ppid === this.self && (row.command === program || row.command.startsWith(`${program} `)) && (!profile || namesProfile(row.command, profile))) return row;
       if (entry.closed || !this.unreaped(entry)) return null;
       await this.pause(10);
@@ -251,32 +324,54 @@ export class OwnedRun {
   }
 
   // Keeps the record of descendants current while the app runs: one that outlives its parent unseen can only be
-  // reported afterwards, never ended.
+  // reported afterwards, never ended. The next read is scheduled only once the last one has finished.
   watch() {
-    const watcher = setInterval(() => { try { this.assertActive(); this.observe(); } catch (error) { this.fail(error.message); } }, this.watchMs);
-    watcher.unref();
+    const watcher = { timer: null, stopped: false };
+    const schedule = () => {
+      if (watcher.stopped) return;
+      watcher.timer = setTimeout(async () => {
+        try { this.assertActive(); await this.observe(); } catch (error) { this.fail(error.message); return; }
+        schedule();
+      }, this.watchMs);
+      watcher.timer.unref?.();
+    };
+    schedule();
     this.watchers.add(watcher);
     return watcher;
+  }
+  stopWatching() {
+    for (const watcher of this.watchers) { watcher.stopped = true; clearTimeout(watcher.timer); }
+    this.watchers.clear();
   }
 
   settled() { return this.children.size === 0 && this.descendants.size === 0 && this.strays.size === 0; }
 
+  // A spawned process whose streams did not close (a process the run cannot see still holds them, or it could
+  // not be ended) must not keep this process alive once the run has reported it: its streams are closed on this
+  // side and its handle no longer holds the event loop. It stays recorded as unknown custody.
+  release() {
+    for (const { child } of this.children) {
+      for (const stream of child.stdio ?? [child.stdin, child.stdout, child.stderr]) stream?.destroy?.();
+      child.unref?.();
+    }
+  }
+
   async cleanup({ until = this.cleanupUntil ?? this.now() + this.cleanupMs } = {}) {
     this.cleanupUntil = until;
-    for (const watcher of this.watchers) clearInterval(watcher);
-    this.watchers.clear();
+    this.stopWatching();
     // The descendants are read before the first signal: once their parent is gone the lineage cannot be read.
     let readable = true;
-    const read = (step) => { try { step(); } catch (error) { readable = false; if (!error.readback) this.unknown.add(`process-cleanup:${error.message}`); } };
+    const read = async (step) => { try { await step(); } catch (error) { readable = false; if (!error.readback) this.unknown.add(`process-cleanup:${error.message}`); } };
     // Without a readable table only the spawned processes can be joined, and the run reports unknown custody.
     const done = () => (readable ? this.settled() : this.children.size === 0);
-    read(() => this.observe());
-    for (const [name, stage] of [['SIGTERM', Math.min(until, this.now() + 10000)], ['SIGKILL', until]]) {
+    await read(() => this.observe());
+    // SIGTERM is given at most ten seconds and at most half the budget, so SIGKILL always has time of its own.
+    for (const [name, stage] of [['SIGTERM', this.now() + Math.max(0, Math.min(10000, (until - this.now()) / 2))], ['SIGKILL', until]]) {
       // Spawned processes are signalled through their handles, which needs no process table.
       for (const entry of this.children) this.signalChild(entry, name);
-      if (readable) read(() => { for (const pid of [...this.descendants.keys()]) { if (this.now() >= until) throw new Error('Cleanup deadline exceeded'); this.signalDescendant(pid, name); } });
+      if (readable) await read(() => { for (const pid of [...this.descendants.keys()]) { if (this.now() >= until) throw new Error('Cleanup deadline exceeded'); this.signalDescendant(pid, name); } });
       for (;;) {
-        if (readable) read(() => this.observe());
+        if (readable && this.now() < until) await read(() => this.observe());
         if (done() || this.now() >= stage) break;
         await this.pause(100);
         // With no time left to look again, the last readback stands.
@@ -288,6 +383,7 @@ export class OwnedRun {
       this.unknown.add('process-join-incomplete');
       for (const pid of this.strays.keys()) this.unknown.add(`unowned-process-remains:${pid}`);
     } else if (!readable && this.children.size > 0) this.unknown.add('process-join-incomplete');
+    if (this.children.size > 0) this.release();
     return { joined: this.unknown.size === 0, unknown: [...this.unknown], roots: [...this.roots.keys()], outputBytes: this.outputUsed };
   }
 
@@ -323,8 +419,15 @@ export class OwnedRun {
   }
 }
 
+// The installed app and its command-line tool. A test names a harmless stand-in
+// instead: the command and the arguments that come before the real ones.
+export const DEFAULT_LAUNCHER = Object.freeze({ app: Object.freeze([path.join(APP_DIR, 'Obsidian')]), cli: Object.freeze([path.join(APP_DIR, 'obsidian-cli')]) });
+
 export class Instance {
-  constructor(layout, { custody } = {}) { this.custody = custody; this.layout = layout; this.env = { ...process.env, HOME: layout.home }; this.transportRetries = []; }
+  constructor(layout, { custody, launcher = DEFAULT_LAUNCHER } = {}) {
+    this.custody = custody; this.layout = layout; this.env = { ...process.env, HOME: layout.home }; this.transportRetries = [];
+    this.launcher = { app: [...(launcher.app ?? DEFAULT_LAUNCHER.app)], cli: [...(launcher.cli ?? DEFAULT_LAUNCHER.cli)] };
+  }
 
   get socket() { return path.join(this.layout.home, '.obsidian-cli.sock'); }
 
@@ -334,10 +437,10 @@ export class Instance {
     this.custody?.assertActive();
     this.custody?.profiles.add(this.layout.profile);
     fs.rmSync(this.socket, { force: true });
-    const program = path.join(APP_DIR, 'Obsidian');
+    const [command, ...leading] = this.launcher.app;
     const logPath = path.join(this.layout.root, 'app.log');
     const log = this.custody ? 'pipe' : fs.openSync(logPath, 'a');
-    this.child = spawn(program, [`--user-data-dir=${this.layout.profile}`, '--use-mock-keychain', '--password-store=basic',
+    this.child = spawn(command, [...leading, `--user-data-dir=${this.layout.profile}`, '--use-mock-keychain', '--password-store=basic',
       // Real typing implies a focused window. The test window is usually hidden, and Chromium then throttles the
       // app's own save timers, which is not a condition a typing user can be in.
       '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows'], { env: this.env, detached: true, stdio: ['ignore', log, log] });
@@ -347,7 +450,7 @@ export class Instance {
       for (const stream of [this.child.stdout, this.child.stderr]) stream?.on('data', (chunk) => {
         try { this.custody.consume(chunk.length); fs.appendFileSync(logPath, chunk); } catch (error) { this.custody.fail(error.message); }
       });
-      await this.custody.bind(entry, { program, profile: this.layout.profile });
+      await this.custody.bind(entry, { program: this.launcher.app.join(' '), profile: this.layout.profile });
       this.custody.assertActive();
       this.watcher = this.custody.watch();
     } else this.child.unref();
@@ -375,11 +478,13 @@ export class Instance {
   async cli(...args) {
     if (this.custody) return this.ownedCli(args);
     try {
-      const { stdout, stderr } = await run(path.join(APP_DIR, 'obsidian-cli'), args, { env: this.env, maxBuffer: 64 * 1024 * 1024, timeout: 20000, killSignal: 'SIGKILL' });
+      const [command, ...leading] = this.launcher.cli;
+      const { stdout, stderr } = await run(command, [...leading, ...args], { env: this.env, maxBuffer: 64 * 1024 * 1024, timeout: 20000, killSignal: 'SIGKILL' });
       return stdout || stderr;
     } catch (error) {
       if (!error.killed) throw error;
-      const probe = await run(path.join(APP_DIR, 'obsidian-cli'), ['eval', 'code=1+1'], { env: this.env, timeout: 8000, killSignal: 'SIGKILL' }).then(({ stdout }) => stdout.trim(), () => 'renderer-unresponsive');
+      const [command, ...leading] = this.launcher.cli;
+      const probe = await run(command, [...leading, 'eval', 'code=1+1'], { env: this.env, timeout: 8000, killSignal: 'SIGKILL' }).then(({ stdout }) => stdout.trim(), () => 'renderer-unresponsive');
       throw new Error(`CLI call timed out: ${args[0]} ${String(args[1] || '').slice(0, 60)}; renderer probe: ${probe}`);
     }
   }
@@ -390,7 +495,8 @@ export class Instance {
     const custody = this.custody;
     custody.assertActive();
     let timer;
-    const child = spawn(path.join(APP_DIR, 'obsidian-cli'), args, { env: this.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const [command, ...leading] = this.launcher.cli;
+    const child = spawn(command, [...leading, ...args], { env: this.env, stdio: ['ignore', 'pipe', 'pipe'] });
     const entry = custody.adopt(child);
     const completion = new Promise((resolve, reject) => {
       const stdout = [], stderr = [];
@@ -478,7 +584,6 @@ export class Instance {
   }
 
   async quit() {
-    clearInterval(this.watcher);
     if (this.custody) {
       const cleanup = await this.custody.cleanup();
       if (!cleanup.joined) throw Object.assign(new Error('Owned app/helper/CLI cleanup unknown'), { cleanup });

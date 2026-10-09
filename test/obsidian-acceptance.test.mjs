@@ -84,8 +84,10 @@ syncBuiltinESMExports()
 // obsidian-publication/lib/instance.mjs, OwnedRun): what it may signal, what
 // it may remove and how much output it may keep. Directories here are real
 // temporary ones; the process table and the spawned handles are stand-ins,
-// except in the last two cases, which use this platform's own table and
-// harmless Node children of this process. The app is never started.
+// except in the cases at the end, which use harmless Node children of this
+// process (and, on macOS, this platform's own process table) and stand-in
+// scripts in place of the app and its command-line tool. The app is never
+// started.
 //
 // ATELIER_OBSIDIAN_CLEANUP_ONLY=1 runs these cases alone, for a quick local
 // loop: the rest of the file is then reported as one skipped case, and the
@@ -96,20 +98,21 @@ const CLEANUP_ONLY = process.env.ATELIER_OBSIDIAN_CLEANUP_ONLY === '1'
 if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ONLY skips most of this file and is refused under CI')
 
 {
-  const { OwnedRun, createLayout, parseProcessTable, readProcessTable } = await import('../experiments/obsidian-publication/lib/instance.mjs')
+  const { Instance, OwnedRun, createLayout, parseProcessTable, readOneProcess, readProcessTable } = await import('../experiments/obsidian-publication/lib/instance.mjs')
   const SELF = 4000
   const START = 'Mon Oct 5 00:00:00 2026'
   const LATER = 'Tue Oct 6 00:00:00 2026'
   const row = (pid, ppid = 1, { start = START, command = '/owned/app', uid = 7, exited = false } = {}) => ({ pid, ppid, uid, start, command, exited })
   const exists = (target) => fs.lstatSync(target, { throwIfNoEntry: false }) !== undefined
   const linkDirectory = (target, link) => fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir')
-  // A run over a stand-in process table. `rows` is the table; a signal sent by number is recorded, and SIGKILL
-  // ends that row. Every directory the run still holds is removed when the test ends.
+  // A run over a stand-in process table. `rows` is the table, read whole (asynchronously) or one process at a time;
+  // a signal sent by number is recorded, and SIGKILL ends that row. Every directory the run still holds is removed
+  // when the test ends.
   const fake = (t, rows = [], options = {}) => {
     let clock = 0
     const signals = []
     const end = (pid) => { const at = rows.findIndex((item) => item.pid === pid); if (at >= 0) rows.splice(at, 1) }
-    const custody = new OwnedRun({ uid: 7, self: SELF, readTable: () => rows.map((item) => ({ ...item })), signal: (pid, name) => { signals.push([pid, name]); if (name === 'SIGKILL') end(pid) }, now: () => clock, pause: async (ms) => { clock += ms }, workMs: 1000, cleanupMs: 11000, ...options })
+    const custody = new OwnedRun({ uid: 7, self: SELF, readTable: async () => rows.map((item) => ({ ...item })), readOne: (pid) => { const found = rows.find((item) => item.pid === pid); return found ? { ...found } : null }, signal: (pid, name) => { signals.push([pid, name]); if (name === 'SIGKILL') end(pid) }, now: () => clock, pause: async (ms) => { clock += ms }, workMs: 1000, cleanupMs: 11000, ...options })
     t.after(() => { for (const root of custody.roots.keys()) fs.rmSync(root, { recursive: true, force: true }) })
     // A stand-in for the handle spawn returns: unreaped until it ends. It ends on SIGKILL, or on any signal when `gentle`.
     const spawned = (pid, { gentle = false } = {}) => {
@@ -143,6 +146,19 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     t.after(() => fs.rmSync(named, { recursive: true, force: true }))
     const result = await f.custody.execute(() => createLayout(named, undefined, { custody: f.custody }))
     assert.deepEqual([f.custody.roots.size, result.cleanup.roots, exists(path.join(named, 'profile', 'obsidian.json'))], [0, [], true], 'the named root is populated and left alone')
+  })
+
+  test('owned run: an explicit null root or data root is refused, as before an owned run existed, and creates nothing', async (t) => {
+    let made = 0
+    const io = { ...fs, mkdtempSync: (...args) => { made += 1; return fs.mkdtempSync(...args) } }
+    assert.throws(() => createLayout(null, undefined, { io }), TypeError)
+    const f = fake(t)
+    assert.throws(() => createLayout(null, undefined, { custody: f.custody, io }), TypeError)
+    assert.deepEqual([made, f.custody.roots.size], [0, 0], 'no root is created for an explicit null')
+    // A null data root is refused too; the root created before it is the run's own and is removed.
+    const error = await rejection(f.custody.execute(() => createLayout(undefined, null, { custody: f.custody })))
+    assert.ok(error instanceof TypeError)
+    assert.deepEqual([error.cleanup.removedRoots.length, error.cleanup.retainedRoots], [1, []])
   })
 
   test('owned run: removal checks which directory the path names, not what it is called', async (t) => {
@@ -247,7 +263,7 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     const f = fake(t, [row(10, SELF), row(11, 10)])
     const root = f.custody.allocateRoot('atelier-owned-test-')
     f.spawned(10, { gentle: true })
-    f.custody.observe()
+    await f.custody.observe()
     assert.deepEqual([...f.custody.descendants.keys()], [11])
     // The helper is gone and its number was given to something else before this run looked again.
     f.rows[1] = row(11, 1, { start: LATER, command: '/someone/elses' })
@@ -261,11 +277,11 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     const f = fake(t, [row(10, SELF), row(11, 10), row(14, 10)])
     const root = f.custody.allocateRoot('atelier-owned-test-')
     f.spawned(10, { gentle: true })
-    f.custody.observe()
+    await f.custody.observe()
     // 11 leaves the table; 14 has exited and only awaits collection by its parent.
     f.end(11)
     f.rows[1] = row(14, 10, { command: '<defunct>', exited: true })
-    f.custody.observe()
+    await f.custody.observe()
     assert.deepEqual([...f.custody.descendants.keys()], [], 'both are released')
     // Their numbers come back as other processes, one of them with a child of its own.
     f.rows.push(row(11, 1, { start: LATER, command: '/someone/elses' }), row(15, 11, { start: LATER }))
@@ -274,22 +290,26 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     assert.deepEqual([result.cleanup.joined, f.signals, f.rows.map(({ pid }) => pid), exists(root)], [true, [], [14, 11, 15], false])
   })
 
-  test('owned run: identity is read again before every signal', async (t) => {
-    const f = fake(t, [row(10, SELF), row(11, 10), row(12, 10)])
-    const root = f.custody.allocateRoot('atelier-owned-test-')
-    f.spawned(10, { gentle: true })
-    // While the first helper is signalled, the second one's number changes hands. Nothing reads the table between
-    // the two signals except the readback each signal makes for itself.
-    const send = f.custody.signal
-    f.custody.signal = (pid, name) => { send(pid, name); if (pid === 11 && name === 'SIGTERM') f.rows[f.rows.findIndex((item) => item.pid === 12)] = row(12, 1, { start: LATER, command: '/someone/elses' }) }
-    const error = await rejection(f.custody.execute(() => 'done'))
-    assert.deepEqual([f.signals, error.cleanup.unknown, f.rows.map(({ pid }) => pid), exists(root)], [[[11, 'SIGTERM'], [11, 'SIGKILL']], ['changed:12'], [12], true], 'the new holder of the number is never signalled')
-  })
+  // Each part of the identity is checked on its own: a number whose start time, command or user alone has changed
+  // belongs to another process.
+  for (const [part, changed] of [['start time', { start: LATER }], ['command', { command: '/owned/app --other' }], ['user', { uid: 8 }]]) {
+    test(`owned run: identity is read again before every signal, and a changed ${part} alone refuses it`, async (t) => {
+      const f = fake(t, [row(10, SELF), row(11, 10), row(12, 10)])
+      const root = f.custody.allocateRoot('atelier-owned-test-')
+      f.spawned(10, { gentle: true })
+      // While the first helper is signalled, the second one's number changes hands. Nothing reads the table between
+      // the two signals except the readback each signal makes for itself.
+      const send = f.custody.signal
+      f.custody.signal = (pid, name) => { send(pid, name); if (pid === 11 && name === 'SIGTERM') f.rows[f.rows.findIndex((item) => item.pid === 12)] = row(12, 10, changed) }
+      const error = await rejection(f.custody.execute(() => 'done'))
+      assert.deepEqual([f.signals, error.cleanup.unknown, f.rows.map(({ pid }) => pid), exists(root)], [[[11, 'SIGTERM'], [11, 'SIGKILL']], ['changed:12'], [12], true], 'the new holder of the number is never signalled')
+    })
+  }
 
   test('owned run: a child of a process that took over an owned number is never adopted', async (t) => {
     const f = fake(t, [row(10, SELF), row(11, 10)])
     f.spawned(10, { gentle: true })
-    f.custody.observe()
+    await f.custody.observe()
     f.rows[1] = row(11, 1, { start: LATER, command: '/someone/elses' })
     f.rows.push(row(12, 11, { start: LATER }))
     await rejection(f.custody.execute(() => 'done'))
@@ -326,6 +346,30 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     assert.throws(() => f.custody.assertActive(), /identity/)
   })
 
+  test('owned run: a spawned process read back under another user is not bound', async (t) => {
+    const f = fake(t, [row(28, SELF, { command: '/owned/app --user-data-dir=/owned/profile', uid: 0 })])
+    const child = f.spawned(28)
+    await assert.rejects(f.custody.bind([...f.custody.children][0], { program: '/owned/app', profile: '/owned/profile' }), /identity/)
+    assert.deepEqual([child.signals, f.signals, f.custody.unknown.has('unbound:28')], [[], [], true])
+  })
+
+  test('owned run: an error from a running child keeps it held; a spawn that produced no process is let go', async (t) => {
+    const f = fake(t)
+    const standIn = (pid) => Object.assign(new EventEmitter(), { pid, exitCode: null, signalCode: null, kill: () => true })
+    const running = standIn(31)
+    f.custody.adopt(running)
+    running.emit('error', new Error('a signal could not be delivered'))
+    const never = standIn(undefined)
+    f.custody.adopt(never)
+    never.emit('error', new Error('spawn ENOENT'))
+    assert.deepEqual([...f.custody.children].map((entry) => entry.child.pid), [31])
+    // A real spawn of a program that does not exist produces no process and is let go the same way.
+    const missing = childProcess.spawn(path.join(fs.realpathSync(os.tmpdir()), 'atelier-owned-no-such-program'), [], { stdio: 'ignore' })
+    f.custody.adopt(missing)
+    await new Promise((resolve) => { missing.once('error', resolve) })
+    assert.deepEqual([missing.pid, [...f.custody.children].map((entry) => entry.child.pid)], [undefined, [31]])
+  })
+
   test('owned run: a descendant of another user is never signalled and holds the roots', async (t) => {
     const f = fake(t, [row(10, SELF), row(11, 10, { uid: 0 })])
     const root = f.custody.allocateRoot('atelier-owned-test-')
@@ -339,6 +383,25 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     for (const pid of [1, SELF, 0]) f.custody.descendants.set(pid, f.rows.find((item) => item.pid === pid))
     assert.deepEqual([1, SELF, 0, -10, 99].map((pid) => f.custody.signalDescendant(pid, 'SIGKILL')), [false, false, false, false, false])
     assert.deepEqual(f.signals, [])
+  })
+
+  test('owned run: the watcher reads without blocking, and two reads of the table never run at once', async () => {
+    let active = 0, most = 0, reads = 0
+    const custody = new OwnedRun({ uid: 7, self: SELF, watchMs: 5, readTable: async () => {
+      active += 1; most = Math.max(most, active); reads += 1
+      await new Promise((resolve) => { setTimeout(resolve, 30) })
+      active -= 1
+      return []
+    } })
+    const watcher = custody.watch()
+    await new Promise((resolve) => { setTimeout(resolve, 15) })
+    // Two more readers ask while the watcher's read is under way: they share it.
+    await Promise.all([custody.observe(), custody.observe()])
+    await new Promise((resolve) => { setTimeout(resolve, 150) })
+    custody.stopWatching()
+    const settled = reads
+    await new Promise((resolve) => { setTimeout(resolve, 60) })
+    assert.deepEqual([most, reads >= 2, reads, custody.watchers.size, watcher.stopped], [1, true, settled, 0, true], 'one read at a time, and none after the watcher stopped')
   })
 
   // -- deadline and output bound --------------------------------------------
@@ -485,6 +548,8 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
       passedByGate: { G07: false }, timingsByGate: { G07: {} }, wallClock: { startedAt: '2026-01-05T10:00:00.000Z', endedAt: '2026-01-05T10:20:00.000Z' }, recordedAt: '2026-01-05T10:00:00.000Z', json: true, consoleNotes: ['[desktop-receipts] kept /tmp/synthetic-kept-root'], writeConsole: async (output) => { consoleWrites.push(output) } }
     return { ...f, receiptDir, consoleWrites, input }
   }
+  // The output bound whose allowance (the bound less its reserve) is exactly `allowance` bytes.
+  const boundFor = (allowance) => { for (let limit = allowance; ; limit += 1) if (limit - Math.min(256 * 1024, Math.floor(limit / 16)) === allowance) return limit }
 
   test('owned run: the final output written is exactly the output reserved, and a failed run records a valid failed receipt', async (t) => {
     const f = ownedOutput(t)
@@ -499,22 +564,60 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     assert.deepEqual([result.value.outputBytes, f.custody.outputUsed], [onDisk + Buffer.byteLength(f.consoleWrites[0]), onDisk + Buffer.byteLength(f.consoleWrites[0])], 'every byte written was reserved first')
   })
 
-  test('owned run: a final output that does not fit writes no receipt, no evidence and no console text', async (t) => {
+  test('owned run: a final output that does not fit, with no room in the reserve for a shortened receipt, writes nothing', async (t) => {
     const sized = ownedOutput(t)
     await sized.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(sized.input) })
     const needed = sized.custody.outputUsed
-    // One byte short of what the same output needs.
-    const f = ownedOutput(t, { outputBytes: needed + 4096 })
-    f.custody.consume(f.custody.outputAllowance - needed + 1)
+    // One byte short of what the same output needs; the reserve of so small a bound holds no failed receipt.
+    const f = ownedOutput(t, { outputBytes: boundFor(needed - 1) })
     const root = f.custody.allocateRoot('atelier-owned-test-')
     const error = await rejection(f.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(f.input) }))
-    assert.deepEqual([error.code, exists(f.receiptDir), f.consoleWrites, error.cleanup.retainedRoots, exists(root)], ['output-budget-exceeded', false, [], [root], true])
+    assert.deepEqual([error.code, error.shortenedOutput, exists(f.receiptDir), f.consoleWrites, error.cleanup.retainedRoots, exists(root)], ['output-budget-exceeded', undefined, false, [], [root], true])
     // A writer that fails after the reservation keeps the roots and what it had already written.
     const failing = ownedOutput(t)
     failing.input.writeConsole = async () => { throw new Error('console closed') }
     const kept = failing.custody.allocateRoot('atelier-owned-test-')
     const failure = await rejection(failing.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(failing.input) }))
     assert.deepEqual([failure.message, exists(path.join(failing.receiptDir, 'G07.json')), failure.cleanup.retainedRoots, exists(kept)], ['console closed', true, [kept], true])
+  })
+
+  test('owned run: app output kept as evidence is counted once, when it arrived', async (t) => {
+    const log = { role: null, name: 'G07-app-synthetic.log', bytes: Buffer.alloc(20000, 'y') }
+    const sized = ownedOutput(t)
+    sized.input.evidenceByGate.G07.push(log)
+    await sized.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(sized.input) })
+    const needed = sized.custody.outputUsed
+    // The same output, after the 20000 bytes of the log arrived from the app and were counted then, fits a bound of
+    // exactly what it needs: the evidence copy of the log is not counted a second time.
+    const f = ownedOutput(t, { outputBytes: boundFor(needed) })
+    f.input.evidenceByGate.G07.push(log)
+    f.custody.consume(log.bytes.length)
+    const result = await f.custody.execute(() => 'done', { finalize: () => commitOwnedOutput(f.input) })
+    assert.deepEqual([f.custody.outputUsed, f.custody.outputAllowance, f.custody.nativeCredited, result.value.outputBytes, result.value.outputCharged], [needed, needed, 20000, needed, needed - 20000])
+    assert.equal(fs.readFileSync(path.join(f.receiptDir, log.name)).length, 20000)
+  })
+
+  test('owned run: a run that used up its bound still records its failed receipt, with shortened evidence marked as shortened', async (t) => {
+    const f = ownedOutput(t, { outputBytes: 8 * 1024 * 1024 })
+    f.input.evidenceByGate.G07.push({ role: null, name: 'G07-app-synthetic.log', bytes: Buffer.alloc(300 * 1024, 'y') })
+    f.input.capabilities = { ...f.input.capabilities, cli: { version: null, helpRaw: 'h'.repeat(100000) } }
+    const root = f.custody.allocateRoot('atelier-owned-test-')
+    // The app's output reached the bound while the run was going.
+    const error = await rejection(f.custody.execute(() => { f.custody.consume(f.custody.outputAllowance); f.custody.consume(1) }, { finalize: () => commitOwnedOutput(f.input) }))
+    assert.deepEqual([error.code, error.cause?.code, error.cleanup.retainedRoots, exists(root)], ['output-budget-exceeded', 'output-budget-exceeded', [root], true], 'the roots are kept, and the run failure stays the cause')
+    assert.deepEqual([error.shortenedOutput.cap, error.shortenedOutput.shortened], [32 * 1024, [{ name: 'G07-app-synthetic.log', byteLength: 300 * 1024, keptBytes: 32 * 1024 }]])
+    const receipt = JSON.parse(fs.readFileSync(path.join(f.receiptDir, 'G07.json'), 'utf8'))
+    const desktop = receipt.ext['mnstry.atelier.obsidian.desktop-receipts']
+    assert.equal(receipt.outcome, 'failed')
+    assert.ok(desktop.notes.some((note) => note.includes(`G07-app-synthetic.log kept ${32 * 1024} of ${300 * 1024} bytes`)), 'the receipt names what was shortened')
+    assert.ok(desktop.capabilities.cli.helpRaw.length < 600 && desktop.capabilities.qualified === false)
+    const kept = fs.readFileSync(path.join(f.receiptDir, 'G07-app-synthetic.log'), 'utf8')
+    assert.ok(kept.startsWith('y'.repeat(32 * 1024)) && kept.endsWith(`\n[shortened to fit the output bound: kept ${32 * 1024} of ${300 * 1024} bytes]\n`), 'the evidence says it was shortened')
+    for (const entry of receipt.evidence) assert.equal(fs.statSync(path.join(f.receiptDir, entry.name)).size, entry.byteLength)
+    assert.ok(f.consoleWrites.length === 1 && f.consoleWrites[0].includes('a failed receipt with shortened evidence was recorded'))
+    // The failure line still fits, and the whole run stays inside its bound.
+    const line = JSON.parse(f.custody.failureDiagnostic({ procedureId: 'synthetic-procedure', error, retainedRoots: [root] }))
+    assert.deepEqual([line.outcome, line.retainedRoots, f.custody.outputUsed <= f.custody.outputLimit], ['failed', [root], true])
   })
 
   // -- this platform's own process table and real children -------------------
@@ -524,15 +627,25 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
   const idle = (extra = '') => childProcess.spawn(process.execPath, ['-e', `${extra};setInterval(() => {}, 1000)`], { stdio: ['ignore', 'pipe', 'ignore'] })
   const firstLine = (child) => new Promise((resolve, reject) => { let seen = ''; child.stdout.on('data', (chunk) => { seen += chunk; if (seen.includes('\n')) resolve(seen.split('\n')[0]) }); child.once('close', () => reject(new Error('the child closed before it answered'))) })
 
-  test('owned run: this platform\'s process table is read, and a spawned child is read back as this process\'s own', { skip: realTable }, async (t) => {
+  test('owned run: this platform\'s table is read without blocking, one process is read back alone, and a spawned child is read back as this process\'s own', { skip: realTable }, async (t) => {
     const child = idle()
     t.after(() => child.kill('SIGKILL'))
     const custody = new OwnedRun()
     const entry = custody.adopt(child)
     const bound = await custody.bind(entry, { program: process.execPath })
     assert.deepEqual([bound.pid, bound.ppid, bound.uid, bound.exited], [child.pid, process.pid, process.getuid(), false])
-    const rows = readProcessTable()
+    // Work queued before the read runs while the table is read.
+    let turned = false
+    setImmediate(() => { turned = true })
+    const rows = await readProcessTable()
+    assert.ok(turned, 'the read did not block this process')
     assert.ok(rows.length > 1 && rows.some((item) => item.pid === process.pid) && rows.every((item) => Number.isInteger(item.pid) && Number.isInteger(item.uid) && /^\w{3} \w{3} \d{1,2} \d\d:\d\d:\d\d \d{4}$/.test(item.start)))
+    const self = readOneProcess(process.pid)
+    assert.deepEqual([self.pid, self.uid, self.start, self.command], [process.pid, process.getuid(), rows.find((item) => item.pid === process.pid).start, rows.find((item) => item.pid === process.pid).command])
+    const gone = childProcess.spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' })
+    await new Promise((resolve) => { gone.once('close', resolve) })
+    assert.equal(readOneProcess(gone.pid), null, 'a number no process holds is answered null')
+    assert.throws(() => readOneProcess(0), /positive integer/)
   })
 
   test('owned run: real children are ended (a spawned process by its handle, its own child by lineage) and an unrelated process survives', { skip: realTable }, async (t) => {
@@ -544,7 +657,7 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     const grandchild = Number(await firstLine(parent))
     await firstLine(unrelated)
     // Should the case fail early, its own grandchild (told apart by the marker, not only by its number) is not left running.
-    t.after(() => { if (readProcessTable().some((item) => item.pid === grandchild && item.command.includes(marker))) process.kill(grandchild, 'SIGKILL') })
+    t.after(() => { if (readOneProcess(grandchild)?.command.includes(marker)) process.kill(grandchild, 'SIGKILL') })
     const byNumber = []
     // The only number this test allows a signal to reach is the grandchild it started itself.
     const custody = new OwnedRun({ signal: (pid, name) => { assert.equal(pid, grandchild, 'a signal by number reaches only the recorded descendant'); byNumber.push(name); process.kill(pid, name) } })
@@ -554,14 +667,170 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     const result = await custody.execute(async () => {
       const entry = custody.adopt(parent)
       await custody.bind(entry, { program: process.execPath })
+      // What the watcher does while the app runs: one read of the whole table.
+      await custody.observe()
       return [...custody.descendants.keys()]
     })
     assert.deepEqual(result.value, [grandchild], 'the lineage was read while the parent was alive')
     assert.deepEqual([result.cleanup.joined, result.cleanup.unknown, result.cleanup.removedRoots, exists(root)], [true, [], [root], false])
     assert.ok(byNumber.length >= 1 && byNumber[0] === 'SIGTERM')
-    const after = readProcessTable()
+    const after = await readProcessTable()
     assert.deepEqual([after.some((item) => item.pid === parent.pid && item.ppid === process.pid), after.some((item) => item.pid === grandchild && !item.exited), parent.signalCode], [false, false, 'SIGTERM'])
     assert.deepEqual([unrelated.exitCode, unrelated.signalCode, after.some((item) => item.pid === unrelated.pid && item.ppid === process.pid && !item.exited)], [null, null, true], 'a process this run did not adopt is still running')
+  })
+
+  // -- the instance under an owned run, with stand-ins for the app and its command-line tool --------------------
+
+  // Harmless Node scripts that the instance starts in place of the installed app and its command-line tool, through
+  // the instance's launcher. The command-line stand-in answers the vault listing from the private profile.
+  const STAND_INS = {
+    'cli.cjs': `const fs = require('node:fs'); const path = require('node:path')
+const [command, value] = process.argv.slice(2)
+if (command === 'vaults') { const config = JSON.parse(fs.readFileSync(path.join(process.env.HOME, '..', 'profile', 'obsidian.json'), 'utf8')); for (const vault of Object.values(config.vaults)) process.stdout.write(vault.path + '\\n') }
+else if (command === 'echo') process.stdout.write('x'.repeat(Number(value)))
+else if (command === 'fail') { process.stderr.write('refused by the stand-in\\n'); process.exitCode = 3 }
+else if (command === 'hang') setInterval(() => {}, 1000)
+`,
+    // The app stand-in starts a helper of its own (named by the marker it is given), says something on each stream
+    // and opens its command-line socket.
+    'app.cjs': `const fs = require('node:fs'); const path = require('node:path'); const { spawn } = require('node:child_process')
+const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', process.argv[2]], { stdio: 'ignore' })
+process.stdout.write('helper ' + helper.pid + '\\n'); process.stderr.write('stand-in app warning\\n')
+fs.writeFileSync(path.join(process.env.HOME, '.obsidian-cli.sock'), '')
+setInterval(() => {}, 1000)
+`,
+    // A process that outlives its parent and keeps the parent's output open, as a detached helper of the app can.
+    // It ends by itself when the stop file appears or its folder is removed, and after a minute at most.
+    'holder.cjs': `const fs = require('node:fs'); const path = require('node:path')
+setInterval(() => { if (fs.existsSync(process.argv[2]) || !fs.existsSync(path.dirname(process.argv[2]))) process.exit(0) }, 100)
+setTimeout(() => process.exit(0), 60000)
+`,
+    'parent.cjs': `const { spawn } = require('node:child_process')
+const holder = spawn(process.execPath, [process.argv[2], process.argv[3]], { stdio: ['ignore', 'inherit', 'inherit'], detached: true })
+holder.unref()
+process.stdout.write(holder.pid + '\\n')
+`,
+    // A script that runs an owned run over that parent, sees the run fail, says so and is expected to exit.
+    'run.mjs': `import { spawn } from 'node:child_process'
+const [instanceUrl, parentScript, holderScript, stop] = process.argv.slice(2)
+const { OwnedRun } = await import(instanceUrl)
+const custody = new OwnedRun({ readTable: async () => [], readOne: () => null, cleanupMs: 1500 })
+try {
+  await custody.execute(async () => {
+    const child = spawn(process.execPath, [parentScript, holderScript, stop], { stdio: ['ignore', 'pipe', 'pipe'] })
+    custody.adopt(child)
+    await new Promise((resolve) => { child.once('exit', resolve) })
+  })
+  process.stdout.write('joined\\n')
+} catch (error) {
+  process.stdout.write('failed ' + JSON.stringify(error.cleanup?.unknown ?? [error.message]) + '\\n')
+  process.exitCode = 3
+}
+`,
+  }
+  const standIns = (t) => {
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-owned-stand-ins-'))
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+    return Object.fromEntries(Object.entries(STAND_INS).map(([name, source]) => { fs.writeFileSync(path.join(dir, name), source); return [name.replace(/\..*$/, ''), path.join(dir, name)] }))
+  }
+  // Records every child the run adopts, with a promise of its close. Should a case fail early, a child still
+  // running is ended through its own handle.
+  const recordAdoptions = (t, custody) => {
+    const adopted = []
+    const adopt = custody.adopt.bind(custody)
+    custody.adopt = (child) => { child.closing = new Promise((resolve) => { child.once('close', resolve) }); adopted.push(child); return adopt(child) }
+    t.after(() => { for (const child of adopted) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
+    return adopted
+  }
+  // Waits for every child to close, for ten seconds at most: a child left running fails the case instead of hanging it.
+  const allClosed = async (children) => {
+    let timer
+    const closedInTime = await Promise.race([Promise.all(children.map((child) => child.closing)).then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), 10000) })])
+    clearTimeout(timer)
+    assert.ok(closedInTime, 'every child closed')
+  }
+
+  test('owned run: a command-line call is this run\'s own child, its output counted as it arrives, and it is never signalled by number', async (t) => {
+    const scripts = standIns(t)
+    const kills = t.mock.method(process, 'kill')
+    const custody = new OwnedRun({ workMs: 60000 })
+    t.after(() => { for (const root of custody.roots.keys()) fs.rmSync(root, { recursive: true, force: true }) })
+    const layout = createLayout(undefined, undefined, { custody })
+    const instance = new Instance(layout, { custody, launcher: { cli: [process.execPath, scripts.cli] } })
+    const adopted = recordAdoptions(t, custody)
+    assert.equal(await instance.cli('echo', '5000'), 'x'.repeat(5000))
+    assert.equal(custody.nativeUsed, 5000)
+    assert.equal((await instance.cli('vaults', 'verbose')).trim(), layout.vault)
+    await assert.rejects(instance.cli('fail'), /exited with code 3: refused by the stand-in/)
+    await allClosed(adopted)
+    assert.deepEqual(adopted.map((child) => [child.exitCode, child.signalCode, child.killed]), [[0, null, false], [0, null, false], [3, null, false]], 'a call that has exited is not signalled')
+    assert.deepEqual([custody.children.size, kills.mock.calls.filter((call) => adopted.some((child) => child.pid === call.arguments[0])).length], [0, 0], 'no call is signalled by number')
+  })
+
+  test('owned run: a command-line call that outlives its time is ended through its handle', async (t) => {
+    const scripts = standIns(t)
+    const kills = t.mock.method(process, 'kill')
+    const custody = new OwnedRun({ workMs: 1500 })
+    t.after(() => { for (const root of custody.roots.keys()) fs.rmSync(root, { recursive: true, force: true }) })
+    const instance = new Instance(createLayout(undefined, undefined, { custody }), { custody, launcher: { cli: [process.execPath, scripts.cli] } })
+    const adopted = recordAdoptions(t, custody)
+    await assert.rejects(instance.cli('hang'), /CLI call timed out: hang/)
+    await allClosed(adopted)
+    assert.deepEqual([adopted.length, adopted[0].signalCode, adopted[0].killed, custody.children.size], [1, 'SIGKILL', true, 0])
+    assert.equal(kills.mock.calls.filter((call) => call.arguments[0] === adopted[0].pid).length, 0, 'not by number')
+  })
+
+  test('owned run: a child whose output another process keeps open is let go after cleanup, so the run can end and report', { skip: process.platform === 'win32' ? 'output inherited by a detached process is a POSIX arrangement' : false }, async (t) => {
+    const scripts = standIns(t)
+    // The holder ends by itself once this file exists or the stand-ins' folder is removed; nothing here signals it.
+    const stop = path.join(path.dirname(scripts.run), 'stop')
+    t.after(() => { if (fs.existsSync(path.dirname(stop))) fs.writeFileSync(stop, '') })
+    const script = childProcess.spawn(process.execPath, [scripts.run, new URL('../experiments/obsidian-publication/lib/instance.mjs', import.meta.url).href, scripts.parent, scripts.holder, stop], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    script.stdout.on('data', (chunk) => { output += chunk })
+    script.stderr.on('data', (chunk) => { output += chunk })
+    let timer
+    const ended = await Promise.race([
+      new Promise((resolve) => { script.once('close', (code) => resolve({ code })) }),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), 20000) }),
+    ])
+    clearTimeout(timer)
+    if (ended === null) { script.kill('SIGKILL'); assert.fail(`the run did not exit after reporting: ${output.slice(0, 300)}`) }
+    assert.deepEqual([ended.code, output.trim()], [3, 'failed ["process-join-incomplete"]'])
+  })
+
+  test('owned run: the app is launched as this run\'s own child: held, counted, read back, watched, and ended with its helper', { skip: realTable }, async (t) => {
+    const scripts = standIns(t)
+    const marker = `atelier-owned-test-${process.pid}-${Date.now()}`
+    const custody = new OwnedRun({ watchMs: 100 })
+    const bind = t.mock.method(custody, 'bind')
+    const adopted = recordAdoptions(t, custody)
+    let helper = null, app = null
+    t.after(() => { if (app !== null && app.exitCode === null && app.signalCode === null) app.kill('SIGKILL') })
+    // Should the case fail early, its own helper (told apart by the marker, not only by its number) is not left running.
+    t.after(() => { if (helper !== null && readOneProcess(helper)?.command.includes(marker)) process.kill(helper, 'SIGKILL') })
+    t.after(() => { for (const root of custody.roots.keys()) fs.rmSync(root, { recursive: true, force: true }) })
+    const result = await custody.execute(async () => {
+      const layout = createLayout(undefined, undefined, { custody })
+      const instance = new Instance(layout, { custody, launcher: { app: [process.execPath, scripts.app, marker], cli: [process.execPath, scripts.cli] } })
+      const launched = instance.launch({ readyTimeoutMs: 20000 })
+      app = instance.child
+      await launched
+      const log = fs.readFileSync(path.join(layout.root, 'app.log'), 'utf8')
+      helper = Number(/^helper (\d+)$/m.exec(log)?.[1])
+      // The watcher has read the table at least once while the app ran, and recorded the app's helper.
+      for (let waited = 0; custody.tableReads === 0 && waited < 10000; waited += 50) await new Promise((resolve) => { setTimeout(resolve, 50) })
+      return { log, layout, watching: custody.watchers.size, reads: custody.tableReads, descendants: [...custody.descendants.keys()], native: custody.nativeUsed }
+    })
+    const { log, layout, watching, reads, descendants, native } = result.value
+    assert.deepEqual(bind.mock.calls.map((call) => call.arguments[1]), [{ program: `${process.execPath} ${scripts.app} ${marker}`, profile: layout.profile }])
+    assert.equal((await bind.mock.calls[0].result).pid, app.pid)
+    assert.ok(log.includes('stand-in app warning') && Number.isInteger(helper), 'both output streams reached the app log')
+    assert.ok(native >= Buffer.byteLength(log) + 2 * Buffer.byteLength(`${layout.vault}\n`), 'the app output was counted, and the vault listings')
+    assert.deepEqual([watching, reads > 0, descendants], [1, true, [helper]])
+    assert.deepEqual([result.cleanup.joined, result.cleanup.unknown, app.signalCode, exists(layout.root)], [true, [], 'SIGTERM', false])
+    assert.equal(readOneProcess(helper)?.command.includes(marker) ?? false, false, 'the helper was ended by lineage')
+    assert.equal(adopted[0], app, 'the app was adopted the turn it was spawned')
   })
 
   test('owned run: nothing here tried to start the app', () => assert.deepEqual(guardErrors, []))
