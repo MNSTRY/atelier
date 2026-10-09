@@ -33,6 +33,16 @@
   Atelier.
 - The Obsidian service test suites reserve the loopback ports they choose, so
   another test cannot take a port between its selection and its use.
+- The Obsidian plugin (1.1.2) keeps the last authenticated status in view
+  through a transport interruption. After a connection refusal or timeout on
+  the same channel, the status window shows the last observed state, reason,
+  generation and check under "Last observed" labels. Those rows are historical
+  and never establish current freshness, service health or permission. The
+  history stays in memory and is cleared on a channel change, an
+  authentication refusal, an untrusted or malformed answer, a report for
+  another scope, or unload. A republish that names a different channel resets
+  the display to `connecting` without repeating an unchanged notice, and the
+  plugin opens no channel before startup admits it or after unload.
 - The Obsidian maintenance service prepares views cooperatively and yields
   between complete publication units, keeping the loopback listener available
   while notes are emitted, staged and published. Public synchronous preparation
