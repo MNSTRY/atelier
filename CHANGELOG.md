@@ -88,6 +88,28 @@
   binding under a symbol key) no longer stops a project from being kept; and
   a load that fails, is given up or holds the event loop is logged with how
   long it took.
+- The Obsidian maintenance service stays responsive while it prepares and
+  publishes a view. The engine prepares each view cooperatively and the
+  publisher yields between complete units, so the loopback listener answers
+  health and status while notes are emitted, staged and published, instead of
+  being `busy` for the length of a large first publication. `open` and
+  `service stop` therefore reach a service in the middle of a publication:
+  `open` waits for a tick that starts after the one in flight, and `service
+  stop` ends the service after the tick in flight or its shutdown grace,
+  leaving a publication cut short to the publisher's restart recovery. Reading sources
+  and building the canonical graph, the source snapshot, restart recovery and
+  the read-back still run without yielding. `prepareView` stays synchronous
+  and returns the same bytes. Across each wait the configuration files, the
+  machine settings and the eligibility revision are checked again, and after
+  a view is prepared and before its generation commits every selected source
+  is checked as observation checks it: by its stat hint, and by digest where
+  the hint moved. A change during the tick refuses the generation as
+  `mixed-read`; neither that tick nor a later restart recovery commits it,
+  and the next tick prepares the view again. A source that drifts under an
+  unchanged stat hint is still seen by the next full reconciliation, and a
+  note reused from the preparation cache is still not read. A cancelled
+  preparation leaves the preparation cache as it was, and publication keeps
+  its locks, journal and conditional writes.
 - Started by a login item, the Obsidian maintenance service asks its project
   loader once, and a loader that answers a promise there is refused and
   recorded as at any other start, ending with 0. Before, the promise reached
