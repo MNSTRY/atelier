@@ -127,18 +127,53 @@ export class IsolationRefusal extends Error {
 // healthy status document. A missing or malformed record makes the graceful
 // stop unavailable, but it must never erase the run's custody of the child.
 // The retained handle is the only authority used by stopHeld; an incomplete
-// join refuses cleanup and callers must retain the disposable roots.
-export async function cleanupOwnedRuntime(runtime, { timeoutMs = 5000 } = {}) {
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new RangeError('owned service cleanup timeout must be between 0 and 5000 ms')
+// join refuses cleanup and callers must retain the disposable roots. A
+// detached service has no retained child handle, so a refused graceful stop
+// must be followed by an identity-checked force stop or an explicit stopped
+// status before roots can be removed.
+export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 20_000, heldTimeoutMs = 5_000, timeoutMs } = {}) {
+  if (timeoutMs !== undefined) gracefulTimeoutMs = timeoutMs
+  if (!Number.isFinite(gracefulTimeoutMs) || gracefulTimeoutMs < 0 || gracefulTimeoutMs > 20_000) throw new RangeError('graceful service cleanup timeout must be between 0 and 20000 ms')
+  if (!Number.isFinite(heldTimeoutMs) || heldTimeoutMs < 0 || heldTimeoutMs > 5_000) throw new RangeError('held service cleanup timeout must be between 0 and 5000 ms')
   let graceful = null
   let gracefulError = null
-  try { graceful = await runtime.stop({ stopTimeoutMs: timeoutMs }) } catch (error) { gracefulError = { name: error.name, message: error.message } }
-  let held
-  try { held = await runtime.stopHeld({ timeoutMs }) } catch (error) {
-    throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${error.message}`, { graceful, gracefulError })
+  try { graceful = await runtime.stop({ stopTimeoutMs: gracefulTimeoutMs }) } catch (error) { gracefulError = { name: error.name, message: error.message } }
+  let observed = null
+  let observedLive = null
+  let status = null
+  let forced = null
+  let forceError = null
+  const readRecord = () => {
+    if (typeof runtime.record !== 'function') return null
+    try { return runtime.record() } catch (error) { return { __error: { name: error.name, message: error.message } } }
   }
-  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', { graceful, gracefulError, held })
-  return { graceful, gracefulError, held }
+  const readLive = (record) => {
+    if (!record || record.__error || !Number.isInteger(record.pid) || typeof runtime.alive !== 'function') return null
+    try { return Boolean(runtime.alive(record.pid)) } catch { return null }
+  }
+  if (typeof runtime.status === 'function') {
+    try { status = await runtime.status() } catch { status = null }
+  }
+  observed = readRecord()
+  observedLive = readLive(observed)
+  if (graceful?.stopped !== true && observedLive === true) {
+    try { forced = await runtime.stop({ stopTimeoutMs: heldTimeoutMs, force: true }) } catch (error) { forceError = { name: error.name, message: error.message } }
+    observed = readRecord()
+    observedLive = readLive(observed)
+  }
+  const explicitlyStopped = graceful?.stopped === true || (graceful?.state === 'stopped' && observedLive !== true && !observed?.__error) || (status?.state === 'stopped' && !status.record && observedLive !== true)
+  if (!explicitlyStopped && observedLive !== false && forced?.stopped !== true) {
+    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', { graceful, gracefulError, status, forced, forceError, record: observed, alive: observedLive })
+  }
+  let held
+  try { held = await runtime.stopHeld({ timeoutMs: heldTimeoutMs }) } catch (error) {
+    throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${error.message}`, { graceful, gracefulError, status, forced, forceError, record: observed, alive: observedLive })
+  }
+  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', { graceful, gracefulError, status, forced, forceError, held })
+  const afterRecord = readRecord()
+  const afterLive = readLive(afterRecord)
+  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', { graceful, gracefulError, status, forced, forceError, held, record: afterRecord, alive: afterLive })
+  return { graceful, gracefulError, status, forced, forceError, observed: { record: observed, alive: observedLive }, held, after: { record: afterRecord, alive: afterLive } }
 }
 
 // ---------------------------------------------------------------------------
@@ -701,8 +736,8 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
 //     handle of a service process the runtime started and still holds (lib/ap03.mjs, lib/service-world.mjs): a
 //     number it does not hold is never signalled, and the interruption is recorded as a failure instead;
 //   - at the end the temporary directories this runner created (its own root, and each launched instance's
-//     root) are removed by path, with no check that the path still names the directory it created, and whether
-//     or not the instances were seen to end. Links inside them are removed as links.
+//     root) are removed by path only after every owned service has been proven stopped; a failed cleanup retains
+//     the roots and reports a typed refusal. Links inside retained roots are preserved for diagnosis.
 async function runIsolated({ plan, args, candidate, operator, host, receiptDir }) {
   if (plan.app === 'small-fixture') return runOwnedSmallFixture({ plan, args, candidate, operator, host, receiptDir })
   const { createLayout, Instance } = await import('../../experiments/obsidian-publication/lib/instance.mjs')
@@ -798,6 +833,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
           extensions: createObsidianRegistry({ contributions: [createSourceApplyContribution({ context: { loadProject: world.loadProject, dataRoot, env, platform: process.platform } }), createProposalAdapterContribution()] }).extensions,
         })
         : createServiceRuntime({ loadProject: world.loadProject, dataRoot, env, consent, intervalMs: PROCEDURE_TICK_INTERVAL_MS, probeTimeoutMs: 5000 })
+      let procedureError = null
       try {
         if (!scoped) {
           const appSeam = { openNote: (notePath) => full.app.stimulus('open', notePath), readIncludes: async ({ path: notePath, needle }) => (await evalValue(full.app, PROBES.readIncludes, { path: notePath, needle })) === 'true' }
@@ -821,6 +857,9 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
           passedByGate.G17 = run.passed
           timingsByGate.G17 = { launchedAt: new Date(full.launchedAtMs).toISOString(), derivation: derivations, ...run.timings, failures: run.failures }
         }
+      } catch (error) {
+        procedureError = error
+        throw error
       } finally {
         // This service is the disposable one this run started. Graceful stop is
         // useful when its record is healthy, but the retained child handle is
@@ -832,6 +871,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
           }
         } catch (error) {
           retainRoots = true
+          if (procedureError) throw new AggregateError([procedureError, error], 'procedure failed and owned-service cleanup was not proven')
           throw error
         }
         if (runtime.logLines) for (const gate of plan.gates) (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-in-process.log`, bytes: Buffer.from(`${runtime.logLines.map((entry) => JSON.stringify(entry)).join('\n')}\n`) })

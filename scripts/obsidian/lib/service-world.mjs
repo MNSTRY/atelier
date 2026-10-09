@@ -225,6 +225,7 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
   const lifecycle = { loadProject, dataRoot, env, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
   const workspace = () => resolveServiceWorkspace({ project: loadProject(), dataRoot, env, create: true })
   let service = null
+  let shutdownPromise = null
   const logLines = []
   const record = () => { const found = workspace(); return found?.workspaceRoot ? readServiceRecord({ workspaceRoot: found.workspaceRoot, workspaceId: found.workspaceId }) : null }
   return {
@@ -233,6 +234,7 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
     logLines,
     async start() {
       if (service !== null) { const status = await serviceStatus(lifecycle); return { ...status, started: false, alreadyRunning: true } }
+      shutdownPromise = null
       const { workspaceRoot, workspaceId } = workspace()
       const current = readServiceSettings({ workspaceRoot, workspaceId })
       if (current === null) {
@@ -250,13 +252,33 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
     status: () => serviceStatus(lifecycle),
     statusDocument: () => readServiceStatusDocument(lifecycle),
     tick: (options = {}) => requestServiceTick({ ...lifecycle, ...options }),
-    async stop() {
+    async stop({ stopTimeoutMs = 20_000 } = {}) {
+      if (!Number.isFinite(stopTimeoutMs) || stopTimeoutMs < 0 || stopTimeoutMs > 20_000) throw new RangeError('in-process service cleanup timeout must be between 0 and 20000 ms')
       if (service === null) return { state: 'stopped', stopped: false, refused: false, reason: 'not-running-in-this-process' }
-      const { identity } = service
-      await service.shutdown('stop-requested')
-      await service.done
+      const target = service
+      const { identity } = target
+      if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
+      const settled = await Promise.race([
+        shutdownPromise.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), stopTimeoutMs)),
+      ])
+      if (!settled) return { state: 'stopping', stopped: false, refused: true, reason: 'stop-timed-out', runtimeId: identity.runtimeId, pid: identity.pid }
       service = null
+      shutdownPromise = null
       return { state: 'stopped', stopped: true, refused: false, reason: 'stopped-the-in-process-runtime', runtimeId: identity.runtimeId, pid: identity.pid }
+    },
+    async stopHeld({ timeoutMs = 5000 } = {}) {
+      if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new RangeError('held-service cleanup timeout must be between 0 and 5000 ms')
+      if (service === null) return { joined: true, signals: [], remaining: [] }
+      const target = service
+      const { identity } = target
+      if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
+      const settled = await Promise.race([
+        shutdownPromise.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+      ])
+      if (settled) { service = null; shutdownPromise = null }
+      return { joined: settled, signals: [], remaining: settled ? [] : [identity.pid] }
     },
     record,
     alive: isProcessAlive,

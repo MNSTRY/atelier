@@ -2658,21 +2658,53 @@ test('AP-03 production cleanup joins the owned child when the status record refu
   const runtime = {
     async stop(options) { calls.push(['stop', options]); throw new Error('status record unavailable') },
     async stopHeld(options) { calls.push(['stopHeld', options]); return { joined: true, signals: [{ pid: 7, sent: true, through: 'handle' }], remaining: [] } },
+    record() { return null },
+    status() { return { state: 'stopped', record: null } },
   }
   const result = await cleanupOwnedRuntime(runtime)
   assert.equal(result.graceful, null)
   assert.deepEqual(result.gracefulError, { name: 'Error', message: 'status record unavailable' })
-  assert.deepEqual(calls, [['stop', { stopTimeoutMs: 5000 }], ['stopHeld', { timeoutMs: 5000 }]])
+  assert.deepEqual(calls, [['stop', { stopTimeoutMs: 20000 }], ['stopHeld', { timeoutMs: 5000 }]])
 })
 
 test('AP-03 production cleanup refuses and retains custody when an owned child remains live', async () => {
+  let live = true
   const runtime = {
-    async stop() { return { state: 'stale-record' } },
+    async stop(options) { if (options.force === true) live = false; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'stale-record', stopped: false } },
+    record() { return { pid: 8 } },
+    alive() { return live },
     async stopHeld() { return { joined: false, signals: [{ pid: 8, sent: false, through: 'handle' }], remaining: [8] } },
   }
   await assert.rejects(
     () => cleanupOwnedRuntime(runtime),
     (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-incomplete' && error.detail.held.remaining[0] === 8,
+  )
+})
+
+test('AP-03 production cleanup force-stops a detached service only after identity proof', async () => {
+  const calls = []
+  let live = true
+  const runtime = {
+    async stop(options) { calls.push(options); if (options.force === true) live = false; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false, refused: true } },
+    record() { return { runtimeId: 'rt-detached', pid: 4242 } },
+    alive() { return live },
+    async stopHeld(options) { calls.push({ held: options }); return { joined: true, signals: [], remaining: [] } },
+  }
+  const result = await cleanupOwnedRuntime(runtime)
+  assert.deepEqual(calls, [{ stopTimeoutMs: 20000 }, { stopTimeoutMs: 5000, force: true }, { held: { timeoutMs: 5000 } }])
+  assert.equal(result.forced.stopped, true)
+  assert.equal(result.after.alive, false)
+})
+
+test('AP-03 production cleanup refuses a detached service when no stop proof exists', async () => {
+  const runtime = {
+    async stop() { throw new Error('status unavailable') },
+    record() { return null },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified',
   )
 })
 
