@@ -2527,7 +2527,9 @@ test('a service started on a personal home with nothing confirmed listens, ticks
   assert.ok(words.includes(`--personal-home=${home}`) && !words.some((word) => word.startsWith('--project')), words.join(' '))
   const record = readServiceRecord({ workspaceRoot: fs.realpathSync(workspaceStateRoot(lifecycle.dataRoot, started.workspaceId)), workspaceId: started.workspaceId })
   const status = await waitFor(async () => { const { body } = await callService(record, 'GET', '/status'); return body && body.loop.ticks >= 1 && !body.loop.ticking ? body : null }, { label: 'the first tick of the service', timeoutMs: 120000 })
-  assert.deepEqual([status.service.status, status.lastTick?.state, status.lastTick?.reason], ['healthy', 'refused', 'nothing-selected'], JSON.stringify(status))
+  // On Windows the personal-workspace module cannot verify a private root and refuses before it reads the history.
+  const why = process.platform === 'win32' ? 'private-root-unverifiable' : 'nothing-selected'
+  assert.deepEqual([status.service.status, status.lastTick?.state, status.lastTick?.reason], ['healthy', 'refused', why], JSON.stringify(status))
   const stopped = await stopService({ ...lifecycle, stopTimeoutMs: 20000 })
   assert.equal(stopped.stopped, true, JSON.stringify(stopped))
 })
