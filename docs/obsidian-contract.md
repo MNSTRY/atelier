@@ -665,6 +665,20 @@ again, so bytes that drift under an unchanged pinned digest are not seen by
 describes, and the next observation by digest sees the drift. A note whose pin
 changed is read and verified against the pin as always.
 
+That bound is the synchronous `prepareView`'s. The maintenance engine prepares
+a view cooperatively (the `prepareViewCooperatively` production seam): it
+waits between notes so that the service keeps answering, and a source can
+change during a wait. Before a cooperative preparation returns, every
+selected source is read against its pin once more, a reused note's included,
+and the engine reads them again while the publisher holds its locks, before
+the journal entry that says the publication settled and before the commit. A
+source that no longer matches refuses the generation as `mixed-read`: its
+manifest is not committed, at that tick or by the restart recovery of a later
+one, and the next tick observes in full and prepares the view again. A
+preparation refused or cancelled on the way leaves the preparation cache as
+it was. The same waits check that the configuration files, the machine
+settings and the eligibility revision are still the ones the tick read.
+
 The engine holds one graph file cache and one preparation cache per scope for
 its lifetime and hands them through the `createGraphCache` and
 `createPreparationCache` production seams; a test replaces either with

@@ -538,9 +538,16 @@ earlier one, so two installations used on one workspace (a global and a
 project-local one, say) do not replace each other's service on every open:
 `open` answers `service-unavailable` / `service-other-release`, and `service
 start` answers that it runs, with `release: later`; run `atelier obsidian
-service stop`, then open again, or open with the later release. A service in a
-long tick is not stopped (`open` answers `busy`), and a listener that does not
-prove itself this workspace's service is never touched.
+service stop`, then open again, or open with the later release. A service that
+does not answer health in time, in a stretch of a tick that does not yield, is
+not stopped (`open` answers `busy`), and a listener that does not prove itself
+this workspace's service is never touched. While a view is being prepared and
+published the service does answer: `open` asks it for a tick that starts after
+the one in flight and waits for that tick as long as `--wait-ms` allows before
+it reports the view as it is, and `service stop` is accepted and ends the
+service after the tick in flight or after its shutdown grace, whichever comes
+first. A publication cut short that way is settled by the publisher's restart
+recovery at the next one.
 
 The first time Obsidian opens a view's vault it asks "Do you trust the author
 of this vault?", because every vault Atelier publishes carries Atelier's own
@@ -1021,6 +1028,19 @@ newly observed edit, without the engine's file cache, blocked 2.0 s, at a
 two-second target, as for an ordinary project. A service binding needs the
 first publication to yield to the event loop (or run off it), or a corpus small
 enough to stay within the probe.
+
+**Since that measurement.** The engine prepares each view cooperatively and
+the publisher yields between complete units, so the service answers health and
+status while notes are emitted, staged and published. The first-tick figures
+in the table are from before that change and have not been taken again on that
+corpus. Parts of a tick still run without yielding: reading the sources and
+building the canonical graph, capturing the source snapshot, observing source
+and vault files, the publisher's restart recovery, validating a prepared view
+and planning its units, and the read-back after a commit. A service in one of
+those does not answer until it ends, and is `busy` if that outlasts the probe.
+What yielding costs is reading: every selected source is read against its pin
+again before a prepared view is returned and again before its generation
+commits, where a note reused from the preparation cache was not read at all.
 
 ## Known limits
 

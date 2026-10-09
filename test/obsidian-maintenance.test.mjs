@@ -231,18 +231,38 @@ test('cooperative engine refuses an eligibility revision changed across a prepar
 test('cooperative engine refuses a source changed during publication before committing its pointer', needsExchange, async (t) => {
   const world = makeWorld(t)
   let changed = false
-  const engine = world.engine({ seams: { publishView: input => publishView({ ...input, scheduling: {
-    ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
-      if (changed || phase !== 'publication-complete') return
-      changed = true
-      fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nChanged authored source during publication.\n')
-    },
-  } }) } })
+  let refusedGeneration = null
+  const engine = world.engine({ seams: { publishView: input => {
+    refusedGeneration ??= input.preparedView.manifest.generationId
+    return publishView({ ...input, scheduling: {
+      ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (changed || phase !== 'publication-complete') return
+        changed = true
+        fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nChanged authored source during publication.\n')
+      },
+    } })
+  } } })
   const report = await engine.tick()
   assert.equal(changed, true)
   assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
   assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
   assert.match(fs.readFileSync(world.source('east-wing/notes/lantern.md'), 'utf8'), /Changed authored source/)
+  // The refusal holds at the next tick: its publication recovers what the refused one left, does not commit the refused
+  // generation, and publishes the source as it is now. The notes the refused publication wrote are nobody's edits.
+  world.advance(1000)
+  const next = await engine.tick()
+  assert.deepEqual([world.scope(next).state, world.scope(next).reason, next.pendingEdits], ['current', 'published-and-verified', []], JSON.stringify(world.scope(next)))
+  assert.equal(world.scope(next).generationId, world.manifest().generationId)
+  assert.ok(typeof refusedGeneration === 'string' && world.scope(next).generationId !== refusedGeneration, 'the committed generation is not the refused one')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /Changed authored source during publication/)
+})
+
+test('an engine handed the production seams with prepareView replaced prepares through that replacement', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let replaced = 0
+  const engine = world.engine({ seams: { ...createProductionSeams(), prepareView: (input) => { replaced += 1; return DEFAULT.prepareView(input) } } })
+  const report = await engine.tick()
+  assert.deepEqual([world.scope(report).state, replaced], ['current', 1], 'the cooperative preparation that ships does not stand in for a replaced prepareView')
 })
 
 test('cooperative engine rechecks source pins before reporting an already committed generation current', needsExchange, async (t) => {
@@ -2008,7 +2028,9 @@ test('cooperative service preparation keeps real loopback health answering and p
       return await prepareViewCooperatively({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
         if (phase === 'emit-note' && health === null) {
           const record = recordOf(world)
-          health = probeHealth({ host: record.host, port: record.port }).then((answer) => { answeredDuringPreparation = preparing; return answer })
+          // A long deadline: whether the answer came while the view was being prepared is what is asserted, and a
+          // deadline a loaded host could miss would say nothing about that.
+          health = probeHealth({ host: record.host, port: record.port, timeoutMs: 120000 }).then((answer) => { answeredDuringPreparation = preparing; return answer })
         }
       } } })
     } finally { preparing = false }

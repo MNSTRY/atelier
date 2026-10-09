@@ -107,14 +107,22 @@ const noteOf = (prepared, nodeId) => prepared.manifest.notes.find((note) => note
 const noteBytes = (prepared, nodeId) => fileOf(prepared, noteOf(prepared, nodeId).path).bytes
 const original = (repoId, relative) => sourceBytes(workspace.files[`${repoId}/${relative}`])
 
-test('cooperative preparation preserves synchronous bytes and lets timers run before completing', async (t) => {
+test('cooperative preparation preserves synchronous bytes and lets the event loop turn at every boundary', async (t) => {
   const snapshot = makeWorkspace(t)
   const expected = prepare(snapshot, fullScope)
-  let timerRan = false
-  const timer = setTimeout(() => { timerRan = true }, 0)
-  t.after(() => clearTimeout(timer))
-  const actual = await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, scheduling: { maxUnits: 1 } })
-  assert.equal(timerRan, true)
+  // The turns of the event loop while the preparation runs: an immediate that queues itself again. No clock is read,
+  // so the count means the same on an idle host and on a loaded one.
+  let turns = 0
+  let counting = true
+  const spin = () => { if (!counting) return; turns += 1; setImmediate(spin) }
+  setImmediate(spin)
+  t.after(() => { counting = false })
+  const bursts = []
+  const actual = await prepareViewCooperatively({ snapshot, profile, scope: fullScope, clock, scheduling: { maxUnits: 1, onBurst: ({ phase }) => bursts.push({ phase, turns }) } })
+  counting = false
+  const count = (phase) => bursts.filter((burst) => burst.phase === phase).length
+  assert.deepEqual([count('emit-note'), count('recheck-source')], [expected.manifest.notes.length, expected.manifest.notes.length], 'one boundary per note emitted and one per source read again')
+  for (let index = 1; index < bursts.length; index += 1) assert.ok(bursts[index].turns > bursts[index - 1].turns, `no turn between ${bursts[index - 1].phase} and ${bursts[index].phase}`)
   assert.deepEqual(actual, expected)
 })
 

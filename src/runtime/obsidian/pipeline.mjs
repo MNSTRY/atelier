@@ -142,6 +142,10 @@ export function buildGraph({ project, eligibility, cache = null, index = null, d
 // its pinned digest is unchanged and the cached bytes are the ones that digest
 // describes, so bytes that drift under an unchanged pin are not consulted
 // until observation hashes the file again (the same bound as the graph stage).
+// That bound is prepareView's. prepareViewCooperatively, which the engine
+// uses, waits between notes, and a source can change during a wait: before it
+// returns it reads every selected source against its pin once more, a reused
+// note's included, and the engine does so again before the generation commits.
 export function captureSnapshot({ project, graph, workspaceId, index, configDigest, capturedAt }) {
   const roots = new Map((project.repos ?? []).filter((repo) => !repo.external).map((repo) => [repo.name, repo.path]))
   const absolute = (repoId, relative) => {

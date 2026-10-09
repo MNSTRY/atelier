@@ -43,13 +43,25 @@
   another scope, or unload. A republish that names a different channel resets
   the display to `connecting` without repeating an unchanged notice, and the
   plugin opens no channel before startup admits it or after unload.
-- The Obsidian maintenance service prepares views cooperatively and yields
-  between complete publication units, keeping the loopback listener available
-  while notes are emitted, staged and published. Public synchronous preparation
-  stays synchronous. Settings, selection inputs and eligibility are rechecked
-  across waits, and selected source bytes are rechecked before the generation
-  commits. Cancellation preserves the prior preparation cache and publication
-  recovery keeps the existing locks, journal and conditional-write protocol.
+- The Obsidian maintenance service stays responsive while it prepares and
+  publishes a view. The engine prepares each view cooperatively and the
+  publisher yields between complete units, so the loopback listener answers
+  health and status while notes are emitted, staged and published, instead of
+  being `busy` for the length of a large first publication. `open` and
+  `service stop` therefore reach a service in the middle of a publication:
+  `open` waits for a tick that starts after the one in flight, and `service
+  stop` ends the service after the tick in flight or its shutdown grace,
+  leaving a publication cut short to the publisher's restart recovery. Reading sources
+  and building the canonical graph, the source snapshot, restart recovery and
+  the read-back still run without yielding. `prepareView` stays synchronous
+  and returns the same bytes. Across each wait the configuration files, the
+  machine settings and the eligibility revision are checked again, and every
+  selected source is read against its pin again before a prepared view is
+  returned and before its generation commits. A change refuses the generation
+  as `mixed-read`; neither that tick nor a later restart recovery commits it,
+  and the next tick prepares the view again. A cancelled preparation leaves
+  the preparation cache as it was, and publication keeps its locks, journal
+  and conditional writes.
 
 ## 0.2.0-alpha.13
 

@@ -539,14 +539,17 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       journal.append({ step: 'verify', outcome: 'conflict', state: 'verifying', notePath: finding.notePath, beforeDigest: finding.digestAtMove, afterDigest: finding.observedDigest, recoveryRef: finding.displacedRef,
         detail: { unit: finding.unit, code: 'late-writer-captured', objectRef: finding.objectRef } })
     }
-    journal.append({ step: 'verify', outcome: 'ok', state: 'verifying', detail: { settled: true, retained: retainedEdits } })
     await budget.checkpoint('verify-before-commit', true)
     // The resident engine revalidates the selected source pins here, while
     // publication still owns its locks. Its check may yield; no durability
-    // unit or committed pointer is half-written across that wait.
+    // unit or committed pointer is half-written across that wait. It comes
+    // before the entry that says the publication settled: restart recovery
+    // commits a journal that holds that entry, so a refusal after it would be
+    // committed by the next publication of this view.
     await options.beforeCommit?.()
     budget.check()
     store.checkAllocatedVault?.()
+    journal.append({ step: 'verify', outcome: 'ok', state: 'verifying', detail: { settled: true, retained: retainedEdits } })
     crash('before-manifest-commit')
     store.checkAllocatedVault?.()
     store.commitManifest({ manifestBytes, generationId: manifest.generationId, journalId, retained: retainedEdits, committedAt: iso(clock) })

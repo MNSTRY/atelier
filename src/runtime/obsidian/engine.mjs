@@ -205,8 +205,11 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   if (typeof clock !== 'function') throw new TypeError('the engine needs an injected clock')
   // No default: the production adapter reaches a running app, and only the owner of the lifecycle may decide that.
   if (typeof adapterFactory !== 'function') throw new TypeError('the engine needs an adapterFactory')
-  const seams = { ...createProductionSeams(), ...(options.seams ?? {}) }
-  if (Object.hasOwn(options.seams ?? {}, 'prepareView') && !Object.hasOwn(options.seams ?? {}, 'prepareViewCooperatively')) seams.prepareViewCooperatively = null
+  const production = createProductionSeams()
+  const seams = { ...production, ...(options.seams ?? {}) }
+  // A caller that replaced prepareView and left the cooperative preparation as it ships prepares views its own way: its
+  // seam is used, synchronously, whether it handed in that one member or the production seams with that member replaced.
+  if (seams.prepareView !== production.prepareView && seams.prepareViewCooperatively === production.prepareViewCooperatively) seams.prepareViewCooperatively = null
   const rules = { ...ENGINE_PRIMITIVES, ...primitives }
   // Optional local qualification telemetry. It has no authority to change a
   // tick's result, and records elapsed boundaries rather than a budget claim.
