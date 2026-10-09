@@ -2510,6 +2510,30 @@ function serviceWorld(t, options) {
   })
 }
 
+test('a service started on a personal home with nothing confirmed listens, ticks, says why it publishes nothing, and is stopped from the home alone', async (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-maintenance-home-'))
+  const mine = []
+  t.after(async () => { for (const entry of mine) await endProcess(entry); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }) })
+  const home = path.join(dir, 'home')
+  fs.mkdirSync(home, { mode: 0o700 })
+  const { locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
+  // The command side never loads the home's project to find, start or stop its service: the loader throws if asked.
+  const lifecycle = { loadProject: () => { throw new Error('a located home is never loaded by the lifecycle') }, locateProject: () => locatePersonalHome({ personalHome: home }), dataRoot: path.join(dir, 'data'), env: process.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL }
+  const spawn = (...args) => { const child = childProcess.spawn(...args); mine.push(registerProcess(t, child, 'a service started on a personal home')); return child }
+  let words = null
+  const port = await reservePort(t)
+  const started = await startService({ ...lifecycle, spawn: (command, args, options) => { words = args; return spawn(command, args, options) }, consent: CONSENT, port })
+  assert.deepEqual([started.state, started.started], ['healthy', true], JSON.stringify(started))
+  assert.ok(words.includes(`--personal-home=${home}`) && !words.some((word) => word.startsWith('--project')), words.join(' '))
+  const record = readServiceRecord({ workspaceRoot: fs.realpathSync(workspaceStateRoot(lifecycle.dataRoot, started.workspaceId)), workspaceId: started.workspaceId })
+  const status = await waitFor(async () => { const { body } = await callService(record, 'GET', '/status'); return body && body.loop.ticks >= 1 && !body.loop.ticking ? body : null }, { label: 'the first tick of the service', timeoutMs: 120000 })
+  // On Windows the personal-workspace module cannot verify a private root and refuses before it reads the history.
+  const why = process.platform === 'win32' ? 'private-root-unverifiable' : 'nothing-selected'
+  assert.deepEqual([status.service.status, status.lastTick?.state, status.lastTick?.reason], ['healthy', 'refused', why], JSON.stringify(status))
+  const stopped = await stopService({ ...lifecycle, stopTimeoutMs: 20000 })
+  assert.equal(stopped.stopped, true, JSON.stringify(stopped))
+})
+
 test('a first start in these tests listens on a reserved port, never one the product found by listening on port 0 (#102)', async (t) => {
   const world = serviceWorld(t)
   const started = await world.start()

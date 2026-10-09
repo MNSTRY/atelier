@@ -9,6 +9,7 @@ import { ensureServiceSettings } from './lifecycle.mjs'
 import { ensureWorkspaceIdentity, readLocalPointer, resolveDataRoot } from './machine-settings.mjs'
 import { SERVICE_MANAGER_KINDS } from './service-managers.mjs'
 import { readLastStartup, readServiceSettings, serviceNameFor, servicePaths, writeServiceSettings } from './service-record.mjs'
+import { personalHomeOf } from './personal-selection.mjs'
 import { resolveServiceWorkspace } from './service.mjs'
 import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from './startup-adapters.mjs'
 
@@ -164,7 +165,9 @@ export const loginItemDataRoot = ({ project, dataRoot, env = process.env, platfo
 export function planLoginItem({ platform, project, workspaceRoot, workspaceId, dataRoot, label, entryPath, entryArgs = [], nodePath, searchPath = null }) {
   if (!isAbsolutePlain(dataRoot)) throw new TypeError('a login item names the absolute data root of its workspace')
   if (typeof workspaceId !== 'string' || workspaceId === '') throw new TypeError('a login item names its workspace')
-  const args = [`--project=${project.configPath}`, `--data-root=${dataRoot}`, `--workspace-id=${workspaceId}`, ...entryArgs]
+  // A bound personal home is named instead of a project, as `start` names it (lifecycle.mjs).
+  const home = personalHomeOf(project)
+  const args = [home === null ? `--project=${project.configPath}` : `--personal-home=${home}`, `--data-root=${dataRoot}`, `--workspace-id=${workspaceId}`, ...entryArgs]
   const unit = buildStartupAdapter({ platform, label, nodePath, entryPath, args, logPath: servicePaths(workspaceRoot).loginItemLog, searchPath })
   return { ...unit, label, digest: sha256(unit.text), program: { node: nodePath, entry: entryPath }, searchPath }
 }

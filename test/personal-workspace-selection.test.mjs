@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import nodeTest from 'node:test'
 import {
   resolvePersonalWorkspace, planPersonalGeneration, materializePersonalGeneration, PersonalWorkspaceRefusal, MANIFEST_SCHEMA, OVERLAY_SCHEMA,
-  selectPersonalGeneration, selectionConfirmDigest, readPersonalSelection, inventoryPersonalHome, planPersonalRestore, restorePersonalInputs,
+  selectPersonalGeneration, selectionConfirmDigest, readPersonalSelection, readPersonalSelectionHead, inventoryPersonalHome, planPersonalRestore, restorePersonalInputs,
 } from '../src/personal-workspace/index.mjs'
 
 const test = (name, fn) => nodeTest(name, { skip: process.platform === 'win32' }, fn)
@@ -99,6 +99,27 @@ test('a tampered or reordered selection history refuses', (t) => {
   refuses(() => readPersonalSelection({ personalHome: f.personalHome }), 'selection-history-corrupt')
   fs.rmSync(second); fs.writeFileSync(path.join(f.personalHome, 'selections', '000003.json'), fs.readFileSync(path.join(f.personalHome, 'selections', '000001.json')))
   refuses(() => readPersonalSelection({ personalHome: f.personalHome }), 'selection-history-corrupt')
+})
+
+test('the head is read from the history alone: it names the last record whatever became of its generation, and a broken chain refuses', (t) => {
+  const f = fixture(t)
+  assert.deepEqual(readPersonalSelectionHead({ personalHome: f.personalHome }), { selected: null, sequence: 0, head: 'genesis' })
+  const g1 = f.materialize()
+  const chosen = f.select(g1)
+  const head = { selected: g1, sequence: 1, head: chosen.head }
+  assert.deepEqual(readPersonalSelectionHead({ personalHome: f.personalHome }), head)
+  // Changed inputs make the selection ineligible. The head still names it: eligibility is composition's to decide.
+  f.overlay.annotations[0].note = 'Revised perspective'; f.save()
+  assert.equal(readPersonalSelection({ personalHome: f.personalHome }).eligible, false)
+  assert.deepEqual(readPersonalSelectionHead({ personalHome: f.personalHome }), head)
+  // Nothing is composed: with every generation moved away, the head reads as before.
+  fs.renameSync(path.join(f.personalHome, 'generations'), path.join(f.base, 'generations-moved'))
+  assert.deepEqual(readPersonalSelectionHead({ personalHome: f.personalHome }), head)
+  assert.equal(Object.isFrozen(readPersonalSelectionHead({ personalHome: f.personalHome })), true)
+  fs.appendFileSync(path.join(f.personalHome, 'selections', '000001.json'), ' ')
+  refuses(() => readPersonalSelectionHead({ personalHome: f.personalHome }), 'selection-history-corrupt')
+  fs.renameSync(f.personalHome, path.join(f.base, 'personal-moved'))
+  refuses(() => readPersonalSelectionHead({ personalHome: f.personalHome }), 'root-missing')
 })
 
 test('the inventory lists authored files, generations, selections and restores, and writes nothing', (t) => {
@@ -510,7 +531,7 @@ test('a schema-invalid current manifest refuses both planning and restoring', (t
 })
 
 test('null or missing options refuse with a stable code', () => {
-  for (const call of [() => selectPersonalGeneration(null), () => readPersonalSelection(null), () => inventoryPersonalHome(), () => planPersonalRestore(null), () => restorePersonalInputs(null, null), () => selectionConfirmDigest(null)]) {
+  for (const call of [() => selectPersonalGeneration(null), () => readPersonalSelection(null), () => readPersonalSelectionHead(null), () => inventoryPersonalHome(), () => planPersonalRestore(null), () => restorePersonalInputs(null, null), () => selectionConfirmDigest(null)]) {
     assert.throws(call, (e) => e instanceof PersonalWorkspaceRefusal && typeof e.code === 'string')
   }
 })

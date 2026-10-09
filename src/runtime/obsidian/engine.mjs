@@ -204,6 +204,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
     // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
     lockOwner = null, lockProbe = probeHealth,
+    // Answers at once, without loading, what the workspace is resolved from (locatePersonalHome), for a loader that can
+    // refuse before any project was loaded: the views published before are then told why nothing is published now.
+    locateProject = null,
   } = options
   if (typeof loadProject !== 'function') throw new TypeError('the engine needs loadProject')
   if (typeof clock !== 'function') throw new TypeError('the engine needs an injected clock')
@@ -338,11 +341,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state.
   async function persistOutcome({ enablement, state, reason, now, scopeIds = [] }) {
     if (!known) {
+      let located = project
+      try { located ??= locateProject === null ? null : locateProject() } catch { located = null }
       let pointer = null
-      try { pointer = project ? readLocalPointer(project) : null } catch { pointer = null }
+      try { pointer = located ? readLocalPointer(located) : null } catch { pointer = null }
       if (!pointer) return
       let root
-      try { root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId) } catch { return }
+      try { root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project: located, env, platform }), pointer.workspaceId) } catch { return }
       const stateStore = createMaintenanceStateStore({ workspaceRoot: root, workspaceId: pointer.workspaceId })
       if (!stateStore.exists()) return
       known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual' }

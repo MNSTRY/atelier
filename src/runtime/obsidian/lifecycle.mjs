@@ -15,6 +15,7 @@ import {
   CONSENT_COVERAGES, SERVICE_SETTINGS_SCHEMA, executableIdentity, openServiceLog, publicRecord, readLastStartup, readServiceRecord, readServiceSettings, releaseOfEntry, removeServiceRecord,
   serviceNameFor, servicePaths, writeServiceSettings,
 } from './service-record.mjs'
+import { personalHomeOf } from './personal-selection.mjs'
 import { resolveServiceWorkspace } from './service.mjs'
 
 // start / status / stop of the maintenance service of one workspace, as
@@ -61,9 +62,11 @@ export const LIFECYCLE_PRIMITIVES = Object.freeze({
   provesOurProcess: (record) => processRunsRecordedExecutable(record),
 })
 
-function context({ loadProject, dataRoot, env, platform, create = false, randomBytes }) {
+// `locateProject`, when given, answers what the workspace is resolved from without loading the project (a bound
+// personal home, locatePersonalHome): its service is then found, started and stopped whatever its selection holds.
+function context({ loadProject, locateProject = null, dataRoot, env, platform, create = false, randomBytes }) {
   if (typeof loadProject !== 'function') throw new TypeError('the service lifecycle needs loadProject')
-  const project = loadProject()
+  const project = locateProject === null ? loadProject() : locateProject()
   if (create) ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}) })
   const workspace = resolveServiceWorkspace({ project, dataRoot, env, platform, create })
   return { project, workspace }
@@ -90,8 +93,8 @@ async function evaluate({ workspaceRoot, workspaceId }, { probeTimeoutMs = DEFAU
 
 const shown = ({ record, ...status }) => ({ ...status, record: publicRecord(record) })
 
-export async function serviceStatus({ loadProject, dataRoot, env = process.env, platform = process.platform, probeTimeoutMs, alive } = {}, rules = LIFECYCLE_PRIMITIVES) {
-  const { workspace } = context({ loadProject, dataRoot, env, platform })
+export async function serviceStatus({ loadProject, locateProject, dataRoot, env = process.env, platform = process.platform, probeTimeoutMs, alive } = {}, rules = LIFECYCLE_PRIMITIVES) {
+  const { workspace } = context({ loadProject, locateProject, dataRoot, env, platform })
   if (!workspace?.workspaceRoot) return { state: 'stopped', reason: 'workspace-not-prepared', workspaceId: workspace?.workspaceId ?? null, record: null, address: null }
   return shown(await evaluate(workspace, { probeTimeoutMs, alive, rules }))
 }
@@ -177,11 +180,11 @@ async function startThroughLoginItem({ workspace, loginItem, entryPath, deadline
 // proven runtime is answered as already running.
 export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   const {
-    loadProject, dataRoot, host, port, consent, detached = false, entryPath = SERVICE_ENTRY_PATH, entryArgs = [], intervalMs,
+    loadProject, locateProject, dataRoot, host, port, consent, detached = false, entryPath = SERVICE_ENTRY_PATH, entryArgs = [], intervalMs,
     startTimeoutMs = DEFAULT_START_TIMEOUT_MS, probeTimeoutMs, clock = () => new Date(), env = process.env, platform = process.platform,
     spawn = childProcess.spawn, execPath = process.execPath, alive = isProcessAlive, randomBytes = cryptoRandomBytes, loginItem = null, replaceOutdated = false,
   } = options
-  const { project, workspace } = context({ loadProject, dataRoot, env, platform, create: true })
+  const { project, workspace } = context({ loadProject, locateProject, dataRoot, env, platform, create: true })
   const { workspaceRoot, workspaceId } = workspace
   const deadline = Date.now() + startTimeoutMs
 
@@ -208,7 +211,7 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
       const standing = replaceOutdated ? runtimeRelease(before, entryPath) : null
       if (standing === 'later') return { ...shown(before), started: false, alreadyRunning: true, release: 'later' }
       if (standing !== 'outdated') return { ...shown(before), started: false, alreadyRunning: true }
-      const stopped = await stopService({ loadProject, dataRoot, env, platform, probeTimeoutMs, alive }, rules)
+      const stopped = await stopService({ loadProject, locateProject, dataRoot, env, platform, probeTimeoutMs, alive }, rules)
       if (!stopped.stopped) return { ...shown(before), started: false, alreadyRunning: true, release: 'outdated', reason: stopped.reason ?? 'the-runtime-was-not-stopped' }
       replaced = 'outdated'
       before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
@@ -241,7 +244,9 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
     const executable = executableIdentity(entryPath)
     const log = openServiceLog(workspaceRoot)
     try {
-      const args = [executable.path, `--project=${project.configPath}`, ...(dataRoot === undefined ? [] : [`--data-root=${dataRoot}`]), `--runtime-id=${runtimeId}`, ...(intervalMs === undefined ? [] : [`--interval-ms=${intervalMs}`]), ...entryArgs]
+      // A bound personal home is named instead of a project: the service follows the selection confirmed there.
+      const home = personalHomeOf(project)
+      const args = [executable.path, home === null ? `--project=${project.configPath}` : `--personal-home=${home}`, ...(dataRoot === undefined ? [] : [`--data-root=${dataRoot}`]), `--runtime-id=${runtimeId}`, ...(intervalMs === undefined ? [] : [`--interval-ms=${intervalMs}`]), ...entryArgs]
       // No shell. Detached only when the service is meant to outlive the command that starts it. It runs in the root
       // directory, never in the one the command was started in, which may be a vault or a folder somebody removes.
       child = spawn(execPath, args, { detached, shell: false, windowsHide: true, stdio: ['ignore', log.descriptor, log.descriptor], env, cwd: path.parse(executable.path).root })
@@ -277,8 +282,8 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
 }
 
 export async function stopService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
-  const { loadProject, dataRoot, stopTimeoutMs = DEFAULT_STOP_TIMEOUT_MS, probeTimeoutMs, env = process.env, platform = process.platform, alive = isProcessAlive, force = false, kill = process.kill.bind(process) } = options
-  const { workspace } = context({ loadProject, dataRoot, env, platform })
+  const { loadProject, locateProject, dataRoot, stopTimeoutMs = DEFAULT_STOP_TIMEOUT_MS, probeTimeoutMs, env = process.env, platform = process.platform, alive = isProcessAlive, force = false, kill = process.kill.bind(process) } = options
+  const { workspace } = context({ loadProject, locateProject, dataRoot, env, platform })
   if (!workspace?.workspaceRoot) return { state: 'stopped', stopped: false, refused: false, reason: 'workspace-not-prepared' }
   const { workspaceRoot, workspaceId } = workspace
   const status = await evaluate(workspace, { probeTimeoutMs, alive, rules })
@@ -308,8 +313,8 @@ export async function stopService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
 // One authenticated request to the proven runtime, and to nothing else: anything but a healthy status is answered
 // with that status and no request is made.
 async function askProvenRuntime(options, rules, { method, operation, timeoutMs, body = {} }) {
-  const { loadProject, dataRoot, probeTimeoutMs, env = process.env, platform = process.platform, alive = isProcessAlive } = options
-  const { workspace } = context({ loadProject, dataRoot, env, platform })
+  const { loadProject, locateProject, dataRoot, probeTimeoutMs, env = process.env, platform = process.platform, alive = isProcessAlive } = options
+  const { workspace } = context({ loadProject, locateProject, dataRoot, env, platform })
   if (!workspace?.workspaceRoot) return { requested: false, state: 'stopped', reason: 'workspace-not-prepared' }
   const status = await evaluate(workspace, { probeTimeoutMs, alive, rules })
   if (status.state !== 'healthy') return { requested: false, state: status.state, reason: status.reason }

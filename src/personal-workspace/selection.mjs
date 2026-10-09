@@ -45,8 +45,10 @@ function privateHome(personalHome) {
   if (stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0) refuse('not-private-location')
   return personalHome
 }
+// Opened without waiting on it: a FIFO or a device in a record's place refuses instead of blocking the caller, which
+// may be a service's event loop.
 function readBytes(file, limit, tooLarge = 'malformed-input') {
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0))
   try {
     const stat = fs.fstatSync(fd)
     if (!stat.isFile()) refuse('malformed-input')
@@ -179,6 +181,20 @@ export function readPersonalSelection(options) {
     const current = records.at(-1) ?? null
     if (!current) return freeze({ selected: null, head, eligible: false, reason: 'nothing-selected' })
     return freeze({ selected: current.generationId, sequence: current.sequence, head, ...eligibility(personalHome, current.generationId) })
+  }, 'personal-home-unavailable')
+}
+
+// The current selection from the history alone. Nothing is composed, so nothing
+// here says whether the selected generation is still eligible: a host that
+// composes elsewhere reads this first, and reads it again to compare the head it
+// acted on with the head now. `sequence` is 0 while nothing is selected.
+export function readPersonalSelectionHead(options) {
+  return safe(() => {
+    const { personalHome } = options ?? {}
+    privateHome(personalHome)
+    const { records, head } = readHistory(personalHome)
+    const current = records.at(-1) ?? null
+    return freeze({ selected: current?.generationId ?? null, sequence: current?.sequence ?? 0, head })
   }, 'personal-home-unavailable')
 }
 

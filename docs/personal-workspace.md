@@ -29,7 +29,7 @@ stable local enrollment keys; matching a recorded remote is an offline change
 check, not proof of upstream membership or provider identity.
 
 The module entrypoint is `src/personal-workspace/index.mjs`; its public package
-subpath is `@mnstry/atelier/personal-workspace`. The API consists of fifteen exports:
+subpath is `@mnstry/atelier/personal-workspace`. The API consists of sixteen exports:
 
 - `MANIFEST_SCHEMA` and `OVERLAY_SCHEMA`.
 - `PersonalWorkspaceRefusal`.
@@ -37,8 +37,8 @@ subpath is `@mnstry/atelier/personal-workspace`. The API consists of fifteen exp
 - `resolvePersonalWorkspace`.
 - `planPersonalGeneration`, `materializePersonalGeneration`, and
   `composePersonalWorkspace`.
-- `selectPersonalGeneration`, `selectionConfirmDigest`, and
-  `readPersonalSelection`.
+- `selectPersonalGeneration`, `selectionConfirmDigest`,
+  `readPersonalSelection`, and `readPersonalSelectionHead`.
 - `inventoryPersonalHome`.
 - `planPersonalRestore` and `restorePersonalInputs`.
 
@@ -128,6 +128,12 @@ remove only their own temporary files. Every failure is a
   rewriting, any trailing run of records (up to the whole history) yields another
   valid chain; it changes the returned `head`, so a host that needs to detect it
   keeps the head it last observed and compares it.
+- `readPersonalSelectionHead({ personalHome })` returns `{ selected, sequence,
+  head }` from the history alone, with `sequence` 0 while nothing is selected.
+  It composes nothing, so it does not say whether the selection is still
+  eligible; the chain is checked as above. It is for a host that composes
+  elsewhere, and that reads the head again to compare it with the one it acted
+  on.
 - `inventoryPersonalHome({ personalHome })` lists what these operations write, for
   review before any deletion the person chooses: the authored files, each
   generation with its eligibility, interrupted staging directories, every

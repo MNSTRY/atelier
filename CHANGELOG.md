@@ -156,6 +156,26 @@
   the directories are kept while it is there; and the app log copy's credit
   is charged back when a directory is kept after all, with the excess over
   the output bound's allowance reported.
+- `atelier obsidian`, the Obsidian maintenance service and its login item take
+  `--personal-home DIR` instead of `--project`, and then follow the generation
+  last confirmed in that private home of a personal workspace. The head of the
+  selection history is read, that generation is loaded (composed in a worker
+  for the service), and the head is read again; a head that moved refuses
+  `personal-selection-changed`. Nothing confirmed publishes nothing, each with
+  its own code (`nothing-selected`, `stale-generation`,
+  `selection-history-corrupt`, `personal-home-unavailable`, or the module's own
+  code for a home that is gone), and nothing falls back to another project.
+  The service locates its workspace from the home alone through a new
+  `locateProject` option, so it starts whatever the selection; a service given
+  only a loader that answers a promise is still refused at start. The engine
+  observes the selection's record and the next one, so a confirmation or a
+  history cut short is loaded at the next tick, and reads the history again at
+  every full reconciliation. `status` reports the confirmed generation, and
+  nothing here confirms one. Who may see a bound vault is not decided: it stays
+  the machine's audience setting, none by default. `readPersonalSelectionHead`
+  is added to `@mnstry/atelier/personal-workspace`, and the selection history is
+  read without waiting on a record that is not a regular file. Without
+  `--personal-home` nothing changes.
 - The desktop acceptance procedures (`scripts/obsidian/desktop-receipts.mjs`,
   maintainer tooling that is not shipped) interrupt AP-03's service only
   after a healthy status, and only through the handle of the service process

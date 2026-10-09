@@ -358,7 +358,7 @@ function settingsWritten(written) {
 // again for a view the app kept from being published, and reports one outcome.
 export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIMITIVES, lifecycleRules = LIFECYCLE_PRIMITIVES) {
   const {
-    loadProject, dataRoot, scopeId: requestedScope, appProbe, launcher, registry, quitter = null, restartApp = false, service = {}, consent, allowStale = false, extensions = null,
+    loadProject, locateProject, dataRoot, scopeId: requestedScope, appProbe, launcher, registry, quitter = null, restartApp = false, service = {}, consent, allowStale = false, extensions = null,
     tickTimeoutMs = 120 * 1000, appWaitMs = 30 * 1000, appPollMs = 500, sleep = defaultSleep, monotonic = () => Date.now(),
     env = process.env, platform = process.platform, probeTimeoutMs,
   } = options
@@ -382,7 +382,7 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   }
   if (enablement.state === 'disabled') return finish('disabled', { reason: enablement.reason, scopeId: requestedScope ?? null })
   const scopeId = resolveScope(enablement, requestedScope)
-  const lifecycle = { loadProject, dataRoot, env, platform, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
+  const lifecycle = { loadProject, ...(locateProject === undefined ? {} : { locateProject }), dataRoot, env, platform, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
 
   // 1. The owned service: reconnect, or start. Never adopt; a runtime of ours is replaced only when it runs an earlier
   //    release, under the consent already recorded, when a tick is asked of it (requestServiceTick).

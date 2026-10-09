@@ -69,7 +69,7 @@ const PRODUCTION_ADAPTER = 'obsidian-cli'
 const MAX_POLICY_BYTES = 64 * 1024
 const AUDIENCE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
-export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.project.json] [--data-root DIR] [--json] [--no-input]
+export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.project.json | --personal-home DIR] [--data-root DIR] [--json] [--no-input]
 
   status                               Enablement, machine settings, service and per-view freshness. Read-only.
   settings                             What this machine remembers for this workspace, and how to change it. Read-only.
@@ -111,6 +111,11 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
                                        service publishes the view at once (with --adapter, one of an earlier release
                                        is replaced first).
 
+--personal-home DIR, given instead of --project, follows the generation last confirmed in that private home of a personal
+workspace (the personal-workspace module's selection); its views come from the overlay. Nothing here confirms one: while
+none is confirmed and current nothing is published, and status, open and service start refuse with the reason. service
+status and stop, unit --remove and uninstall find the service from the home alone. Who may see its vaults stays this
+machine's audience setting, none by default.
 Reaching the installed app needs --adapter=${PRODUCTION_ADAPTER} once for a workspace; it is remembered after that.
 Obsidian's own settings file (obsidian.json) is written only while no Obsidian runs: open adds the view's vault to its
 list, turns its command line on (cli: true), and creates the file for an Obsidian that never started; every write is
@@ -139,7 +144,7 @@ Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer 
 // spelling of `project`); a test holds it to that.
 export const FLAGS = Object.freeze({
   json: 'flag', 'allow-stale': 'flag', 'restart-obsidian': 'flag', print: 'flag', install: 'flag', remove: 'flag', help: 'flag', 'no-input': 'flag', 'allow-synced-location': 'flag', all: 'flag', default: 'flag', 'allow-empty': 'flag', yes: 'flag',
-  project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value', repo: 'value', tag: 'value',
+  project: 'value', 'project-config': 'value', 'personal-home': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value', repo: 'value', tag: 'value',
   expand: 'value', folder: 'values',
 })
 
@@ -372,10 +377,16 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
 
     const dataRoot = flags['data-root'] === undefined ? options.dataRoot : path.resolve(cwd, flags['data-root'])
     const configFlag = flags.project ?? flags['project-config']
-    const loadProject = options.loadProject ?? (() => resolveProjectConfig({ argv: configFlag === undefined ? [] : [`--project=${path.resolve(cwd, configFlag)}`], cwd, env, writeLocalState: false }))
+    // A personal home is followed instead of a project: the generation confirmed there is loaded (composed in this
+    // thread, as for a command run once), and the service's workspace is located from the home alone.
+    const personalHome = flags['personal-home'] === undefined ? null : path.resolve(cwd, flags['personal-home'])
+    if (personalHome !== null && configFlag !== undefined) refuse('usage', '--personal-home is given instead of --project, not with it')
+    const selection = personalHome === null ? null : await import('../runtime/obsidian/personal-selection.mjs')
+    const loadProject = options.loadProject ?? (selection !== null ? () => selection.loadSelectedProject({ personalHome }) : () => resolveProjectConfig({ argv: configFlag === undefined ? [] : [`--project=${path.resolve(cwd, configFlag)}`], cwd, env, writeLocalState: false }))
+    const locateProject = selection === null ? null : () => selection.locatePersonalHome({ personalHome })
     const registry = createObsidianRegistry({ reservedOperations: BUILT_IN_OPERATIONS, contributions: contributions ?? await loadContributions(contributionsDirectory === undefined ? {} : { directory: contributionsDirectory }) })
     const applyAvailable = registry.extensions.applyOperation() !== UNAVAILABLE_APPLY_OPERATION
-    const lifecycle = { loadProject, dataRoot, env, platform, ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }) }
+    const lifecycle = { loadProject, ...(locateProject === null ? {} : { locateProject }), dataRoot, env, platform, ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }) }
 
     // The adapter of this run: given now, or remembered by this workspace (read only when the real entry has no flag).
     const chooseAdapter = () => selectAdapter({ flag: flags.adapter, remembered: flags.adapter === undefined && production === true ? rememberedAdapter() : null, production, env })
@@ -617,7 +628,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const removeUnit = async () => {
       if (!STARTUP_PLATFORMS.includes(platform)) buildStartupAdapter({ platform })
       const manager = await managerSeam()
-      const removed = await removeLoginItem({ loadProject, dataRoot, env, platform, manager, clock })
+      const removed = await removeLoginItem({ loadProject: locateProject ?? loadProject, dataRoot, env, platform, manager, clock })
       const failed = removed.removed !== true && removed.reason !== undefined && removed.reason !== 'workspace-not-prepared'
       if (failed) return { exit: EXIT.notSuccess, document: { loginItem: removed }, human: [`login item not removed: ${removed.reason}${removed.message ? ` (${removed.message})` : ''}`, `Next: ${NEXT[removed.reason] ?? 'see `atelier obsidian status`'}`] }
       const remembered = removed.reason === 'workspace-not-prepared' ? false : rememberLoginItem('off')
@@ -720,7 +731,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             const plugin = withPluginFilesPending(pluginView(running, workspace, scopeId), report.freshness)
             return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next, plugin } : { ...report, plugin }
           })
+        // The confirmed selection a personal home's project was loaded under; reported, never confirmed here.
+        const pinned = selection === null ? null : selection.personalSelectionOf(project)
         const document = {
+          ...(pinned === null ? {} : { selection: { generationId: pinned.generationId, sequence: pinned.sequence } }),
           enablement: { state: enablement.state, reason: enablement.reason, defaultScopeId: enablement.defaultScopeId }, workspace: { workspaceId, prepared: workspace !== null },
           machine: shownMachine(machineOf(workspace), workspace), apply: applyShown,
           service: { state: service.state, reason: service.reason ?? null, address: service.address ?? null, runtimeId: service.record?.runtimeId ?? null, pid: service.record?.pid ?? null, lastTick: running?.lastTick ?? null, lastError: running?.lastError ?? null, app },
@@ -729,6 +743,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         return {
           exit: EXIT.ok, document,
           human: [
+            ...(pinned === null ? [] : [`personal workspace: generation ${pinned.generationId}, confirmed as selection ${pinned.sequence}`]),
             `obsidian: ${enablement.state} (${enablement.reason}); mode ${document.machine.maintenanceMode}; audiences ${document.machine.audienceAllow.join(', ') || 'none'}`,
             `remembered: ${decisionSummary(document.machine.decisions)}`,
             `service: ${service.state} (${service.reason ?? 'no reason'})${app ? `; app ${app.outcome} (${app.reason})` : ''}`,
@@ -1073,13 +1088,13 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       // Maintenance of this workspace ends here: the login item goes first, so its manager does not start the service
       // again, then the proven service stops. Everything a person made or may want back stays, and is named.
       async uninstall() {
-        const project = loadProject()
+        const project = (locateProject ?? loadProject)()
         let workspace = null
         try { const found = resolveServiceWorkspace({ project, dataRoot, env, platform }); workspace = found?.workspaceRoot ? found : null } catch (error) { if (!isTyped(error)) throw error }
         const record = workspace === null ? null : readLoginItemRecord(workspace)
         // What is kept is read before anything is stopped or removed, so nothing it finds can stop the answer after that.
         const kept = keptLocations(project, workspace)
-        const item = record === null ? { removed: false, reason: 'not-installed' } : await removeLoginItem({ loadProject, dataRoot, env, platform, manager: await managerSeam(), clock })
+        const item = record === null ? { removed: false, reason: 'not-installed' } : await removeLoginItem({ loadProject: locateProject ?? loadProject, dataRoot, env, platform, manager: await managerSeam(), clock })
         const service = workspace === null ? { state: 'stopped', stopped: false, refused: false, reason: 'workspace-not-prepared' } : await stopService(lifecycle, lifecycleRules)
         const itemGone = item.removed === true || item.reason === 'not-installed' || item.reason === 'workspace-not-prepared'
         const serviceGone = service.stopped === true || service.state === 'stopped'
