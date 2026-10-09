@@ -2718,14 +2718,19 @@ for (const damaged of ['missing', 'malformed']) {
     const started = await runtime.start()
     const pid = started.record?.pid
     assert.equal(started.state, 'healthy')
-    // Recovery remains handle-bound if the cleanup regression fails.
-    t.after(() => runtime.stopHeld())
-    const record = path.join(world.workspaceRoot, 'state', 'service', 'runtime.json')
-    if (damaged === 'missing') fs.unlinkSync(record)
-    else fs.writeFileSync(record, '{')
-    runtime.stop = async () => { throw new Error('synthetic stop timeout') }
-    await endLeftService(runtime)()
-    assert.equal(runtime.alive(pid), false, 'missing or malformed records cannot hide a held child')
+    // Recover in the test body: a failed earlier after-hook can prevent later
+    // hooks from running. Joining here also precedes temporary-root removal.
+    try {
+      const record = path.join(world.workspaceRoot, 'state', 'service', 'runtime.json')
+      if (damaged === 'missing') fs.unlinkSync(record)
+      else fs.writeFileSync(record, '{')
+      runtime.stop = async () => { throw new Error('synthetic stop timeout') }
+      await endLeftService(runtime)()
+      assert.equal(runtime.alive(pid), false, 'missing or malformed records cannot hide a held child')
+    } finally {
+      const recovery = await runtime.stopHeld()
+      assert.equal(recovery.joined, true, 'regression recovery must join its owned service')
+    }
   })
 }
 
