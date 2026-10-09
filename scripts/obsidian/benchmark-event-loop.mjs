@@ -112,23 +112,34 @@ async function serviceChild() {
   } finally { histogram.disable() }
 }
 
-function groupExists(pid) {
-  try { process.kill(process.platform === 'win32' ? pid : -pid, 0); return true }
-  catch (error) { if (error.code === 'ESRCH') return false; throw error }
-}
-async function endOwnedChild(child, terminal) {
-  if (terminal.value === null && child.connected) child.send({ type: 'stop' })
-  let until = Date.now() + 5000
-  while (terminal.value === null && Date.now() < until) await sleep(25)
-  const signals = []
-  for (const signal of ['SIGTERM', 'SIGKILL']) {
-    if (!groupExists(child.pid)) break
-    signals.push(signal)
-    try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal) } catch (error) { if (error.code !== 'ESRCH') throw error }
-    until = Date.now() + 5000
-    while (groupExists(child.pid) && Date.now() < until) await sleep(25)
+// Ends the owned child, which leads its own process group (it was started detached on POSIX). The group is
+// signalled only while this handle still holds the child: until the child is collected its number, which is the
+// group's, cannot be given to another process, and only the child's own descendants can be in its group. Once the
+// child has been collected nothing is signalled, and a group of that number that still answers is only reported
+// (`groupAbsent: false`, so the run fails and keeps its fixture): a member that outlived the child is not ended.
+// On Windows there is no group, and the child is signalled through its handle. Probing a group (signal 0)
+// delivers nothing.
+export async function endOwnedChild(child, terminal, { kill = (pid, signal) => process.kill(pid, signal), platform = process.platform, now = Date.now, pause = sleep, waitMs = 5000 } = {}) {
+  const held = () => Number.isInteger(child.pid) && child.exitCode === null && child.signalCode === null
+  const groupExists = () => {
+    if (platform === 'win32') return held()
+    try { kill(-child.pid, 0); return true } catch (error) { if (error.code === 'ESRCH') return false; throw error }
   }
-  return { pid: child.pid, groupId: process.platform === 'win32' ? null : child.pid, terminal: terminal.value, signals, groupAbsent: !groupExists(child.pid) }
+  if (terminal.value === null && child.connected) child.send({ type: 'stop' })
+  let until = now() + waitMs
+  while (terminal.value === null && now() < until) await pause(25)
+  const signals = []
+  let refused = null
+  for (const signal of ['SIGTERM', 'SIGKILL']) {
+    if (!groupExists()) break
+    if (!held()) { refused = signal; break }
+    signals.push(signal)
+    if (platform === 'win32') child.kill(signal)
+    else try { kill(-child.pid, signal) } catch (error) { if (error.code !== 'ESRCH') throw error }
+    until = now() + waitMs
+    while (groupExists() && now() < until) await pause(25)
+  }
+  return { pid: child.pid, groupId: platform === 'win32' ? null : child.pid, terminal: terminal.value, signals, ...(refused === null ? {} : { notSignalled: `${refused}: the child was collected, so its group is not signalled` }), groupAbsent: !groupExists() }
 }
 function sourcePin() {
   const git = args => childProcess.execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -327,7 +338,9 @@ async function fixtureCheckController() {
   process.exitCode = result.status === 'passed' ? 0 : 1
 }
 
-if (arg('fixture-check-child')) {
+// Run as a script only: a test imports endOwnedChild without starting a controller.
+const invoked = (() => { try { return process.argv[1] !== undefined && fs.realpathSync(process.argv[1]) === fs.realpathSync(entry) } catch { return false } })()
+if (!invoked) { /* imported */ } else if (arg('fixture-check-child')) {
   try { await fixtureCheckChild() } catch (error) { send({ type: 'fixture-error', code: error.code ?? error.name, message: String(error.message) }); process.exitCode = 1 }
   finally { if (process.connected) process.disconnect() }
 } else if (arg('fixture-check')) await fixtureCheckController()

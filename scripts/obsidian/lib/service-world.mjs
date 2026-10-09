@@ -144,22 +144,34 @@ export const openEdits = (snapshot) => snapshot.pendingEdits.filter((edit) => ed
 // The owned service, through the runtime's own lifecycle API
 // ---------------------------------------------------------------------------
 
+// The service processes this runtime starts are spawned through `spawn`, and each is held by the handle spawn
+// returned. `kill` interrupts one only through that handle, and only while the handle still holds it (until the
+// process is collected its number cannot belong to anything else): a number this runtime does not hold, such as
+// one a status reported for a service the launcher started, is never signalled, and the answer says so.
 export function createServiceRuntime({
   loadProject, dataRoot, env, consent, intervalMs, probeTimeoutMs, entryPath = SERVICE_ENTRY_PATH, entryArgs = [...PRODUCTION_ENTRY_ARGS],
-  spawn = childProcess.spawn, execPath = process.execPath, launcherPath = LAUNCHER_PATH, launchThroughShell = true, kill = process.kill.bind(process), alive = isProcessAlive,
+  spawn = childProcess.spawn, execPath = process.execPath, launcherPath = LAUNCHER_PATH, launchThroughShell = true, alive: probeAlive = isProcessAlive,
 }) {
   const lifecycle = { loadProject, dataRoot, env, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
   const workspace = () => resolveServiceWorkspace({ project: loadProject(), dataRoot, env })
+  const services = []
+  const holding = (...args) => { const child = spawn(...args); services.push(child); return child }
+  const running = (child) => Number.isInteger(child.pid) && child.exitCode === null && child.signalCode === null
   return {
     kind: 'lifecycle-api',
     entryPath,
-    async start() { const { child: _child, ...result } = await startService({ ...lifecycle, detached: true, entryPath, entryArgs, consent, ...(intervalMs === undefined ? {} : { intervalMs }) }); return result },
+    async start() { const { child: _child, ...result } = await startService({ ...lifecycle, detached: true, spawn: holding, entryPath, entryArgs, consent, ...(intervalMs === undefined ? {} : { intervalMs }) }); return result },
     status: () => serviceStatus(lifecycle),
     statusDocument: () => readServiceStatusDocument(lifecycle),
     tick: (options = {}) => requestServiceTick({ ...lifecycle, ...options }),
     stop: (options = {}) => stopService({ ...lifecycle, ...options }),
-    kill(pid, signal = 'SIGKILL') { kill(pid, signal); return { pid, signal } },
-    alive,
+    kill(pid, signal = 'SIGKILL') {
+      const child = services.find((item) => item.pid === pid && running(item))
+      if (!Number.isInteger(pid) || child === undefined) return { pid, signal, sent: false, reason: 'not-a-service-this-runtime-holds' }
+      return { pid, signal, sent: child.kill(signal), through: 'handle' }
+    },
+    // A service this runtime started is answered from its handle; any other number is probed as before.
+    alive(pid) { const own = services.filter((item) => item.pid === pid); return own.length > 0 ? own.some(running) : probeAlive(pid) },
     record() { const found = workspace(); return found?.workspaceRoot ? readServiceRecord({ workspaceRoot: found.workspaceRoot, workspaceId: found.workspaceId }) : null },
     async health() {
       const record = this.record()
@@ -183,7 +195,7 @@ export function createServiceRuntime({
       const exit = await new Promise((resolve) => { child.once('close', (code, signal) => resolve({ code, signal })) })
       let reported = null
       try { reported = JSON.parse(stdout) } catch { reported = null }
-      return { launcher: { pid: child.pid, throughShell: launchThroughShell, exit, alive: alive(child.pid), stdout, stderr: stderr.slice(0, 4000) }, reported }
+      return { launcher: { pid: child.pid, throughShell: launchThroughShell, exit, alive: probeAlive(child.pid), stdout, stderr: stderr.slice(0, 4000) }, reported }
     },
   }
 }
