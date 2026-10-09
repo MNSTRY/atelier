@@ -326,6 +326,14 @@ export const PUBLICATION_PRIMITIVES = Object.freeze({
   // Whether an error that stopped staging was the caller's stop (its settings check, or a cancellation), handed on
   // under its own code once the candidates are cleaned up, rather than reported as a staging failure.
   callerStoppedStaging: (error) => isSchedulingStop(error),
+  // Whether a refusal raised while candidates are being staged (the vault's folder replaced or gone under the run) is
+  // handed on only once those candidates are cleaned up, as a stop is. A candidate staged before the journal is
+  // written is named by no journal, so restart recovery would never remove one left there.
+  refusedStagingCleansUp: () => true,
+  // The code the journal's last entry gives an error that ended the publication once the journal was open: a
+  // caller's stop under its own code, which is what the caller is told, and anything else as a fault of the publisher.
+  // Decided by the tag a stop carries, never by what an error looks like; a stop that carries no code has none to give.
+  journalFailureCode: (error) => (isSchedulingStop(error) && typeof error.code === 'string' && error.code !== '' ? error.code.slice(0, 200) : 'publisher-error'),
 })
 
 // Whether the `direct-unheld` path applies, after the adapter found an app it cannot coordinate with (see the head of
@@ -469,7 +477,10 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       }
     } catch (error) {
       const stopped = rules.callerStoppedStaging(error)
-      if (error instanceof PublicationRefusal && !stopped) throw error
+      // A refusal raised between two candidates (the publisher's own check found the vault's folder replaced or gone)
+      // is handed on under its own code too, and like a stop only after the cleanup below.
+      const refused = error instanceof PublicationRefusal && !stopped
+      if (refused && !rules.refusedStagingCleansUp(error)) throw error
       // No payload has named any of these paths, so nothing was exchanged and they can only hold our own
       // candidates. In staging they are removed by name. In recovery a file is removed only when its bytes are
       // the candidate's; anything else stays for restart recovery, which the journal header points at it. Only
@@ -481,8 +492,8 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       for (const file of created) fs.rmSync(file, { force: true })
       for (const directory of [stagingDir, store.unitsRoot(journalId)]) if (directory) try { fs.rmdirSync(directory) } catch { /* absent, or not empty */ }
       // The caller stopped the publication between two candidates: nothing failed to stage, and its reason (a
-      // setting that changed during the tick, `mixed-read`, or a cancellation) is the one reported.
-      if (stopped) throw error
+      // setting that changed during the tick, `mixed-read`, or a cancellation) is the one reported. So is a refusal's.
+      if (stopped || refused) throw error
       refuse('staging-failed', 'the candidates could not be staged; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
     }
     await budget.checkpoint('journal-and-moves-complete', true)
@@ -567,7 +578,7 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     return { ...base, state: 'committed', lateWriters }
   } catch (error) {
     if (!(error instanceof PublicationRefusal)) {
-      if (journal) try { journal.append({ step: 'verify', outcome: 'failed', state: 'failed', detail: { code: 'publisher-error', message: String(error.code ?? error.message).slice(0, 200) } }) } catch { /* the journal itself cannot be written */ }
+      if (journal) try { journal.append({ step: 'verify', outcome: 'failed', state: 'failed', detail: { code: rules.journalFailureCode(error), message: String(error.code ?? error.message).slice(0, 200) } }) } catch { /* the journal itself cannot be written */ }
       throw error
     }
     return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail }, notes: [], retainedEdits: [], lateWriters: [] }

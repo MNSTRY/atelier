@@ -190,10 +190,11 @@ export async function runMaintenanceService(options = {}) {
   const prepareWithPlugin = (input) => (engineOptions.seams?.prepareView ?? productionPrepareView)({ ...input, plugin: pluginFor(input.scope.scopeId) })
   // The engine's rule (engine.mjs): a prepareView that is not the one that ships, handed in with the cooperative
   // preparation left as it ships or absent, prepares the view, synchronously; the engine then gets no cooperative seam.
+  // Nor does it when the cooperative preparation was handed in as null: that says there is none, as it does to the engine.
   const handed = engineOptions.seams ?? {}
   const replacedPrepare = typeof handed.prepareView === 'function' && handed.prepareView !== productionPrepareView
     && (handed.prepareViewCooperatively === undefined || handed.prepareViewCooperatively === prepareViewCooperatively)
-  const cooperative = replacedPrepare ? null : handed.prepareViewCooperatively ?? prepareViewCooperatively
+  const cooperative = replacedPrepare || handed.prepareViewCooperatively === null ? null : handed.prepareViewCooperatively ?? prepareViewCooperatively
   const prepareCooperativelyWithPlugin = cooperative === null ? null : (input) => cooperative({ ...input, plugin: pluginFor(input.scope.scopeId) })
   // An entry offered to a vault and now in place is confirmed: from then on, a list without it is the person's decision.
   const publishAndConfirm = async (input) => {

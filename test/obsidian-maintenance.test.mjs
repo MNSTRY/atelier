@@ -329,6 +329,78 @@ test('a setting changed while candidates are being staged refuses the view as mi
   })
 })
 
+// The check of a tick's settings, made at every wait, cannot read a configuration file: one open of it fails with an
+// I/O error, while the first of two views is being prepared (`preparation`) or its candidates staged. That view is
+// refused as `mixed-read`, its pointer and vault are as they were, and the tick goes on to the second view, which is
+// published. The failure does not come back, so the next tick, a full reconciliation, publishes the first view too.
+async function guardReadFailure(t, { during, primitives = ENGINE_PRIMITIVES }) {
+  const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, EAST_SCOPE]) })
+  // A committed generation of both views first, so the next one replaces notes and moves candidates to their exchange paths.
+  assert.deepEqual((await world.engine().tick()).scopes.map((entry) => entry.state), ['current', 'current'])
+  const pointerFile = path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')
+  // The first view as it is: its committed pointer and every file of its vault but the publisher's own lock tickets.
+  const held = () => ({ pointer: fs.readFileSync(pointerFile), vault: Object.fromEntries(Object.entries(listing(world.vault())).filter(([name]) => !name.startsWith('.atelier-publication'))) })
+  const before = held()
+  fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nThe lamp was cleaned.\n')
+  fs.appendFileSync(world.source('east-wing/notes/compass.md'), '\nWest is painted blue.\n')
+  let armed = false
+  let fired = false
+  let failed = 0
+  const arm = (scopeId, phase) => { if (!fired && scopeId === FULL_SCOPE.scopeId && phase === (during === 'preparation' ? 'emit-note' : during)) { fired = true; armed = true } }
+  const engine = world.engine({ primitives, seams: during === 'preparation'
+    ? { prepareViewCooperatively: (input) => prepareViewCooperatively({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => arm(input.scope.scopeId, phase) } }) }
+    : { publishView: (input) => publishView({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => arm(input.recoveryStore.scopeId, phase) } }) } })
+  world.calls.publishView.length = 0
+  world.advance(1000)
+  const open = fs.openSync
+  fs.openSync = (file, ...rest) => {
+    if (!armed || file !== world.configPath) return open(file, ...rest)
+    armed = false
+    failed += 1
+    throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO', errno: -5, syscall: 'open' })
+  }
+  try {
+    let report = null
+    let thrown = null
+    try { report = await engine.tick() } catch (error) { thrown = error }
+    const after = held()
+    const published = [...world.calls.publishView]
+    let next = null
+    if (thrown === null) { world.advance(1000); next = await engine.tick() }
+    return { world, report, thrown, next, before, after, failed, published }
+  } finally { fs.openSync = open }
+}
+for (const during of ['preparation', 'stage-candidate', 'move-candidate']) {
+  test(`a configuration file that cannot be read again during ${during} refuses that view as mixed-read, and the tick goes on to the next view`, needsExchange, async (t) => {
+    const { world, report, thrown, next, before, after, failed } = await guardReadFailure(t, { during })
+    assert.deepEqual([failed, thrown], [1, null], 'the read failed once, and the tick did not throw')
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'], JSON.stringify(world.scope(report)))
+    assert.deepEqual(after.pointer, before.pointer, 'the committed generation of the refused view is the one it had')
+    assert.deepEqual(after.vault, before.vault, 'nothing in the vault of the refused view was touched')
+    assert.deepEqual([world.scope(report, EAST_SCOPE.scopeId).state, world.scope(report, EAST_SCOPE.scopeId).reason], ['current', 'published-and-verified'], 'the second view of the tick was prepared and published')
+    assert.match(fs.readFileSync(world.noteFile('east-wing:lantern', EAST_SCOPE.scopeId), 'utf8'), /The lamp was cleaned/)
+    // Everything is read again at the next tick, and the view that was refused is published.
+    assert.deepEqual([next.full, world.scope(next).state, world.scope(next).reason], [true, 'current', 'published-and-verified'], JSON.stringify(world.scope(next)))
+    assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /The lamp was cleaned/)
+  })
+  test(`mutation control: an engine that lets a read failure of its settings check out of the tick fails the oracle, during ${during}`, needsExchange, async (t) => {
+    const { thrown, failed, published } = await guardReadFailure(t, { during, primitives: { ...ENGINE_PRIMITIVES, guardReadFailed: () => false } })
+    assert.deepEqual([failed, thrown?.code], [1, 'EIO'], 'the raw error ends the tick, which the oracle above refuses')
+    assert.equal(published.includes(EAST_SCOPE.scopeId), false, 'and the second view of the tick was never reached')
+  })
+}
+
+test('a fault of the settings check that is no read failure still surfaces: a TypeError is not turned into a refusal', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let broken = false
+  const bug = new TypeError('a synthetic fault of the eligibility rule')
+  const engine = world.engine({ eligibility: { ...DEFAULT_ELIGIBILITY, revision: () => { if (broken) throw bug; return 'one' } }, seams: {
+    prepareViewCooperatively: (input) => prepareViewCooperatively({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'emit-note') broken = true } } }),
+  } })
+  await assert.rejects(engine.tick(), (error) => error === bug)
+  assert.equal(world.calls.publishView.length, 0)
+})
+
 test('cooperative engine rechecks source pins before reporting an already committed generation current', needsExchange, async (t) => {
   const world = makeWorld(t)
   let publications = 0
@@ -2117,6 +2189,16 @@ test('a service handed the production seams with prepareView replaced prepares t
   const outcome = await service.tickNow()
   assert.equal(outcome.ok, true, JSON.stringify(outcome).slice(0, 300))
   assert.deepEqual([world.scope(outcome.report).state, plugins], ['current', [true]], 'the cooperative preparation that ships does not stand in for a replaced prepareView, and the replacement is handed the plugin')
+})
+
+test('a service handed a replaced prepareView and an explicit null for the cooperative preparation prepares through that replacement, as the engine does', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const plugins = []
+  const replacement = (input) => { plugins.push(Array.isArray(input.plugin?.files)); return DEFAULT.prepareView(input) }
+  const { service } = await inProcessService(t, world, { engineOptions: { seams: { prepareView: replacement, prepareViewCooperatively: null } } })
+  const outcome = await service.tickNow()
+  assert.equal(outcome.ok, true, JSON.stringify(outcome).slice(0, 300))
+  assert.deepEqual([world.scope(outcome.report).state, plugins], ['current', [true]], 'null says there is no cooperative preparation: the one that ships does not stand in for the replaced prepareView')
 })
 
 function assertNothingSensitive(world, texts, bearer) {
