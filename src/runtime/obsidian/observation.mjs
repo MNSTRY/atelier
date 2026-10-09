@@ -123,6 +123,14 @@ export function readFileFacts(file) {
 
 const sameHint = (left, right) => left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs && left.ino === right.ino
 
+// Whether a file still has the stat hint it was indexed with: what a reconcile that is not full decides by before it
+// would hash the file again. `entry` is the file's entry in the index. A file never hashed, or gone, has none.
+export function hasIndexedHint(entry, absolute, lstat = fs.lstatSync) {
+  if (!entry || entry.digest === null || !entry.hint) return false
+  const hint = statHint(absolute, lstat)
+  return hint !== null && sameHint(entry.hint, hint)
+}
+
 // Reconciles `files` against `index` (a Map owned by the caller) and returns
 // the changes, decided by digest alone. `full` hashes everything; otherwise a
 // file is hashed when it is new, when its stat hint differs or when a watcher

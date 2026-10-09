@@ -12,6 +12,10 @@
 //                                 item's service watches its own
 //   --first-tick-block-ms=<N>     the first canonical graph build holds the process for N milliseconds without yielding,
 //                                 so health does not answer in time and the service is busy
+//   --first-tick-block-until=<F>  the first canonical graph build writes `<F>.held`, then holds the process without
+//                                 yielding until the file F exists (two minutes at most), so a test decides when the
+//                                 busy service goes on and no deadline of the test depends on the host's load
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from '../../../src/project/config.mjs'
 import { createEditorAdapter, publishView } from '../../../src/projection/obsidian/publication/index.mjs'
@@ -29,10 +33,20 @@ let failuresLeft = typeof args['fail-tick-once'] === 'string' ? 1 : 0
 const crashOn = Number(args['crash-on-publication'] ?? 0)
 let publications = 0
 let blockFirstTick = Number(args['first-tick-block-ms'] ?? 0)
+let blockUntilFile = typeof args['first-tick-block-until'] === 'string' ? args['first-tick-block-until'] : null
+// The thread sleeps between looks, so the held process does not also take a processor from the test that waits on it.
+const pause = new Int32Array(new SharedArrayBuffer(4))
 
 const seams = {
   buildGraph(input) {
     if (blockFirstTick > 0) { const until = Date.now() + blockFirstTick; blockFirstTick = 0; while (Date.now() < until) { /* held */ } }
+    if (blockUntilFile !== null) {
+      const release = blockUntilFile
+      blockUntilFile = null
+      fs.writeFileSync(`${release}.held`, '')
+      const until = Date.now() + 2 * 60 * 1000
+      while (!fs.existsSync(release) && Date.now() < until) Atomics.wait(pause, 0, 0, 20)
+    }
     if (failuresLeft > 0) { failuresLeft -= 1; throw Object.assign(new Error('injected: no space left on device'), { code: args['fail-tick-once'] }) }
     return buildGraph(input)
   },

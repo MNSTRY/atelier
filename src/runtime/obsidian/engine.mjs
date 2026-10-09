@@ -1,7 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
+import { createCooperativeBudget } from '../../projection/obsidian/materialize/prepare-view.mjs'
 import { PERSONAL_VALIDATION_PENDING, personalWorkspaceBindingOf, personalWorkspaceInputs, validatePersonalWorkspace } from '../../projection/obsidian/personal-workspace.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
 import { PublicationRefusal, allocatedFolderState, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
@@ -13,7 +15,7 @@ import {
   assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
   readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
 } from './machine-settings.mjs'
-import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
+import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP } from './plugin-presence.mjs'
@@ -203,8 +205,22 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   if (typeof clock !== 'function') throw new TypeError('the engine needs an injected clock')
   // No default: the production adapter reaches a running app, and only the owner of the lifecycle may decide that.
   if (typeof adapterFactory !== 'function') throw new TypeError('the engine needs an adapterFactory')
-  const seams = { ...createProductionSeams(), ...(options.seams ?? {}) }
+  const production = createProductionSeams()
+  const seams = { ...production, ...(options.seams ?? {}) }
+  // A caller that replaced prepareView and left the cooperative preparation as it ships prepares views its own way: its
+  // seam is used, synchronously, whether it handed in that one member or the production seams with that member replaced.
+  if (seams.prepareView !== production.prepareView && seams.prepareViewCooperatively === production.prepareViewCooperatively) seams.prepareViewCooperatively = null
   const rules = { ...ENGINE_PRIMITIVES, ...primitives }
+  // Optional local qualification telemetry. It has no authority to change a
+  // tick's result, and records elapsed boundaries rather than a budget claim.
+  const phaseTime = () => performance.timeOrigin + performance.now()
+  const reportPhase = (phase, startedMs) => {
+    try { seams.onPhase?.({ phase, startedMs, endedMs: phaseTime() }) } catch { /* telemetry never changes custody */ }
+  }
+  const measured = (phase, operation) => {
+    const startedMs = phaseTime()
+    try { return operation() } finally { reportPhase(phase, startedMs) }
+  }
 
   const index = new Map()
   const hintedKeys = new Set()
@@ -533,7 +549,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     }
 
     // 6. Sources, settings, scopes, eligibility.
-    const sources = reconcile({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat })
+    const sources = measured('source-observation', () => reconcile({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat }))
     for (const change of sources.changes) changes.push({ changeClass: change.changeClass })
     const { scopes: _declared, ...settingsWithoutScopes } = enablement.settings
     // What the configuration says apart from this integration's own member: a change to the member alone is an
@@ -599,7 +615,53 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // 8. Rebuild and publish.
     if (attempt.size > 0) {
+      // Cooperative preparation/publication can outlive the settings that
+      // selected this tick. Reuse the existing configuration/personal-input
+      // observation keys, machine settings and eligibility revision as the
+      // fence; do not invent another selection authority.
+      const bindings = configFilesOf(project).map(file => ({ ...file, digest: index.get(file.key)?.digest ?? null }))
+      const machineDigest = digestOfJson(machine)
+      const eligibilityRevision = String(eligibility.revision())
+      const assertBindings = () => {
+        if (bindings.some(file => (readFileFacts(file.absolute)?.digest ?? null) !== file.digest)
+          || digestOfJson(readMachineSettings({ workspaceRoot, workspaceId })) !== machineDigest
+          || String(eligibility.revision()) !== eligibilityRevision) {
+          forceFull = true
+          refuse('mixed-read', 'source selection or eligibility changed while a view was being prepared or published')
+        }
+      }
       let built = null
+      // Whether a selected source of a prepared view moved since this tick observed it, decided as observation
+      // decides (reconcile): a source that still has the stat hint it was indexed with is taken as unchanged, and one
+      // whose hint moved is read and must still be the pinned bytes. Bytes that drift under an unchanged hint stay
+      // within observation's own bound, as they do for the graph and for a reused note: the next full reconciliation
+      // sees them. It waits between sources, and the settings that selected the view are checked at each wait.
+      const assertSourcesUnmoved = async (prepared) => {
+        const startedMs = phaseTime()
+        try {
+          const budget = createCooperativeBudget({ guard: assertBindings })
+          budget.check()
+          const roots = new Map((project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => [repo.name, repo.path]))
+          const selected = new Set(prepared.manifest.notes.map((note) => note.nodeId))
+          const attachments = new Set(prepared.manifest.attachments.map((item) => {
+            const source = item.ext?.[OBSIDIAN_EXT_KEY]
+            return source?.kind === 'embedded-asset' ? sourceKey(source.repoId, source.assetPath) : null
+          }))
+          const nodes = built.snapshot.graph.nodes.filter((node) => selected.has(node.id))
+          const assets = (built.snapshot.graph.assets ?? []).filter((asset) => attachments.has(sourceKey(asset.repo, asset.path)))
+          const pins = new Map(built.snapshot.document.repositories.flatMap((repo) => repo.files.map((file) => [sourceKey(repo.repoId, file.path), file])))
+          for (const source of [...nodes, ...assets]) {
+            await budget.checkpoint('commit-source-recheck')
+            const key = sourceKey(source.repo, source.path)
+            const root = roots.get(source.repo)
+            if (root !== undefined && hasIndexedHint(index.get(key), path.join(root, ...source.path.split('/')), lstat)) continue
+            const bytes = built.snapshot.readSource(source.repo, source.path)
+            const pin = pins.get(key)
+            if (!pin || !Buffer.isBuffer(bytes) || bytes.length !== pin.byteLength || sha256Digest(bytes) !== pin.rawDigest) refuse('mixed-read', 'a selected source changed while its view was being prepared or published; its generation is not committed')
+          }
+          budget.check()
+        } finally { reportPhase('commit-source-recheck', startedMs) }
+      }
       try {
         if (personalRefusal !== null) refuse(personalRefusal, 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })
         // A personal workspace whose validity key is not confirmed yet is composed off the event loop, then built again.
@@ -619,7 +681,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         const formerAssetKeys = new Set(observedAssets.map((asset) => sourceKey(asset.repo, asset.path)))
         observedAssets = rules.observedAssetsOf(graph)
         const assetKeys = new Set(observedAssets.map((asset) => sourceKey(asset.repo, asset.path)))
-        const settled = reconcile({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full: false, lstat })
+        const settled = measured('graph-source-recheck', () => reconcile({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full: false, lstat }))
         // An asset newly observed, or one no longer embedded, is the list changing. Anything else that moved since this tick looked at the sources moved while the graph was being read.
         if (settled.changes.some((change) => !(change.kind === 'added' && assetKeys.has(change.key)) && !(change.kind === 'removed' && formerAssetKeys.has(change.key) && !assetKeys.has(change.key)))) throw new ObsidianMaintenanceRefusal('mixed-read', 'a source changed while the canonical graph was being built')
         const configDigest = digestOfJson([...index].filter(([key]) => key.startsWith(CONFIG_PREFIX)).map(([key, entry]) => [path.basename(key.slice(CONFIG_PREFIX.length)), entry.digest]))
@@ -646,11 +708,17 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         }
         try {
           const held = heldPaths(edits, scopeId)
-          const prepared = seams.prepareView({
+          const prepared = await (seams.prepareViewCooperatively ?? seams.prepareView)({
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
             existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId),
             heldNotePaths: held, layoutHeldNotePaths: layoutHeldOf(scopeId), viewScopeIds: scopes.map((item) => item.scope.scopeId),
+            // The cooperative preparation would read every selected source once more before it returns. The engine
+            // checks them itself, below and again before the commit, without opening a source observation would not.
+            scheduling: { guard: assertBindings, recheckSources: false },
           })
+          assertBindings()
+          // Before anything is written: a source that moved while the view was being prepared refuses it here.
+          await assertSourcesUnmoved(prepared)
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
           diagnostics = (prepared.manifest.ext?.[OBSIDIAN_EXT_KEY]?.diagnostics ?? []).slice(0, 100)
           const preparedGenerationId = prepared.manifest.generationId
@@ -684,10 +752,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
           let result
           try {
+            // Once more while the publisher holds its locks, before it says the publication settled.
+            const beforeCommit = () => assertSourcesUnmoved(prepared)
             result = await seams.publishView({
               preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
               ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
               ...(typeof readUnheldEvidence === 'function' ? { unheldEvidence: readUnheldEvidence, platform } : {}),
+              scheduling: { guard: assertBindings }, beforeCommit,
             })
             // Stopped before its commit for want of an app that coordinates: the app's refusal is what the person has to
             // act on, and `open` answers it before it would add the vault to the app.
@@ -711,9 +782,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             settle(byEdit ? 'held-for-your-edit' : 'publisher-conflict', blocking[0]?.outcome ?? 'publication-incomplete', { ...common, heldNotes: [...new Set([...held, ...blocking.filter((note) => EDIT_OUTCOMES.has(note.outcome)).map((note) => note.path)])].sort(compareText) })
           } else {
             // Read back: every note of the committed generation, by digest.
-            const { manifest, bases } = trustedNoteBases(store)
+            const { bases } = measured('publication-read-back', () => {
+              const { manifest, bases } = trustedNoteBases(store)
+              reconcile({ index, files: listVaultNotes({ scopeId, vaultRoot: store.vaultRoot, manifest }), prefix: vaultKey(scopeId, ''), full: true, lstat })
+              return { bases }
+            })
             basesOf.set(scopeId, bases)
-            reconcile({ index, files: listVaultNotes({ scopeId, vaultRoot: store.vaultRoot, manifest }), prefix: vaultKey(scopeId, ''), full: true, lstat })
             const differing = [...bases].filter(([notePath, base]) => index.get(vaultKey(scopeId, notePath))?.digest !== base.digest).map(([notePath]) => notePath).sort(compareText)
             const editedUnderPublisher = result.notes.some((note) => note.outcome === 'edit-kept' || note.changedAfterPublication === true)
             if (held.length > 0) settle('held-for-your-edit', 'edit-pending', { ...common, heldNotes: held })
