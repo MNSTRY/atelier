@@ -50,7 +50,8 @@ const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, pro
 const { createProductionSeams } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, personalSelectionOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
-const { SELECTION_PRIMITIVES, loadSelectedProject, loadSelectedProjectOffThread } = await import('../src/runtime/obsidian/personal-selection.mjs')
+const { SELECTION_PRIMITIVES, loadSelectedProject, loadSelectedProjectOffThread, locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
+const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const test = (name, fn) => nodeTest(name, {
@@ -116,6 +117,7 @@ function makePerson(t) {
   person.select = (generationId = person.generationId) => selectPersonalGeneration({ personalHome: home, generationId, confirm: selectionConfirmDigest({ generationId, previous: readPersonalSelectionHead({ personalHome: home }).head }) })
   person.record = (sequence) => path.join(home, 'selections', `${String(sequence).padStart(6, '0')}.json`)
   person.load = (options = {}) => loadSelectedProject({ personalHome: home }, { bind: inThread(), ...options })
+  person.locate = () => locatePersonalHome({ personalHome: home })
   person.workspaceRoot = () => fs.realpathSync(workspaceStateRoot(person.dataRoot, person.workspaceId))
   person.vault = (scopeId) => path.join(person.workspaceRoot(), 'vaults', scopeId)
   person.freshness = () => createMaintenanceStateStore({ workspaceRoot: person.workspaceRoot(), workspaceId: person.workspaceId }).readFreshness()
@@ -294,4 +296,48 @@ test('a history broken before its last record is refused at the next full reconc
   assert.ok(everyView(full, 'stale', 'selection-history-corrupt'), JSON.stringify(full.scopes))
   const next = await engine.tick()
   assert.deepEqual([next.state, next.refusal?.code], ['refused', 'selection-history-corrupt'], JSON.stringify(next))
+})
+
+test('a restart publishes the confirmed selection again; one while it is not confirmed tells every view why and keeps none current; mutation control: an engine that cannot locate the home leaves them current', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const run = async (options) => { const engine = ari.engine(options); try { return await engine.tick() } finally { engine.stop() } }
+  assert.ok(everyView(await run({ locateProject: ari.locate }), 'current'))
+  assert.ok(everyView(await run({ locateProject: ari.locate }), 'current'), 'a new engine on the same selection')
+  const annotation = ari.noteFile('everything', 'personal-ari:annotation-harbor-thought')
+  const kept = fs.readFileSync(annotation)
+  reviseOverlay(ari)
+  // Mutation control: the load refuses before any project, and an engine without the locator finds no workspace to tell.
+  const blind = await run({})
+  assert.deepEqual([blind.state, blind.refusal?.code], ['refused', 'stale-generation'])
+  assert.ok(ari.freshness().scopes.every((scope) => scope.state === 'current'), 'the oracle can fail: the previous run\'s freshness stands')
+  const restarted = await run({ locateProject: ari.locate })
+  assert.deepEqual([restarted.state, restarted.refusal?.code], ['refused', 'stale-generation'])
+  const freshness = ari.freshness()
+  assert.equal(freshness.enablement, 'refused')
+  assert.ok(freshness.scopes.length === 3 && freshness.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'stale-generation'), JSON.stringify(freshness.scopes))
+  assert.deepEqual(fs.readFileSync(annotation), kept, 'the vault keeps the last confirmed content')
+})
+
+test('the service resolves its workspace from the home alone when its loader answers a promise; a bare promised loader, or a locator that answers one, is still refused at start', async (t) => {
+  const unhandled = []
+  const record = (reason) => unhandled.push(reason)
+  process.on('unhandledRejection', record)
+  t.after(() => process.off('unhandledRejection', record))
+  const ari = makePerson(t)
+  let loads = 0
+  const promised = () => { loads += 1; return loadSelectedProjectOffThread({ personalHome: ari.home }) }
+  const start = (options) => runMaintenanceService({ dataRoot: ari.dataRoot, env: process.env, entryPath: path.join(ari.base, 'service-entry.mjs'), adapterFactory: absentAdapter, ...options })
+  const refused = (code) => (error) => error instanceof ObsidianMaintenanceRefusal && error.code === code
+  await assert.rejects(start({ loadProject: promised }), refused('service-loader-not-synchronous'))
+  assert.equal(loads, 1)
+  // Located from the home, the workspace is found with nothing selected, and the start stops at the next check: this
+  // machine recorded no service settings for it. The loader is not asked.
+  await assert.rejects(start({ loadProject: promised, locateProject: ari.locate }), refused('service-settings-absent'))
+  assert.equal(loads, 1, 'the loader is not asked at start')
+  await assert.rejects(start({ loadProject: promised, locateProject: () => Promise.resolve(ari.locate()) }), refused('service-loader-not-synchronous'))
+  await assert.rejects(start({ loadProject: promised, locateProject: () => ({}) }), refused('service-locator-invalid'))
+  assert.throws(() => locatePersonalHome({ personalHome: 'relative/home' }), refusedWith('path-not-absolute'))
+  await new Promise((resolve) => { setImmediate(resolve) })
+  assert.deepEqual(unhandled, [])
 })

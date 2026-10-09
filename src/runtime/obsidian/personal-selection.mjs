@@ -1,4 +1,6 @@
+import path from 'node:path'
 import { PersonalWorkspaceRefusal, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
+import { ensureLocalState } from '@mnstry/atelier/project'
 import { assertPersonalSelection, loadBoundProject, loadBoundProjectOffThread, pinPersonalSelection } from '../../projection/obsidian/personal-workspace.mjs'
 import { refuse } from './errors.mjs'
 
@@ -32,6 +34,11 @@ import { refuse } from './errors.mjs'
 // again, and a project whose record it no longer ends with is refused.
 //
 // Who may see a vault is not decided here: that stays the machine's setting.
+//
+// Where the workspace is does not wait for a load: a bound project's folder is
+// its private home, so the home alone locates it (locatePersonalHome). A
+// service resolves its workspace from that at once, and starts, whether or not
+// a selection is confirmed; its engine then awaits the loader at each tick.
 
 // The decisions the oracles in test/obsidian-personal-selection.test.mjs are
 // sensitive to. Production always uses these; a test hands a loader a broken
@@ -60,6 +67,16 @@ function pinned(project, head, rules) {
   pinPersonalSelection(project, head, rules.pin)
   if (rules.readsHeadAgain) assertPersonalSelection(project)
   return project
+}
+
+// What the workspace of a bound personal home is resolved from, without loading anything: a project that holds the home
+// as its folder and nothing else, as a bound project's folder is. Its pointer is under the home, the data root is the
+// pointer's or the caller's, and a home is outside every Git worktree. Synchronous; nothing is composed.
+export function locatePersonalHome({ personalHome } = {}) {
+  if (typeof personalHome !== 'string' || !path.isAbsolute(personalHome) || path.resolve(personalHome) !== personalHome) refuse('path-not-absolute', 'a personal home is named by its absolute path', SOURCE)
+  const located = { configDir: personalHome }
+  located.localState = ensureLocalState(located, { write: false, env: { PATH: process.env.PATH } })
+  return located
 }
 
 // The project of the confirmed selection, for a loader that may block (a command run once). `bind` and `rules` are
