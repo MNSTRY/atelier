@@ -182,6 +182,20 @@ export function readPersonalSelection(options) {
   }, 'personal-home-unavailable')
 }
 
+// The current selection from the history alone. Nothing is composed, so nothing
+// here says whether the selected generation is still eligible: a host that
+// composes elsewhere reads this first, and reads it again to compare the head it
+// acted on with the head now. `sequence` is 0 while nothing is selected.
+export function readPersonalSelectionHead(options) {
+  return safe(() => {
+    const { personalHome } = options ?? {}
+    privateHome(personalHome)
+    const { records, head } = readHistory(personalHome)
+    const current = records.at(-1) ?? null
+    return freeze({ selected: current?.generationId ?? null, sequence: current?.sequence ?? 0, head })
+  }, 'personal-home-unavailable')
+}
+
 // Lists entries without failing the whole inventory: a concurrently removed entry
 // is skipped; an unreadable, foreign or oversized one is reported without a digest.
 function listFiles(dir, keep) {
