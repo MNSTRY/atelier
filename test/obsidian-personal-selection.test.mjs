@@ -52,7 +52,8 @@ const { createProductionSeams } = await import('../src/runtime/obsidian/pipeline
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, personalSelectionOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
 const { SELECTION_PRIMITIVES, loadSelectedProject, loadSelectedProjectOffThread, locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
-const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
+const { resolveServiceWorkspace, runMaintenanceService, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
+const { createViewPermission } = await import('../src/runtime/obsidian/view-permission.mjs')
 const { serviceOptionsFromArgv } = await import('../src/runtime/obsidian/service-main.mjs')
 const { planLoginItem } = await import('../src/runtime/obsidian/login-item.mjs')
 const { readLastStartup } = await import('../src/runtime/obsidian/service-record.mjs')
@@ -429,4 +430,29 @@ test('started by a login item on a personal home with nothing confirmed, the ser
   assert.equal(child.status, 0, `${child.stdout}${child.stderr}`)
   const startup = readLastStartup({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId })
   assert.deepEqual([startup?.outcome, startup?.code], ['refused', 'service-settings-absent'])
+})
+
+test('the plugin status read permits a bound view once two loads of the confirmed selection agree, nothing while none is confirmed, and follows a new confirmation', async (t) => {
+  const ari = makePerson(t)
+  let time = 0
+  const loads = []
+  const loadProject = () => { const answer = loadSelectedProjectOffThread({ personalHome: ari.home }, { bind: inThread() }); loads.push(answer); return answer }
+  const settle = async () => { await loads.at(-1)?.catch(() => {}); await new Promise((resolve) => { setImmediate(resolve) }) }
+  const resolveWorkspace = (project) => resolveServiceWorkspace({ project, dataRoot: ari.dataRoot, env: process.env })
+  const { workspaceId, workspaceRoot } = resolveWorkspace(ari.locate())
+  const permits = createViewPermission({ loadProject, resolveWorkspace, workspaceInputsOf: serviceWorkspaceInputs, workspaceId, workspaceRoot, now: () => time })
+  const until = async (expected) => { for (let round = 0; round < 8 && permits('both') !== expected; round += 1) { await settle(); time += 2000 } return permits('both') }
+  assert.equal(await until(true), false, 'nothing is confirmed: no load answers a project')
+  ari.select()
+  time += 30_000
+  assert.equal(await until(true), true, 'two loads of the confirmed selection agree')
+  assert.deepEqual(['harbor-only', 'everything', 'mine'].map((scopeId) => permits(scopeId)), [true, true, false])
+  const kept = loads.length
+  for (let request = 0; request < 20; request += 1) permits('both')
+  assert.equal(loads.length, kept, 'kept: nothing is loaded again while the files hold the same')
+  // A confirmation appended to the history changes an observed record: the project is loaded again, under it.
+  ari.select()
+  assert.equal(await until(true), true)
+  assert.ok(loads.length > kept)
+  assert.equal(personalSelectionOf(await loads.at(-1)).sequence, 2)
 })
