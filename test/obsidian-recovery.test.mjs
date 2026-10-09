@@ -222,6 +222,23 @@ async function seeded(t, notes = { [NOTE]: BASE }, options = {}) {
   return world
 }
 
+test('cooperative publication interruption after journal staging releases locks and permits recovery', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const controller = new AbortController()
+  const prepared = viewOf('gen-cooperative', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } })
+  await assert.rejects(world.publish(prepared, absentAdapter(), { scheduling: { signal: controller.signal, maxUnits: 1,
+    onBurst: ({ phase }) => { if (phase === 'journal-and-moves-complete') controller.abort() },
+  } }), (error) => error.code === 'ABORT_ERR')
+  assert.equal(world.store.readCurrent(), null)
+  assert.equal(world.read(NOTE), null)
+  assertJournalsValid(world)
+  const retried = await world.publish(prepared, absentAdapter())
+  assert.equal(retried.state, 'committed')
+  assert.equal(world.read(NOTE), CANDIDATE)
+  assert.equal(world.read(OTHER), BASE)
+  assertJournalsValid(world)
+})
+
 function filesUnder(directory) {
   const found = []
   const walk = (current) => {

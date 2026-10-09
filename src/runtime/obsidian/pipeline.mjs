@@ -1,3 +1,4 @@
+import { prepareViewCooperatively } from '../../projection/obsidian/materialize/prepare-view.mjs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
@@ -186,5 +187,5 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
 // that note and reuses the rest. Both caches are derived, in-memory state: a
 // test may replace either seam with `() => null` to build or prepare in full.
 export function createProductionSeams() {
-  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
+  return { buildGraph, captureSnapshot, profileFor, prepareView, prepareViewCooperatively, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
 }

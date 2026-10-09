@@ -16,6 +16,7 @@ import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publicatio
 import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src/runtime/obsidian/engine.mjs'
 import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 import { withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
+import { prepareViewCooperatively } from '../src/projection/obsidian/materialize/prepare-view.mjs'
 import { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } from '../src/runtime/obsidian/lifecycle.mjs'
 import { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock, isProcessAlive, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
 import { HEALTH_SCHEMA, authorityOf, probeHealth, requestLoopback } from '../src/runtime/obsidian/service-client.mjs'
@@ -195,6 +196,72 @@ function lyingStat() {
 // ---------------------------------------------------------------------------
 // 1. Typed enablement
 // ---------------------------------------------------------------------------
+
+test('cooperative engine refuses changed scope and machine settings across a preparation yield', needsExchange, async (t) => {
+  for (const kind of ['scope', 'machine']) await t.test(kind, async (t) => {
+    const world = makeWorld(t)
+    let changed = false
+    const engine = world.engine({ seams: { prepareViewCooperatively: input => prepareViewCooperatively({
+      ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (changed || phase !== 'emit-note') return
+        changed = true
+        if (kind === 'scope') world.writeExt(settingsOf([EAST_SCOPE]))
+        else world.configureMachine({ maintenanceMode: 'manual', audienceAllow: ['public'] })
+      } },
+    }) } })
+    const report = await engine.tick()
+    assert.equal(changed, true)
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+    assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
+    assert.equal(world.calls.publishView.length, 0)
+  })
+})
+
+test('cooperative engine refuses an eligibility revision changed across a preparation yield', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let revision = 'one'
+  const engine = world.engine({ eligibility: { ...DEFAULT_ELIGIBILITY, revision: () => revision }, seams: {
+    prepareViewCooperatively: input => prepareViewCooperatively({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'emit-note') revision = 'two' } } }),
+  } })
+  const report = await engine.tick()
+  assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.equal(world.calls.publishView.length, 0)
+})
+
+test('cooperative engine refuses a source changed during publication before committing its pointer', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let changed = false
+  const engine = world.engine({ seams: { publishView: input => publishView({ ...input, scheduling: {
+    ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+      if (changed || phase !== 'publication-complete') return
+      changed = true
+      fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nChanged authored source during publication.\n')
+    },
+  } }) } })
+  const report = await engine.tick()
+  assert.equal(changed, true)
+  assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
+  assert.match(fs.readFileSync(world.source('east-wing/notes/lantern.md'), 'utf8'), /Changed authored source/)
+})
+
+test('cooperative engine rechecks source pins before reporting an already committed generation current', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  let publications = 0
+  const engine = world.engine({ seams: { publishView: input => {
+    publications += 1
+    if (publications === 2) fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nChanged after preparing the same generation.\n')
+    return publishView(input)
+  } } })
+  const first = await engine.tick()
+  assert.equal(world.scope(first).state, 'current')
+  const pointer = fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json'))
+  engine.requestPreparation(FULL_SCOPE.scopeId)
+  const next = await engine.tick()
+  assert.equal(publications, 2)
+  assert.deepEqual([world.scope(next).state, world.scope(next).reason], ['stale', 'mixed-read'])
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), pointer)
+})
 
 function assertUnknownSettingsRefuse(read) {
   const cases = [
@@ -1929,6 +1996,32 @@ async function inProcessService(t, world, options = {}) {
   t.after(() => service.shutdown('test-teardown'))
   return { service, port, record: recordOf(world) }
 }
+
+test('cooperative service preparation keeps real loopback health answering and preserves the plugin', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  for (let i = 0; i < 48; i += 1) fs.writeFileSync(world.source(`east-wing/notes/event-loop-${i}.md`), note({ id: `east-wing:event-loop-${i}`, title: `Invented ${i}`, body: 'Disposable scheduling fixture.' }))
+  let preparing = false, health = null, answeredDuringPreparation = false, carriedPlugin = false
+  const seam = async (input) => {
+    preparing = true
+    carriedPlugin ||= Array.isArray(input.plugin?.files)
+    try {
+      return await prepareViewCooperatively({ ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (phase === 'emit-note' && health === null) {
+          const record = recordOf(world)
+          health = probeHealth({ host: record.host, port: record.port }).then((answer) => { answeredDuringPreparation = preparing; return answer })
+        }
+      } } })
+    } finally { preparing = false }
+  }
+  const { service, record } = await inProcessService(t, world, { engineOptions: { seams: { prepareViewCooperatively: seam } } })
+  await service.tickNow()
+  assert.ok(health)
+  const answer = await health
+  assert.equal(answer.kind, 'health')
+  assert.equal(answer.body.runtimeId, record.runtimeId)
+  assert.equal(answeredDuringPreparation, true)
+  assert.equal(carriedPlugin, true)
+})
 
 function assertNothingSensitive(world, texts, bearer) {
   const forbidden = [world.dir, TMP, os.homedir(), process.execPath, REPOSITORY_ROOT, 'Lantern', 'Compass', 'Tide', 'notes/', 'logs/', '.md', 'east-wing', 'west-wing', 'sounding']

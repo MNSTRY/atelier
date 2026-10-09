@@ -740,6 +740,40 @@ function runChild(t, args, env) {
 
 const entryWords = (world, extra = []) => [TEST_SERVICE_ENTRY, `--project=${world.configPath}`, `--data-root=${world.dataRoot}`, ...extra]
 
+test('cooperative lifecycle second start in a separate process preserves the proven busy service', needsPosix, async (t) => {
+  const world = await makeWorld(t, { withLaunchd: false })
+  serviceSettings(world, await reservePort(t), 'service-and-startup')
+  const service = follow(t, childProcess.spawn(process.execPath, entryWords(world, [
+    '--startup', `--interval-ms=${IDLE_INTERVAL}`, '--first-tick-block-ms=5000',
+  ]), { env: world.env, stdio: 'ignore', windowsHide: true }), 'the first service with an intentionally busy graph build')
+  const before = await waitFor(async () => {
+    if (world.record() === null) return null
+    const status = await serviceStatus(world.lifecycle({ probeTimeoutMs: 50 }))
+    return status.state === 'busy' ? status : null
+  }, { label: 'the recorded executable to prove a busy service' })
+  assert.equal(before.record.pid, service.pid)
+  const recordBytes = fs.readFileSync(servicePaths(world.workspace().workspaceRoot).record)
+  const script = `
+    import { resolveProjectConfig } from ${JSON.stringify(new URL('../src/project/config.mjs', import.meta.url).href)};
+    import { startService } from ${JSON.stringify(new URL('../src/runtime/obsidian/lifecycle.mjs', import.meta.url).href)};
+    const [config, dataRoot, entryPath] = process.argv.slice(1);
+    const result = await startService({
+      loadProject: () => resolveProjectConfig({ argv: ['--project=' + config], env: process.env, writeLocalState: false }),
+      dataRoot, entryPath, probeTimeoutMs: 50, startTimeoutMs: 1000,
+      spawn: () => { throw new Error('a second service must never be spawned'); },
+    });
+    console.log(JSON.stringify({ state: result.state, started: result.started, alreadyRunning: result.alreadyRunning, busy: result.busy, pid: result.record?.pid, runtimeId: result.record?.runtimeId }));
+  `
+  const second = await runChild(t, ['--input-type=module', '-e', script, world.configPath, world.dataRoot, TEST_SERVICE_ENTRY], world.env)
+  assert.deepEqual([second.status, second.signal], [0, null])
+  const answer = JSON.parse(second.stdout)
+  assert.deepEqual(answer, { state: 'busy', started: false, alreadyRunning: true, busy: true, pid: service.pid, runtimeId: before.record.runtimeId })
+  assert.deepEqual(fs.readFileSync(servicePaths(world.workspace().workspaceRoot).record), recordBytes)
+  const later = await world.healthy('the original service to answer health after the busy build')
+  assert.deepEqual([later.record.pid, later.record.runtimeId], [service.pid, before.record.runtimeId])
+  assert.equal((await stopService(world.lifecycle({ stopTimeoutMs: 20000 }))).stopped, true)
+})
+
 test('under --startup a refusal exits 0 and records why, so the manager does not start it again; without --startup it still exits 2', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
   serviceSettings(world, await reservePort(t), 'service')

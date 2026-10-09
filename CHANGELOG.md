@@ -33,6 +33,13 @@
   Atelier.
 - The Obsidian service test suites reserve the loopback ports they choose, so
   another test cannot take a port between its selection and its use.
+- The Obsidian maintenance service prepares views cooperatively and yields
+  between complete publication units, keeping the loopback listener available
+  while notes are emitted, staged and published. Public synchronous preparation
+  stays synchronous. Settings, selection inputs and eligibility are rechecked
+  across waits, and selected source bytes are rechecked before the generation
+  commits. Cancellation preserves the prior preparation cache and publication
+  recovery keeps the existing locks, journal and conditional-write protocol.
 
 ## 0.2.0-alpha.13
 

@@ -1,3 +1,47 @@
+import { performance } from 'node:perf_hooks'
+// Internal scheduling shared by preparation and publication. The budget is a
+// yield target, not a deadline: one checked unit and native fsync stay atomic.
+export function createCooperativeBudget({ budgetMs = 8, maxUnits = 32, signal, guard = null, onBurst = null } = {}) {
+  if (!(Number.isFinite(budgetMs) && budgetMs > 0 && Number.isInteger(maxUnits) && maxUnits > 0)) throw new TypeError('finite positive scheduling budget required')
+  let started = performance.now(), units = 0, maxUnitMs = 0, last = started
+  const checkSignal = () => {
+    if (signal?.aborted) { const error = new Error('cooperative work cancelled at a completed boundary'); error.code = 'ABORT_ERR'; throw error }
+  }
+  const check = () => {
+    checkSignal()
+    guard?.()
+  }
+  const checkpoint = async (phase, force = false) => {
+    const now = performance.now()
+    maxUnitMs = Math.max(maxUnitMs, now - last); units += 1
+    checkSignal()
+    if (force || units >= maxUnits || now - started >= budgetMs) {
+      check()
+      onBurst?.({ phase, elapsedMs: now - started, units, maxUnitMs })
+      await new Promise(resolve => setImmediate(resolve))
+      check()
+      started = performance.now(); units = 0; maxUnitMs = 0
+    }
+    last = performance.now()
+  }
+  const finish = phase => { const now = performance.now(); maxUnitMs = Math.max(maxUnitMs, now - last); onBurst?.({ phase, elapsedMs: now - started, units: units + 1, maxUnitMs }) }
+  return { checkpoint, check, finish }
+}
+
+async function runCooperatively(iterator, options) {
+  const budget = createCooperativeBudget(options)
+  budget.check()
+  try {
+    for (;;) {
+      const step = iterator.next()
+      if (step.done) { budget.finish('prepare-finalize'); return step.value }
+      if (step.value === 'final-cache-commit') budget.check()
+      else await budget.checkpoint(step.value)
+    }
+  } catch (error) { iterator.return?.(); throw error }
+}
+
+
 import { createHash } from 'node:crypto'
 import { unclosedFenceAtEnd } from '../../../graph/knowledge-graph.mjs'
 import {
@@ -638,14 +682,14 @@ function layoutOf({ layout, priorManifest, layoutHeld }) {
 }
 
 export function prepareView(options = {}) {
-  return prepareWithRules(REDACTION_RULES, options)
+  return drainPreparation(prepareSteps(REDACTION_RULES, options))
 }
 
 // Test seam only: the mutation controls of the redaction guard substitute a
 // rule through this. Runtime code uses prepareView.
 export function createViewPreparationForOracleTests(rules = REDACTION_RULES) {
   const guard = { ...REDACTION_RULES, ...rules }
-  return (options = {}) => prepareWithRules(guard, options)
+  return (options = {}) => drainPreparation(prepareSteps(guard, options))
 }
 
 // `heldNotePaths` are the vault files held for an open edit: they stay in the
@@ -653,7 +697,7 @@ export function createViewPreparationForOracleTests(rules = REDACTION_RULES) {
 // notes that hold a layout 1 view in layout 1 (open edits and edits closed on
 // this tick); without it, `heldNotePaths` do. `viewScopeIds`, when given, are
 // the views still maintained: the registry drops the sections of any other.
-function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, plugin = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, viewScopeIds = null, layout: requestedLayout } = {}) {
+function* prepareSteps(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, plugin = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, viewScopeIds = null, layout: requestedLayout } = {}, recheckSources = false) {
   if (cache !== null && !isPreparationCache(cache)) refuse('invalid-preparation-cache', 'the preparation cache must come from createPreparationCache')
   assertObsidianContract('corpus-profile', profile)
   assertObsidianContract('scope', scope)
@@ -670,6 +714,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   if (viewScopeIds !== null && !(Array.isArray(viewScopeIds) && viewScopeIds.every((id) => typeof id === 'string'))) refuse('invalid-view-scopes', 'viewScopeIds must be an array of scope identities')
   const layout = layoutOf({ layout: requestedLayout, priorManifest, layoutHeld: layoutHeldNotePaths ?? heldNotePaths ?? [] })
   const checkedAt = timestampFrom(clock)
+  yield 'prepare-validation'
   const canonical = canonicalSnapshotOf(snapshot.graph)
 
   // Selection and visibility come from the contract, never from this module.
@@ -686,6 +731,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // Every view's allocation of the registry, this one's included; a registry of another shape or workspace refuses.
   const views = viewsOfRegistry(persistentPathRegistry, profile.workspaceId)
 
+  yield 'selection-and-universe'
   const edgeById = new Map(canonical.edges.map((edge) => [edge.id, edge]))
   const vaultEdges = selection.vaultEdges.map((id) => edgeById.get(id)).filter((edge) => vault.has(edge.source) && vault.has(edge.target))
   const outsideEdges = selection.outsideSelectionEdges.map((id) => edgeById.get(id)).filter((edge) => vault.has(edge.source) !== vault.has(edge.target))
@@ -714,6 +760,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // taken. A view prepared in layout 1 holds layout 1 files, none of which is a
   // layout 2 path. The registry keeps the result as this view's section,
   // whichever layout the view is prepared in.
+  yield 'link-and-asset-index'
   const readable = allocateViewPaths({
     published: publishedOf(priorManifest),
     nodes: [...vault].map((id) => nodeById.get(id)),
@@ -747,6 +794,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     return { key: { edgeKey: occurrence.target }, markdown: target.markdown, wikilink: target.wikilink, alias: true }
   }
 
+  yield 'path-allocation'
   const read = sourceReader(snapshot)
   const orderedNodes = [...vault].map((id) => nodeById.get(id)).sort((left, right) => compare(left.repo, right.repo) || compare(left.id, right.id))
   // Edges indexed by endpoint once, so a note's rows cost its degree and not
@@ -778,6 +826,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   const titles = titleRenderings()
 
   for (const node of orderedNodes) {
+    yield 'emit-note'
     const notePathValue = pathOf(node)
     const attachmentPathValue = node.extension === 'md' ? null : attachmentOf(node)
     const pinned = read.pinned(node.repo, node.path)
@@ -814,12 +863,14 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // One copy per asset, however many notes embed it, read through the pinned
   // snapshot like every other source.
   for (const asset of embeddedAssets.values()) {
+    yield 'emit-asset'
     const attachmentPath = assetPaths.get(asset.id)
     const { bytes, rawDigest } = read(asset.repo, asset.path)
     attachments.push({ path: attachmentPath, digest: rawDigest, byteLength: bytes.length, ext: { [EXT_KEY]: { kind: 'embedded-asset', repoId: asset.repo, assetPath: asset.path } } })
     files.push({ path: attachmentPath, kind: 'attachment', bytes, digest: rawDigest })
   }
 
+  yield 'emit-complete'
   const links = vaultEdges
     .map((edge) => {
       const inversions = edge.type === DERIVED_RELATION_TYPE ? inversionsByEdge.get(`${edge.source}\u0000${edge.target}`) ?? [] : []
@@ -835,6 +886,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     })
     .sort((left, right) => compare(left.edgeId, right.edgeId))
 
+  yield 'manifest-links'
   const settings = prepareSettings({ existing: existingSettings, plugin })
   files.push(...settings.files)
   const occupied = new Set()
@@ -847,6 +899,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   files.sort((left, right) => compare(left.path, right.path))
   attachments.sort((left, right) => compare(left.path, right.path))
 
+  yield 'settings-and-path-guard'
   const contentDigest = createHash('sha256')
   for (const file of files) contentDigest.update(`${file.path}\u0000${file.digest}\n`)
   const manifest = {
@@ -877,6 +930,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // the audience may see but this view does not select, every identifier is
   // reported. An identifier this view's own notes share names nothing outside
   // it.
+  yield 'manifest-validation'
   const viewAttachments = new Set(attachments.map((item) => item.path))
   const visible = new Set(universe.nodes)
   const censusRepositories = new Set([...canonical.nodes, ...censusAssets].filter(usable).map((item) => item.repo))
@@ -927,6 +981,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   const allocatedInView = new Map(orderedNodes.map((node) => [node.id, pathOf(node)]))
   const wrapperAttachments = new Set(orderedNodes.filter((node) => node.extension !== 'md').map((node) => (legacy ? `attachments/${legacyBasename(pathOf(node))}.${/^[a-z0-9]{1,16}$/.test(String(node.extension).toLowerCase()) ? String(node.extension).toLowerCase() : 'bin'}` : attachmentOf(node))))
   const allowedAttachments = new Set([...wrapperAttachments, ...assetPaths.values()])
+  yield 'redaction-index'
   const guardReported = assertViewRedaction({
     manifest,
     files,
@@ -954,6 +1009,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     })
   }
 
+  yield 'redaction-validation'
   const prior = new Map((priorManifest?.notes ?? []).map((note) => [note.path, note.noteDigest]))
   const changes = { added: [], changed: [], unchanged: [], removed: [] }
   for (const note of notes) changes[!prior.has(note.path) ? 'added' : prior.get(note.path) === note.noteDigest ? 'unchanged' : 'changed'].push(note.path)
@@ -962,8 +1018,16 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // under the publication protocol.
   changes.removed = [...prior.keys()].filter((notePathValue) => !present.has(notePathValue)).sort(compare)
 
-  // The cache is replaced only by a preparation that passed every check, and
-  // holds exactly the notes of this view.
+  // A yield lets a source change after it was emitted (or reused). Check the
+  // selected sources against the same pin again, before exposing the result
+  // or replacing the derived cache. This does not create a new snapshot.
+  if (recheckSources) {
+    for (const node of orderedNodes) { yield 'recheck-source'; read(node.repo, node.path) }
+    for (const asset of embeddedAssets.values()) { yield 'recheck-asset'; read(asset.repo, asset.path) }
+  }
+  // The last cancellation boundary precedes the cache commit. There is no
+  // yield between that commit and returning its complete prepared result.
+  yield 'final-cache-commit'
   if (nextCache) cache.notes = nextCache
   if (noteDiagnostics.length > 0) manifest.ext[EXT_KEY].diagnostics = noteDiagnostics
 
@@ -995,3 +1059,6 @@ export function withEligibility(graph, isEligible, isAssetEligible = null) {
       : {}),
   }
 }
+
+function drainPreparation(iterator) { for (;;) { const step = iterator.next(); if (step.done) return step.value } }
+export async function prepareViewCooperatively(options = {}) { return runCooperatively(prepareSteps(REDACTION_RULES, options, true), options.scheduling) }
