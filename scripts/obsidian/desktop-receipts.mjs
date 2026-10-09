@@ -204,6 +204,14 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
   }
   observed = readRecord()
   observedLive = readLive(observed)
+  const lastKnownPids = [...new Set([graceful?.record?.pid, graceful?.pid, status?.record?.pid, observed?.pid].filter((pid) => Number.isInteger(pid)))]
+  const lastKnownAlive = lastKnownPids.map((pid) => {
+    if (typeof runtime.alive !== 'function') return null
+    try {
+      const result = runtime.alive(pid)
+      return typeof result === 'boolean' ? result : null
+    } catch { return null }
+  }).find((result) => result !== null) ?? null
   if (graceful?.stopped !== true && observedLive === true) {
     const forcedPid = Number.isInteger(observed?.pid) ? observed.pid : null
     try { forced = publicCleanupAnswer(await runtime.stop({ stopTimeoutMs: heldTimeoutMs, force: true })) } catch (error) { forceError = { name: error.name, message: error.message } }
@@ -217,7 +225,11 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
     observedLive = readLive(observed)
   }
   const occupied = status?.state === 'occupied'
-  const explicitlyStopped = graceful?.stopped === true || (graceful?.state === 'stopped' && observedLive !== true && !observed?.__error) || (status?.state === 'stopped' && !status.record && observedLive !== true)
+  const gracefulStopped = graceful?.stopped === true && (lastKnownAlive === null || lastKnownAlive === false)
+  const gracefulStateStopped = graceful?.state === 'stopped' && observedLive !== true && !observed?.__error && (lastKnownAlive === null || lastKnownAlive === false)
+  const heldStopProof = held?.joined === true && (lastKnownAlive !== true || graceful?.pid === process.pid)
+  const statusStopped = status?.state === 'stopped' && !status.record && observedLive !== true && (heldStopProof || lastKnownPids.length === 0 || lastKnownAlive === false)
+  const explicitlyStopped = gracefulStopped || gracefulStateStopped || statusStopped
   if (occupied || (!explicitlyStopped && observedLive !== false) && (forced?.stopped !== true || forceAlive !== false)) {
     throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: observed, alive: observedLive }))
   }

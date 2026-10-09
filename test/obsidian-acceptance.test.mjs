@@ -2629,7 +2629,7 @@ const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true 
 const endLeftService = (runtime) => async () => {
   try { await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 5000 }) }
   catch (error) {
-    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || error.detail?.alive === true || error.detail?.status?.state === 'occupied') throw error
+    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || error.detail?.alive === true || error.detail?.forceAlive === true || error.detail?.status?.state === 'occupied' || error.detail?.held?.joined !== true) throw error
     const held = await runtime.stopHeld()
     assert.equal(held.joined, true, 'fixture teardown must join every owned child')
   }
@@ -2717,6 +2717,19 @@ test('AP-03 fixture teardown does not absorb a live or occupied service refusal'
   }
   await endLeftService(unknownRuntime)()
   assert.equal(unknownStopHeldCalls, 2, 'fixture teardown absorbs only the unknown-liveness refusal after a second joined-handle sweep')
+
+  let forceSurvivorStopHeldCalls = 0
+  let forceSurvivorForced = false
+  const forceSurvivorRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop(options) { forceSurvivorForced = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    async stopHeld() { forceSurvivorStopHeldCalls += 1; return { joined: true, signals: [], remaining: [] } },
+    status() { return { state: 'busy' } },
+    record() { return forceSurvivorForced ? null : { pid: 12 } },
+    alive() { return true },
+  }
+  await assert.rejects(() => endLeftService(forceSurvivorRuntime)(), (error) => error instanceof IsolationRefusal && error.detail.forceAlive === true)
+  assert.equal(forceSurvivorStopHeldCalls, 1, 'a force-stop survivor is never absorbed by fixture teardown')
 })
 
 test('AP-03 production cleanup force-stops a detached service only after identity proof', async () => {
@@ -2736,8 +2749,9 @@ test('AP-03 production cleanup force-stops a detached service only after identit
 })
 
 test('AP-03 production cleanup refuses a force stop without a post-signal survivor proof', async () => {
+  let force = false
   const runtime = {
-    async stop(options) { return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    async stop(options) { force = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
     record() { return { runtimeId: 'rt-survivor', pid: 4243 } },
     alive() { return true },
     async stopHeld() { return { joined: true, signals: [], remaining: [] } },
@@ -2746,6 +2760,43 @@ test('AP-03 production cleanup refuses a force stop without a post-signal surviv
     () => cleanupOwnedRuntime(runtime),
     (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.forceAlive === true,
   )
+  assert.equal(force, true)
+})
+
+test('AP-03 production cleanup refuses a force stop when the record disappears but the PID survives', async () => {
+  let forced = false
+  const runtime = {
+    async stop(options) { forced = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    record() { return forced ? null : { runtimeId: 'rt-disappearing', pid: 4244 } },
+    alive() { return true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  const outcome = await cleanupProcedureRuntime(runtime)
+  assert.equal(outcome.retainRoots, true)
+  assert.equal(outcome.error.code, 'owned-service-cleanup-unverified')
+  assert.equal(outcome.error.detail.forceAlive, true)
+})
+
+test('AP-03 production cleanup refuses a force stop when post-signal liveness is unknown', async () => {
+  let forced = false
+  const runtime = {
+    async stop(options) { forced = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    record() { return forced ? null : { runtimeId: 'rt-unknown', pid: 4245 } },
+    alive() { return forced ? null : true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(runtime), (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.forceAlive === null)
+})
+
+test('AP-03 production cleanup refuses a graceful timeout whose record disappears while the PID survives', async () => {
+  const runtime = {
+    async stop() { return { state: 'stopped', stopped: false, record: { pid: 4246 } } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return null },
+    alive() { return true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(runtime), (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.alive === null)
 })
 
 test('AP-03 production cleanup refuses an occupied service after graceful stop reports stopped', async () => {
@@ -3021,13 +3072,14 @@ function inProcessRuntime(t, world, env) {
   const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
   const contributions = [createSourceApplyContribution({ context }), createProposalAdapterContribution(), createSelectionContribution()]
   const runtime = createInProcessServiceRuntime({ ...context, consent: { actor: 'op-synthetic', coverage: 'service' }, probeTimeoutMs: 2000, adapterFactory: () => absentAdapter(), extensions: createObsidianRegistry({ contributions }).extensions })
-  t.after(async () => { try { await runtime.stop() } catch { /* already stopped */ } })
   return Object.assign(runtime, { contributions })
 }
 
 async function ap05World(t, label, { onTick, inProcess = false } = {}) {
+  let runtime = null
+  if (inProcess) t.after(async () => { try { await runtime?.stop() } catch { /* already stopped */ } })
   const { world, env, fixture } = serviceWorld(t, label, { scoped: true })
-  const runtime = inProcess ? inProcessRuntime(t, world, env) : engineRuntime(world, env, { onTick })
+  runtime = inProcess ? inProcessRuntime(t, world, env) : engineRuntime(world, env, { onTick })
   const command = await createCommandRunner({ projectFile: fixture.projectFile, dataRoot: world.dataRoot, env, contributions: runtime.contributions })
   const views = { full: { scopeId: AP05_SCOPES.full, editor: fileEditor(world, AP05_SCOPES.full) }, scoped: { scopeId: AP05_SCOPES.scoped, editor: fileEditor(world, AP05_SCOPES.scoped) } }
   return { world, runtime, command, views, fixture }
