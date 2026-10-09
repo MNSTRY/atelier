@@ -156,8 +156,8 @@ const publicCleanupRecord = (record) => {
 
 const publicCleanupAnswer = (answer) => answer && typeof answer === 'object' && Object.hasOwn(answer, 'record') ? { ...answer, record: publicCleanupRecord(answer.record) } : answer
 
-const cleanupDetail = ({ graceful, gracefulError, status, forced, forceError, held, heldError, record, alive }) => ({
-  graceful, gracefulError, status, forced, forceError, held, heldError, record: publicCleanupRecord(record), alive,
+const cleanupDetail = ({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record, alive }) => ({
+  graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: publicCleanupRecord(record), alive,
 })
 
 // The service is a child owned by this run, so teardown cannot depend on a
@@ -180,20 +180,24 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
   // The retained child handle is the cleanup authority even when the record
   // is missing or malformed. Sweep it before any detached proof gate.
   try { held = await runtime.stopHeld({ timeoutMs: heldTimeoutMs }) } catch (error) { heldError = { name: error.name, message: error.message } }
-  if (heldError) throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${heldError.message}`, cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, held, heldError, record: null, alive: null }))
-  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, held, heldError, record: null, alive: null }))
+  if (heldError) throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${heldError.message}`, cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, forceAlive: null, held, heldError, record: null, alive: null }))
+  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, forceAlive: null, held, heldError, record: null, alive: null }))
   let observed = null
   let observedLive = null
   let status = null
   let forced = null
   let forceError = null
+  let forceAlive = null
   const readRecord = () => {
     if (typeof runtime.record !== 'function') return null
     try { return publicCleanupRecord(runtime.record()) } catch (error) { return { __error: { name: error.name, message: error.message } } }
   }
   const readLive = (record) => {
     if (!record || record.__error || !Number.isInteger(record.pid) || typeof runtime.alive !== 'function') return null
-    try { return Boolean(runtime.alive(record.pid)) } catch { return null }
+    try {
+      const result = runtime.alive(record.pid)
+      return typeof result === 'boolean' ? result : null
+    } catch { return null }
   }
   if (typeof runtime.status === 'function') {
     try { status = publicCleanupAnswer(await runtime.status()) } catch { status = null }
@@ -201,18 +205,25 @@ export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000,
   observed = readRecord()
   observedLive = readLive(observed)
   if (graceful?.stopped !== true && observedLive === true) {
+    const forcedPid = Number.isInteger(observed?.pid) ? observed.pid : null
     try { forced = publicCleanupAnswer(await runtime.stop({ stopTimeoutMs: heldTimeoutMs, force: true })) } catch (error) { forceError = { name: error.name, message: error.message } }
+    if (forcedPid !== null && typeof runtime.alive === 'function') {
+      try {
+        const result = runtime.alive(forcedPid)
+        forceAlive = typeof result === 'boolean' ? result : null
+      } catch { forceAlive = null }
+    }
     observed = readRecord()
     observedLive = readLive(observed)
   }
   const occupied = status?.state === 'occupied'
   const explicitlyStopped = graceful?.stopped === true || (graceful?.state === 'stopped' && observedLive !== true && !observed?.__error) || (status?.state === 'stopped' && !status.record && observedLive !== true)
-  if (occupied || (!explicitlyStopped && observedLive !== false) && forced?.stopped !== true) {
-    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, held, heldError, record: observed, alive: observedLive }))
+  if (occupied || (!explicitlyStopped && observedLive !== false) && (forced?.stopped !== true || forceAlive !== false)) {
+    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: observed, alive: observedLive }))
   }
   const afterRecord = readRecord()
   const afterLive = readLive(afterRecord)
-  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, held, heldError, record: afterRecord, alive: afterLive }))
+  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: afterRecord, alive: afterLive }))
   return { graceful, gracefulError, status, forced, forceError, observed: { record: observed, alive: observedLive }, held, after: { record: afterRecord, alive: afterLive } }
 }
 

@@ -2681,7 +2681,7 @@ test('AP-03 production cleanup refuses and retains custody when an owned child r
 })
 
 test('AP-03 fixture teardown does not absorb a live or occupied service refusal', async () => {
-  const runtime = {
+  const liveRuntime = {
     async stop() { return { stopped: false, state: 'busy' } },
     async stopHeld() { return { joined: true, signals: [], remaining: [] } },
     status() { return { state: 'occupied' } },
@@ -2689,9 +2689,34 @@ test('AP-03 fixture teardown does not absorb a live or occupied service refusal'
     alive() { return true },
   }
   await assert.rejects(
-    () => endLeftService(runtime)(),
+    () => endLeftService(liveRuntime)(),
     (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.status.state === 'occupied',
   )
+
+  const unknownOccupiedRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop() { return { stopped: false, state: 'busy' } },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+    status() { return { state: 'occupied' } },
+    record() { return { pid: 10 } },
+    alive() { return null },
+  }
+  await assert.rejects(
+    () => endLeftService(unknownOccupiedRuntime)(),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.status.state === 'occupied' && error.detail.alive === null,
+  )
+
+  let unknownStopHeldCalls = 0
+  const unknownRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop() { return { stopped: false, state: 'busy' } },
+    async stopHeld() { unknownStopHeldCalls += 1; return { joined: true, signals: [], remaining: [] } },
+    status() { throw new Error('status unavailable') },
+    record() { return { pid: 11 } },
+    alive() { return null },
+  }
+  await endLeftService(unknownRuntime)()
+  assert.equal(unknownStopHeldCalls, 2, 'fixture teardown absorbs only the unknown-liveness refusal after a second joined-handle sweep')
 })
 
 test('AP-03 production cleanup force-stops a detached service only after identity proof', async () => {
@@ -2706,7 +2731,35 @@ test('AP-03 production cleanup force-stops a detached service only after identit
   const result = await cleanupOwnedRuntime(runtime)
   assert.deepEqual(calls, [{ stopTimeoutMs: 35000 }, { held: { timeoutMs: 5000 } }, { stopTimeoutMs: 5000, force: true }])
   assert.equal(result.forced.stopped, true)
+  assert.equal(result.observed.alive, false)
   assert.equal(result.after.alive, false)
+})
+
+test('AP-03 production cleanup refuses a force stop without a post-signal survivor proof', async () => {
+  const runtime = {
+    async stop(options) { return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    record() { return { runtimeId: 'rt-survivor', pid: 4243 } },
+    alive() { return true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.forceAlive === true,
+  )
+})
+
+test('AP-03 production cleanup refuses an occupied service after graceful stop reports stopped', async () => {
+  const runtime = {
+    async stop() { return { state: 'stopped', stopped: true } },
+    status() { return { state: 'occupied' } },
+    record() { return null },
+    alive() { return null },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.status.state === 'occupied',
+  )
 })
 
 test('AP-03 production cleanup refuses a detached service when no stop proof exists', async () => {
@@ -3014,9 +3067,10 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
 })
 
 test('AP-05 production cleanup joins a live in-process service after a bounded graceful timeout', needsExchange, async (t) => {
+  let release
+  t.after(async () => { if (release) await release('test-cleanup') })
   const { world, env } = serviceWorld(t, 'ap05-stop-held-join', { scoped: true })
   const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
-  let release
   const runtime = createInProcessServiceRuntime({
     ...context,
     consent: { actor: 'op-synthetic', coverage: 'service' },
@@ -3029,7 +3083,6 @@ test('AP-05 production cleanup joins a live in-process service after a bounded g
       return { ...service, shutdown: async (reason) => { await new Promise((resolve) => setTimeout(resolve, 250)); return shutdown(reason) } }
     },
   })
-  t.after(async () => { if (release) await release() })
   let started
   try { started = await runtime.start() }
   catch (error) {
@@ -3046,9 +3099,10 @@ test('AP-05 production cleanup joins a live in-process service after a bounded g
 })
 
 test('AP-05 production cleanup fails closed when a live in-process shutdown never settles', needsExchange, async (t) => {
+  let release
+  t.after(async () => { if (release) await release('test-cleanup') })
   const { world, env } = serviceWorld(t, 'ap05-stop-timeout', { scoped: true })
   const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
-  let release
   const runtime = createInProcessServiceRuntime({
     ...context,
     consent: { actor: 'op-synthetic', coverage: 'service' },
@@ -3060,7 +3114,6 @@ test('AP-05 production cleanup fails closed when a live in-process shutdown neve
       return { ...service, shutdown: () => new Promise(() => {}) }
     },
   })
-  t.after(async () => { if (release) await release('test-cleanup') })
   let started
   try { started = await runtime.start() }
   catch (error) {
