@@ -105,7 +105,14 @@ export async function runMaintenanceService(options = {}) {
   if (typeof adapterFactory !== 'function') throw new TypeError('the service needs an adapterFactory')
   if (typeof entryPath !== 'string') throw new TypeError('the service needs the path of its entry module')
 
-  const workspace = resolveServiceWorkspace({ project: loadProject(), dataRoot, env, platform })
+  // The workspace comes from the project the loader answers now. A loader that answers a promise is refused, typed, before
+  // anything is read from the promise (it has no pointer, no overlay and no repositories); its answer is let go unread.
+  const project = loadProject()
+  if (typeof project?.then === 'function') {
+    Promise.resolve(project).catch(() => {})
+    refuse('service-loader-not-synchronous', 'the service resolves its workspace from a project its loader answers at once; a loader that answers a promise is not supported when the service starts')
+  }
+  const workspace = resolveServiceWorkspace({ project, dataRoot, env, platform })
   if (!workspace?.workspaceRoot) refuse('service-workspace-not-prepared', 'this workspace has no private state yet; `start` prepares it')
   const { workspaceId, workspaceRoot } = workspace
   const settings = readServiceSettings({ workspaceRoot, workspaceId })
@@ -261,7 +268,10 @@ export async function runMaintenanceService(options = {}) {
   const healthStatus = () => (stopping ? 'stopped' : consecutiveFailures > 0 ? 'degraded' : 'healthy')
 
   // What is stored about a view is not permission to tell it: the project is asked as it is now (view-permission.mjs).
-  const viewPermitted = createViewPermission({ loadProject, resolveWorkspace: (project) => resolveServiceWorkspace({ project, dataRoot, env, platform }), workspaceId, workspaceRoot })
+  const viewPermitted = createViewPermission({
+    loadProject, resolveWorkspace: (loaded) => resolveServiceWorkspace({ project: loaded, dataRoot, env, platform }), workspaceId, workspaceRoot,
+    onLoad: ({ durationMs, outcome, promised }) => log({ at: isoTime(clock), event: 'status-project-loaded', durationMs: Math.round(durationMs), outcome, promised }),
+  })
   // One view as the plugin is told about it: its freshness entry with held notes counted, and its open pending edits.
   function pluginStatusOf(scopeId) {
     if (!viewPermitted(scopeId)) return { view: null, pendingEdits: null }

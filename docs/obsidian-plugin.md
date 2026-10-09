@@ -374,16 +374,22 @@ every two seconds for every open vault, so the project is kept:
 
 - **What decides it.** The files the engine observes as configuration,
   compared at every request by a digest of what they hold, never by their
-  times. A file that is a link holds what the loader reads through it: the
-  file at the end of the link and that file's bytes, so a configuration kept
-  in a dotfiles repository and linked into the project is kept like any
-  other, and a link pointed at another file is a change. A folder in a file's
-  place, a link that leads nowhere or to a folder, and a file that cannot be
-  read vouch for nothing: then nothing is kept, and the project is loaded at
-  every request. The pointer and the place of the private state are read at
-  every request.
+  times. Each file holds where it really is and the bytes there: its path
+  resolved as the system resolves it when the loader opens it (`realpath(3)`,
+  through a link anywhere on the way, a `..` after a link included), so a
+  configuration kept in a dotfiles repository and linked into the project is
+  kept like any other, and a link pointed elsewhere, the file's own or one to
+  a folder above it, is a change even where every byte is the same. A folder
+  in a file's place, a link that leads nowhere or to a folder, and a file
+  that cannot be read vouch for nothing: then nothing is kept, and the
+  project is loaded at every request. The pointer and the place of the
+  private state are read at every request.
 - **When it is kept.** Two loads in a row, each started after those files
-  were read and found to hold the same, must return the same project. One
+  were read and found to hold the same, must return the same project as far
+  as the decision reads one: the views it enables, where its pointer is, the
+  data root its local overlay prefers and the roots it protects. A field that
+  differs from load to load, such as a time or a personal-workspace binding
+  kept under a symbol key, does not keep a project from being kept. One
   load is not enough: a file changed and changed back while it ran leaves the
   same bytes around a project read from other ones. So three loads keep the
   project when the service has just started, and two after a change.
@@ -397,12 +403,20 @@ every two seconds for every open vault, so the project is kept:
   its loads have agreed; one load runs at a time, and a kept project goes on
   deciding, within its time, while it is loaded again. A load that has not
   answered within two and a half minutes is given up and its later answer
-  ignored. No command or service binds such a loader yet (see "Personal
-  workspaces" in [obsidian.md](obsidian.md)).
+  ignored, whether a request or that answer is the first to come after the
+  deadline. No command or service binds such a loader yet, and a service
+  refuses to start on one (see "Personal workspaces" in
+  [obsidian.md](obsidian.md)).
 - **A load that fails** (it throws, it is refused, it is given up, or a file
   vouches for nothing under a loader that answers a promise) ends whatever
   was kept, and is asked for again after two seconds, then four, up to
-  thirty, while the files hold the same. A change to them is tried at once.
+  thirty, while the files hold the same. A change to them is tried at once,
+  once a load has named them: until a load has answered, a corrected
+  configuration waits for the next try.
+- **What the service log shows.** Every one of these loads is logged with
+  `status-project-loaded`, how many milliseconds it took, how it ended
+  (`answered`, `failed` or `given-up`) and whether it answered a promise, so a
+  slow load on the request path can be seen.
 
 Refusals, before anything else is looked at: `Host` other than the listener's
 literal loopback authority, a cross-site `Origin` or `Sec-Fetch-Site`, a path
@@ -570,8 +584,8 @@ note open in the editor.
   data. These tests complement the real-listener and real-app checks below.
 - `test/obsidian-view-permission.test.mjs` asks whether the project allows a
   view the way the service asks before a status answer, over real project
-  files, the real loader and the real workspace resolution, with no service
-  or listener, with time a number the test moves: every way a view or its
+  files, the real loader and the real workspace resolution, with no listener,
+  with time a number the test moves: every way a view or its
   workspace is withdrawn and given back; the workspace's identity compared as
   well as its place; two loads per change however often a view is asked
   about; a change that keeps a file's size and modification time; a change
@@ -580,11 +594,22 @@ note open in the editor.
   leads nowhere and a link to a folder in a file's place; a kept project's
   time; a loader that fails, with its backoff; and a loader that answers a
   promise: one load at a time, a change undone and done again while it runs,
-  through a link, a load that never answers, and one refused again and again.
-  Mutations of the module (a link that vouches for nothing, a project kept
-  from one load whose files are read again when it answers, no deadline, no
-  backoff, no identity check, the files not taken from the load, no time
-  limit) each fail at least one of them.
+  through a link, a load that never answers, one whose answer comes after its
+  deadline before any request, and one refused again and again; a link whose
+  target has a `..` after a link, and a link to a folder above a file pointed
+  at a byte-for-byte copy; two loads that differ in a time and a symbol-keyed
+  binding, or in a protected root; how long each load took and how it ended;
+  and the service refusing to start on a loader that answers a promise, a
+  refused promise or a thenable. Mutations of the module (a link that vouches
+  for nothing, a project kept from one load whose files are read again when
+  it answers, no deadline, no backoff, no identity check, the files not taken
+  from the load, no time limit, a late answer taken, JavaScript's realpath, no
+  real path for a regular file, the whole project compared, no protected
+  roots compared) and a service that does not refuse each fail at least one
+  of them. `test/obsidian-personal-workspace.test.mjs` keeps a bound personal
+  workspace from the loader that composes in a worker: its views once two
+  compositions agree, nothing while its generation is refused, and the next
+  generation's views once that is bound.
 - `test/obsidian-plugin.test.mjs` runs the shipped `main.js` in a stand-in app
   against a real listener on an ephemeral loopback port: parity of the
   plugin's constants and of every proof and MAC with the channel contract (a

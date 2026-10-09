@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import { OBSIDIAN_EXT_KEY } from '../../projection/obsidian/contracts.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
 import { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, configFilesOf } from './engine.mjs'
+import { localPointerPath, protectedRoots } from './machine-settings.mjs'
 import { readFileFacts } from './observation.mjs'
 
 // Whether the project allows a view of this workspace right now.
@@ -30,15 +32,21 @@ import { readFileFacts } from './observation.mjs'
 // by a digest of what they hold, never by their times. The pointer and the
 // place of the workspace's private state are read at every request.
 //
-//   what a file holds   its bytes; for a link, the file it leads to and that
-//                       file's bytes, as the loader reads through it, so a
-//                       link pointed elsewhere is a change. Nothing there is
-//                       a state like any other. A folder in a file's place, a
+//   what a file holds   where it really is and the bytes there: its path
+//                       resolved as the system resolves it when the loader
+//                       opens it (realpath(3), through a link anywhere on the
+//                       way), so a link pointed elsewhere, its own or a
+//                       folder's above it, is a change. Nothing there is a
+//                       state like any other. A folder in a file's place, a
 //                       link that leads nowhere or to anything but a regular
 //                       file, and a file that does not read vouch for nothing
 //   a project is kept   when two loads in a row, each started after the
 //                       files were read and found to hold the same, returned
-//                       the same project. One load is not enough: a file
+//                       the same project as far as this permission reads one:
+//                       the views it enables, and what the service's
+//                       workspace resolution reads of it (where its pointer
+//                       is, the data root its local overlay prefers, the
+//                       roots it protects). One load is not enough: a file
 //                       changed and changed back while it ran leaves the same
 //                       bytes around a project read from other ones, and
 //                       reading the files once more when it answers shows
@@ -64,13 +72,18 @@ import { readFileFacts } from './observation.mjs'
 // only ever decided from a kept project: until two loads agreed the view is
 // not permitted, and while a kept project is loaded again it goes on deciding,
 // within its time. A load that has not answered by its deadline is given up,
-// and what it answers later is ignored.
+// whether a request or its own late answer is the first to see the deadline
+// passed, and what it answers then is ignored.
 //
 // A load that fails (it throws, it is refused, it is given up, or it answers a
 // promise while a file vouches for nothing) ends whatever was kept, and is not
 // asked for again at once: after two seconds, then four, up to thirty, for as
-// long as the files hold the same. A change to them, once they are known, is
-// tried at once.
+// long as the files hold the same. A change to them is tried at once, once a
+// load has named them: until a load has answered, a corrected configuration
+// waits for the next try.
+//
+// `onLoad({ durationMs, outcome, promised })` is told how long each load took
+// and how it ended (`answered`, `failed` or `given-up`): times and codes only.
 
 // A kept project is never used for longer than the engine goes without a full reconciliation.
 export const DEFAULT_KEEP_FOR_MS = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS
@@ -79,21 +92,19 @@ export const DEFAULT_LOAD_DEADLINE_MS = 150 * 1000
 export const DEFAULT_RETRY_AFTER_MS = 2 * 1000
 export const DEFAULT_RETRY_AT_MOST_MS = 30 * 1000
 
-// What one file holds, as [path, where a link leads, digest of the bytes]; undefined when it vouches for nothing.
+// What one file holds, as [path, its real path, digest of the bytes there], or [path, null, null] when it is absent;
+// undefined when it vouches for nothing. The real path is the system's own (realpath(3)): JavaScript's realpathSync
+// takes a `..` after a link away before following the link, and names a file the loader never opens.
 function heldBy(file) {
+  let real
+  try { real = fs.realpathSync.native(file) } catch (error) {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') return undefined
+    // Nothing there is absent; a link there that leads nowhere is not.
+    try { return fs.lstatSync(file, { throwIfNoEntry: false }) === undefined ? [file, null, null] : undefined } catch (inner) { return inner.code === 'ENOTDIR' ? [file, null, null] : undefined }
+  }
   let facts
-  try { facts = readFileFacts(file) } catch { return undefined }
-  if (facts !== null) return [file, null, facts.digest]
-  let stat
-  try { stat = fs.lstatSync(file, { throwIfNoEntry: false }) } catch (error) { return error.code === 'ENOTDIR' ? [file, null, null] : undefined }
-  if (stat === undefined) return [file, null, null]
-  if (!stat.isSymbolicLink()) return undefined
-  try {
-    // As the loader reads it: through every link, to the file at the end. That file's bytes are read from where it is.
-    const target = fs.realpathSync(file)
-    const led = readFileFacts(target)
-    return led === null ? undefined : [file, target, led.digest]
-  } catch { return undefined }
+  try { facts = readFileFacts(real) } catch { return undefined }
+  return facts === null ? undefined : [file, real, facts.digest]
 }
 
 // One digest over what every file holds, in order. Null when one of them vouches for nothing.
@@ -115,11 +126,20 @@ function viewsOf(project) {
   } catch { return new Set() }
 }
 
+// What two loads have to agree on: the views, and what resolveServiceWorkspace reads of a project. Nothing else of it
+// is compared, so a field that differs from load to load (a time, a binding under a symbol key) does not keep a project
+// from being kept, and nothing a decision reads is left out.
+function decidedBy(project, views) {
+  const preference = project?.localOverlay?.overlay?.preferences?.[OBSIDIAN_EXT_KEY]
+  return JSON.stringify([[...views].sort(), localPointerPath(project), preference === undefined ? null : preference, protectedRoots(project)])
+}
+
 // `resolveWorkspace(project)` answers { workspaceId, workspaceRoot } as the project names them now, or null.
 // `now()` answers milliseconds that only go up; the times are this module's defaults unless a test gives its own.
 export function createViewPermission({
   loadProject, resolveWorkspace, workspaceId, workspaceRoot, now = () => performance.now(),
   keepForMs = DEFAULT_KEEP_FOR_MS, loadDeadlineMs = DEFAULT_LOAD_DEADLINE_MS, retryAfterMs = DEFAULT_RETRY_AFTER_MS, retryAtMostMs = DEFAULT_RETRY_AT_MOST_MS,
+  onLoad = () => {},
 }) {
   if (typeof loadProject !== 'function') throw new TypeError('a view permission needs loadProject')
   if (typeof resolveWorkspace !== 'function') throw new TypeError('a view permission needs resolveWorkspace')
@@ -140,13 +160,15 @@ export function createViewPermission({
     failed = { digest, times: failed !== null && failed.digest === digest ? failed.times + 1 : 1, at }
   }
   const tooSoon = (digest, at) => failed !== null && failed.digest === digest && at - failed.at < Math.min(retryAtMostMs, retryAfterMs * 2 ** (failed.times - 1))
+  const told = (startedAt, outcome, promised) => { try { onLoad({ durationMs: Math.max(0, now() - startedAt), outcome, promised }) } catch { /* only told */ } }
 
   // What a load returned; `digest` was read before it started. A project that names other files than the ones read
   // is kept under a digest the next request cannot read again, so it is dropped there, before it decides anything.
   function answered(project, digest, since) {
     files = configFilesOf(project).map((file) => file.absolute)
-    const loaded = { project, views: viewsOf(project), digest, since }
-    const shape = digest === null ? null : JSON.stringify(project)
+    const views = viewsOf(project)
+    const loaded = { project, views, digest, since }
+    const shape = digest === null ? null : decidedBy(project, views)
     kept = digest !== null && seen !== null && seen.digest === digest && seen.shape === shape ? loaded : null
     seen = digest === null ? null : { digest, shape }
     return loaded
@@ -160,20 +182,28 @@ export function createViewPermission({
       if (typeof answer?.then !== 'function') {
         const loaded = answered(answer, digest, at)
         failed = null
+        told(at, 'answered', false)
         return loaded
       }
-    } catch (error) { fail(digest, at); throw error }
+    } catch (error) { fail(digest, at); told(at, 'failed', false); throw error }
     const id = (started += 1)
     underWay = { id, digest, startedAt: at }
-    // Only the load under way is listened to: one given up answers nobody.
-    const mine = () => { if (underWay?.id !== id) return false; underWay = null; return true }
+    // Only the load under way is listened to: one given up answers nobody. An answer that comes once the deadline has
+    // passed gives the load up itself, when no request was there to see the deadline pass first.
+    const mine = () => {
+      if (underWay?.id !== id) return false
+      underWay = null
+      if (now() - at < loadDeadlineMs) return true
+      fail(digest, now())
+      told(at, 'given-up', true)
+      return false
+    }
     Promise.resolve(answer).then((project) => {
       if (!mine()) return
       answered(project, digest, at)
       // While a file vouches for nothing, nothing can be kept from this answer, and no request is here to be decided by it.
-      if (digestOf(files) === null) fail(null, now())
-      else failed = null
-    }, () => { if (mine()) fail(digest, now()) }).catch(() => { fail(digest, now()) })
+      if (digestOf(files) === null) { fail(null, now()); told(at, 'failed', true) } else { failed = null; told(at, 'answered', true) }
+    }, () => { if (mine()) { fail(digest, now()); told(at, 'failed', true) } }).catch(() => { fail(digest, now()); told(at, 'failed', true) })
     return null
   }
 
@@ -182,7 +212,7 @@ export function createViewPermission({
     const at = now()
     const digest = files === null ? null : digestOf(files)
     if (kept !== null && (digest !== kept.digest || at - kept.since >= keepForMs)) kept = null
-    if (underWay !== null && at - underWay.startedAt >= loadDeadlineMs) { const given = underWay; underWay = null; fail(given.digest, at) }
+    if (underWay !== null && at - underWay.startedAt >= loadDeadlineMs) { const given = underWay; underWay = null; fail(given.digest, at); told(given.startedAt, 'given-up', true) }
     if (kept !== null && at - kept.since < keepForMs / 2) return kept
     if (underWay === null && !tooSoon(digest, at)) {
       const loaded = load(digest, at)

@@ -74,6 +74,19 @@
   and a half minutes and never used past five. A loader that answers a promise
   is given up after two and a half minutes, and a load that fails is asked for
   again after two seconds, then four, up to thirty, unless a file changed.
+- The Obsidian maintenance service refuses to start on a project loader that
+  answers a promise (or any other thenable), with
+  `service-loader-not-synchronous`, before it reads anything from it, listens
+  or records anything. Before, it handed the promise to its workspace
+  resolution, which then read the workspace pointer of the working directory
+  and protected no repository. For the status read of a plugin: a load whose
+  answer comes after its deadline is given up even when no request saw the
+  deadline pass; a link is resolved as the system resolves it, a `..` after a
+  link included, and a link to a folder above a configuration file pointed
+  elsewhere is a change; two loads agree when what the decision reads of the
+  project is the same, so a field that differs between loads (a time, a
+  binding under a symbol key) no longer stops a project from being kept; and
+  every load is logged with how long it took and how it ended.
 - The Obsidian maintenance service stays responsive while it prepares and
   publishes a view. The engine prepares each view cooperatively and the
   publisher yields between complete units, so the loopback listener answers

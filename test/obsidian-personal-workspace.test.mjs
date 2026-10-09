@@ -68,6 +68,8 @@ const { readObsidianEnablement } = await import('../src/runtime/obsidian/enablem
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
+const { resolveServiceWorkspace } = await import('../src/runtime/obsidian/service.mjs')
+const { createViewPermission } = await import('../src/runtime/obsidian/view-permission.mjs')
 const { viewCounts } = await import('../src/runtime/obsidian/view-counts.mjs')
 const { EVERYTHING_SCOPE_ID, PERSONAL_MEMBER_KEY, validatePersonalWorkspace, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, loadBoundProjectOffThread, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
 
@@ -1047,4 +1049,36 @@ test('the validity key records an enrolled root it cannot look at, and follows a
   git(world.b, ['config', 'core.fsmonitor', 'true'])
   assert.throws(build, (error) => error.code === 'git-helper-configured', 'the route refuses a helper added through the link')
   assert.deepEqual(await validatePersonalWorkspace(ari.bound.project), { ok: false, code: 'git-helper-configured' })
+})
+
+test('the plugin status read keeps a bound project from the loader that composes off the event loop: its views once two compositions agree, nothing while the generation is refused, and the next generation\'s views once it is bound', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let time = 0
+  const loads = []
+  const loadProject = () => { const answer = loadBoundProjectOffThread({ personalHome: ari.home, generationId: ari.generationId }); loads.push(answer); return answer }
+  // The last load answers, in its worker, and what it answered is taken.
+  const settle = async () => { await loads.at(-1).catch(() => {}); await new Promise((resolve) => { setImmediate(resolve) }) }
+  const permits = createViewPermission({
+    loadProject, resolveWorkspace: (project) => resolveServiceWorkspace({ project, dataRoot: ari.dataRoot, env: process.env }), workspaceId: ari.workspaceId, workspaceRoot: ari.workspaceRoot(), now: () => time,
+  })
+  for (let load = 0; load < 3; load += 1) { assert.equal(permits('harbor-only'), false, 'not before two compositions agree'); await settle() }
+  assert.deepEqual(['harbor-only', 'both', EVERYTHING_SCOPE_ID, 'mine'].map((scopeId) => permits(scopeId)), [true, true, true, false])
+  for (let index = 0; index < 20; index += 1) permits('both')
+  assert.equal(loads.length, 3, 'kept: no further composition')
+
+  // A saved view taken out of the overlay: the bound generation no longer holds, and the composition refuses it.
+  ari.overlay = { ...ari.overlay, views: ari.overlay.views.filter((view) => view.id !== 'both') }
+  ari.save()
+  assert.equal(permits('harbor-only'), false)
+  await settle()
+  await assert.rejects(loads.at(-1), (error) => error.code === 'stale-generation')
+  assert.equal(permits('harbor-only'), false)
+  assert.equal(loads.length, 4, 'refused: not asked again at once')
+
+  // Bound to the generation made from the overlay as it is now.
+  ari.materialize()
+  time += 2000
+  for (let round = 0; round < 4 && !permits('harbor-only'); round += 1) await settle()
+  assert.deepEqual(['harbor-only', 'both', EVERYTHING_SCOPE_ID].map((scopeId) => permits(scopeId)), [true, false, true])
 })

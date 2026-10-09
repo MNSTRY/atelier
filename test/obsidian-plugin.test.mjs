@@ -1868,9 +1868,9 @@ test('a view the project turns off or no longer declares is told nothing the ser
 
 test('a loader that answers a promise never keeps the plugin waiting: until it has answered the view is told nothing, sealed, and the plugin keeps its session; then it is told what is stored', needsExchange, async (t) => {
   const world = serviceWorld(t)
-  // A service resolves its workspace from its loader's own answer when it starts, not from a project it promises. This
-  // loader answers at once until the service runs, then with a promise: resolved at once for a tick, and held back,
-  // until the test lets it go, for a status request.
+  // A service refuses to start on a loader that answers a promise (service-loader-not-synchronous). This loader answers at
+  // once until the service runs, then with a promise: resolved at once for a tick, and held back, until the test lets it
+  // go, for a status request.
   let answers = 'at-once'
   const held = []
   const loader = () => {
