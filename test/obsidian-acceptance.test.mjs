@@ -1421,6 +1421,7 @@ const { resolveExchange } = await import('../src/projection/obsidian/publication
 const { interruptService, runAp03 } = await import('../scripts/obsidian/lib/ap03.mjs')
 const { AP05_EDITS, AP05_SCOPES, createAp05RunnerForOracleTests, prepareAp05Workspace, runAp05 } = await import('../scripts/obsidian/lib/ap05.mjs')
 const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
+const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { createNullWatcherFactory } = await import('../src/runtime/obsidian/watchers.mjs')
 const { createSourceApplyContribution } = await import('../src/projection/obsidian/edits/contribution.mjs')
@@ -1428,7 +1429,7 @@ const { createProposalAdapterContribution } = await import('../src/projection/ob
 const { DESKTOP_EXT_KEY, ReceiptRefusal, buildReceipt, evidenceFileName, writeGateReceipt } = await import('../scripts/obsidian/lib/receipts.mjs')
 const { DEFAULT_SEED, PROFILES, generateScaleDataset, measureDerivation, planDataset } = await import('../scripts/obsidian/generate-scale.mjs')
 const {
-  DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
+  DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, cleanupOwnedRuntime, cleanupProcedureRuntime, combineProcedureAndCleanupError, desktopReceiptErrorExitCode, formatDesktopReceiptError, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
   planProcedure, recordProcedureReceipts, runAp01, runAp02Membership, runAp04App,
 } = await import('../scripts/obsidian/desktop-receipts.mjs')
 const { SIGNED_NOTE, UNSIGNED_NOTE, createReceiptVerifierForOracleTests, formatTable, verifyReceiptSet } = await import('../scripts/obsidian/verify-receipts.mjs')
@@ -2622,20 +2623,18 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
 
 const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'service-entry.mjs')
 const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }]
-// Graceful stop and the identity-checked fallback serve unheld launcher services.
-// Every exit path also sweeps and joins held children, independent of the record.
+// Fixture teardown exercises the same cleanup authority as the production runner;
+// a deliberately damaged record may still refuse proof after its held child is
+// already joined, so that diagnostic refusal is safe to absorb here.
 const endLeftService = (runtime) => async () => {
-  try {
-    try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* fallback below */ }
-    let record
-    try { record = runtime.record() } catch { /* held children still joined below */ }
-    if (record && runtime.kill(record.pid, 'SIGKILL').sent !== true) {
-      const stopped = await runtime.stop({ stopTimeoutMs: 5000, force: true })
-      assert.ok(stopped.stopped || !runtime.alive(record.pid), 'unheld service cleanup must finish')
-    }
-  } finally {
+  try { await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 5000 }) }
+  catch (error) {
+    const liveness = [error.detail?.alive, error.detail?.forceAlive, error.detail?.lastKnownAlive].filter((value) => value !== undefined)
+    const allLivenessUnknown = liveness.length > 0 && liveness.every((value) => value === null)
+    const joinedHandleProof = error.detail?.held?.joined === true && (error.detail.held.heldCount > 0 || error.detail.held.handleKind === 'in-process-service' || error.detail.held.signals?.length > 0 || error.detail.held.remaining?.length > 0)
+    if (error?.code !== 'owned-service-cleanup-unverified' || runtime.fixtureMayAbsorbUnknownRefusal !== true || !allLivenessUnknown || error.detail?.status?.state === 'occupied' || !joinedHandleProof) throw error
     const held = await runtime.stopHeld()
-    assert.equal(held.joined, true, 'held service cleanup must join every owned child')
+    assert.equal(held.joined, true, 'fixture teardown must join every owned child')
   }
 }
 
@@ -2652,6 +2651,291 @@ function serviceWorld(t, label, { scoped = false } = {}) {
 
 // The app of AP-03, faked: it "opens" any note and reads the vault file from disk, as the real probe reads app.vault.
 const diskApp = (vaultRoot) => ({ openNote: async (notePath) => `opened ${notePath}`, readIncludes: ({ path: notePath, needle }) => { try { return fs.readFileSync(noteFile(vaultRoot, notePath), 'utf8').includes(needle) } catch { return false } } })
+
+test('AP-03 production cleanup sweeps the owned child before a malformed status record refuses proof', async () => {
+  const calls = []
+  const runtime = {
+    async stop(options) { calls.push(['stop', options]); throw new Error('status record unavailable') },
+    async stopHeld(options) { calls.push(['stopHeld', options]); return { joined: true, signals: [{ pid: 7, sent: true, through: 'handle' }], remaining: [] } },
+    record() { throw new Error('malformed record') },
+    status() { throw new Error('malformed record') },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(runtime), (error) => {
+    assert.equal(error.code, 'owned-service-cleanup-unverified')
+    assert.equal(error.detail.held.joined, true)
+    assert.deepEqual(error.detail.gracefulError, { name: 'Error', message: 'status record unavailable' })
+    return true
+  })
+  assert.deepEqual(calls, [['stop', { stopTimeoutMs: 35000 }], ['stopHeld', { timeoutMs: 5000 }]])
+})
+
+test('AP-03 production cleanup refuses and retains custody when an owned child remains live', async () => {
+  let live = true
+  const runtime = {
+    async stop(options) { if (options.force === true) live = false; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'stale-record', stopped: false } },
+    record() { return { pid: 8 } },
+    alive() { return live },
+    async stopHeld() { return { joined: false, signals: [{ pid: 8, sent: false, through: 'handle' }], remaining: [8] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-incomplete' && error.detail.held.remaining[0] === 8,
+  )
+})
+
+test('AP-03 fixture teardown does not absorb a live or occupied service refusal', async () => {
+  const liveRuntime = {
+    async stop() { return { stopped: false, state: 'busy' } },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+    status() { return { state: 'occupied' } },
+    record() { return { pid: 9 } },
+    alive() { return true },
+  }
+  await assert.rejects(
+    () => endLeftService(liveRuntime)(),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.status.state === 'occupied',
+  )
+
+  const unknownOccupiedRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop() { return { stopped: false, state: 'busy' } },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+    status() { return { state: 'occupied' } },
+    record() { return { pid: 10 } },
+    alive() { return null },
+  }
+  await assert.rejects(
+    () => endLeftService(unknownOccupiedRuntime)(),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.status.state === 'occupied' && error.detail.alive === null,
+  )
+
+  let unknownStopHeldCalls = 0
+  const unknownRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop() { return { stopped: false, state: 'busy' } },
+    async stopHeld() { unknownStopHeldCalls += 1; return { joined: true, heldCount: 1, handleKind: 'child-handle', signals: [], remaining: [] } },
+    status() { throw new Error('status unavailable') },
+    record() { return { pid: 11 } },
+    alive() { return null },
+  }
+  await endLeftService(unknownRuntime)()
+  assert.equal(unknownStopHeldCalls, 2, 'fixture teardown absorbs only the unknown-liveness refusal after a second joined-handle sweep')
+
+  let forceSurvivorStopHeldCalls = 0
+  let forceSurvivorForced = false
+  const forceSurvivorRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop(options) { forceSurvivorForced = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    async stopHeld() { forceSurvivorStopHeldCalls += 1; return { joined: true, signals: [], remaining: [] } },
+    status() { return { state: 'busy' } },
+    record() { return forceSurvivorForced ? null : { pid: 12 } },
+    alive() { return true },
+  }
+  await assert.rejects(() => endLeftService(forceSurvivorRuntime)(), (error) => error instanceof IsolationRefusal && error.detail.forceAlive === true)
+  assert.equal(forceSurvivorStopHeldCalls, 1, 'a force-stop survivor is never absorbed by fixture teardown')
+
+  const flaggedLastKnownLiveRuntime = {
+    fixtureMayAbsorbUnknownRefusal: true,
+    async stop(options) { return options.force === true ? { state: 'stopped', stopped: true } : { state: 'healthy', stopped: false, record: { pid: 13 } } },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return null },
+    alive() { return true },
+  }
+  await assert.rejects(() => endLeftService(flaggedLastKnownLiveRuntime)(), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === true)
+
+  let mixedPidForced = false
+  const mixedPidLiveRuntime = {
+    async stop(options) {
+      if (options.force === true) { mixedPidForced = true; return { state: 'stopped', stopped: true } }
+      return { state: 'busy', stopped: false, record: { pid: 13 } }
+    },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return mixedPidForced ? null : { pid: 14 } },
+    alive(pid) { return pid === 14 },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(mixedPidLiveRuntime), (error) => error instanceof IsolationRefusal && error.detail.forceAlive === true)
+
+  const staleCurrentDeadRuntime = {
+    async stop() { return { state: 'busy', stopped: false, record: { pid: 21 } } },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stale-record', record: { pid: 22 } } },
+    record() { return { pid: 22 } },
+    alive(pid) { return pid === 21 },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(staleCurrentDeadRuntime), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === true)
+
+  let mixedPidForceApplied = false
+  const forceCurrentDeadOlderLiveRuntime = {
+    async stop(options) {
+      if (options.force === true) { mixedPidForceApplied = true; return { state: 'stopped', stopped: true } }
+      return { state: 'busy', stopped: false, record: { pid: 23 } }
+    },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+    status() { return { state: 'stale-record', record: { pid: 24 } } },
+    record() { return mixedPidForceApplied ? null : { pid: 24 } },
+    alive(pid) { return pid === 23 || (pid === 24 && !mixedPidForceApplied) },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(forceCurrentDeadOlderLiveRuntime), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === true)
+
+  const unprovenHeldPidRuntime = {
+    async stop() { return { state: 'stale-record', stopped: false, record: { pid: 15 } } },
+    async stopHeld() { return { joined: true, heldCount: 1, handleKind: 'child-handle', signals: [{ pid: 99, sent: true, through: 'handle' }], remaining: [] } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return { pid: 15 } },
+    alive() { return null },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(unprovenHeldPidRuntime), (error) => error instanceof IsolationRefusal && error.detail.lastKnownAlive === null)
+})
+
+test('AP-03 production cleanup force-stops a detached service only after identity proof', async () => {
+  const calls = []
+  let live = true
+  const runtime = {
+    async stop(options) { calls.push(options); if (options.force === true) live = false; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false, refused: true } },
+    record() { return { runtimeId: 'rt-detached', pid: 4242 } },
+    alive() { return live },
+    async stopHeld(options) { calls.push({ held: options }); return { joined: true, signals: [], remaining: [] } },
+  }
+  const result = await cleanupOwnedRuntime(runtime)
+  assert.deepEqual(calls, [{ stopTimeoutMs: 35000 }, { held: { timeoutMs: 5000 } }, { stopTimeoutMs: 5000, force: true }])
+  assert.equal(result.forced.stopped, true)
+  assert.equal(result.observed.alive, false)
+  assert.equal(result.after.alive, false)
+})
+
+test('AP-03 production cleanup refuses a force stop without a post-signal survivor proof', async () => {
+  let force = false
+  const runtime = {
+    async stop(options) { force = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    record() { return { runtimeId: 'rt-survivor', pid: 4243 } },
+    alive() { return true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.forceAlive === true,
+  )
+  assert.equal(force, true)
+})
+
+test('AP-03 production cleanup refuses a force stop when the record disappears but the PID survives', async () => {
+  let forced = false
+  const runtime = {
+    async stop(options) { forced = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    record() { return forced ? null : { runtimeId: 'rt-disappearing', pid: 4244 } },
+    alive() { return true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  const outcome = await cleanupProcedureRuntime(runtime)
+  assert.equal(outcome.retainRoots, true)
+  assert.equal(outcome.error.code, 'owned-service-cleanup-unverified')
+  assert.equal(outcome.error.detail.forceAlive, true)
+})
+
+test('AP-03 production cleanup refuses a force stop when post-signal liveness is unknown', async () => {
+  let forced = false
+  const runtime = {
+    async stop(options) { forced = options.force === true; return options.force === true ? { state: 'stopped', stopped: true } : { state: 'busy', stopped: false } },
+    record() { return forced ? null : { runtimeId: 'rt-unknown', pid: 4245 } },
+    alive() { return forced ? null : true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(runtime), (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.forceAlive === null)
+})
+
+test('AP-03 production cleanup refuses a graceful timeout whose record disappears while the PID survives', async () => {
+  const runtime = {
+    async stop() { return { state: 'stopped', stopped: false, record: { pid: 4246 } } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return null },
+    alive() { return true },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(() => cleanupOwnedRuntime(runtime), (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.alive === null)
+})
+
+test('AP-03 production cleanup refuses a graceful timeout with unknown detached liveness', async () => {
+  const runtime = {
+    async stop() { return { state: 'stopped', stopped: false, record: { pid: 4247 } } },
+    status() { return { state: 'stopped', record: null } },
+    record() { return null },
+    alive() { return null },
+    async stopHeld() { return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] } },
+  }
+  const outcome = await cleanupProcedureRuntime(runtime)
+  assert.equal(outcome.retainRoots, true)
+  assert.equal(outcome.error.code, 'owned-service-cleanup-unverified')
+  assert.equal(outcome.error.detail.lastKnownAlive, null)
+})
+
+test('AP-03 production cleanup refuses an occupied service after graceful stop reports stopped', async () => {
+  const runtime = {
+    async stop() { return { state: 'stopped', stopped: true } },
+    status() { return { state: 'occupied' } },
+    record() { return null },
+    alive() { return null },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified' && error.detail.status.state === 'occupied',
+  )
+})
+
+test('AP-03 production cleanup refuses a detached service when no stop proof exists', async () => {
+  const runtime = {
+    async stop() { throw new Error('status unavailable') },
+    record() { return null },
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  await assert.rejects(
+    () => cleanupOwnedRuntime(runtime),
+    (error) => error instanceof IsolationRefusal && error.code === 'owned-service-cleanup-unverified',
+  )
+})
+
+test('AP-03 cleanup preserves the procedure failure when cleanup also refuses', () => {
+  const primary = new Error('procedure failed first')
+  const cleanup = new IsolationRefusal('owned-service-cleanup-unverified', 'cleanup proof missing')
+  const combined = combineProcedureAndCleanupError(primary, cleanup)
+  assert.ok(combined instanceof AggregateError)
+  assert.deepEqual(combined.errors, [primary, cleanup])
+  const output = formatDesktopReceiptError(combined)
+  assert.match(output, /Error: procedure failed first/)
+  assert.match(output, /IsolationRefusal \[owned-service-cleanup-unverified\]/)
+  assert.match(output, /cleanup proof missing/)
+  assert.equal(desktopReceiptErrorExitCode(combined), 2)
+  assert.equal(desktopReceiptErrorExitCode(new AggregateError([primary])), 1)
+})
+
+test('AP-03 production cleanup keeps bearer data out of success and refusal evidence', async () => {
+  const record = { runtimeId: 'rt-stale', pid: 1234, ext: { bearer: 'synthetic-secret-marker' } }
+  const runtime = {
+    async stop() { return { state: 'stale-record', stopped: false, record } },
+    async status() { return { state: 'stale-record', record } },
+    record: () => record, alive: () => false,
+    async stopHeld() { return { joined: true, signals: [], remaining: [] } },
+  }
+  const cleanup = await cleanupOwnedRuntime(runtime)
+  const success = JSON.stringify(cleanup)
+  assert.equal(success.includes('synthetic-secret-marker'), false)
+  assert.equal(success.includes('"ext"'), false)
+  assert.equal(success.includes('"bearer"'), false)
+  runtime.status = async () => ({ state: 'occupied', record })
+  const outcome = await cleanupProcedureRuntime(runtime, { procedureError: new Error('procedure failure') })
+  assert.equal(outcome.retainRoots, true)
+  assert.ok(outcome.error instanceof AggregateError)
+  assert.equal(outcome.error.errors[1].code, 'owned-service-cleanup-unverified')
+  const refusal = JSON.stringify(outcome.error.errors[1].detail)
+  assert.equal(refusal.includes('synthetic-secret-marker'), false)
+  assert.equal(refusal.includes('"ext"'), false)
+  runtime.status = async () => ({ state: 'stale-record', record })
+  const settled = await cleanupProcedureRuntime(runtime)
+  assert.equal(settled.retainRoots, false)
+  assert.equal(settled.error, null)
+})
 
 test('AP-03 interruption: a service is killed only when it answered healthy with a process number, and only through a handle the runtime holds', async (t) => {
   const failures = []
@@ -2731,29 +3015,40 @@ for (const damaged of ['missing', 'malformed']) {
     // hooks from running. Joining here also precedes temporary-root removal.
     try {
       const record = path.join(world.workspaceRoot, 'state', 'service', 'runtime.json')
+      runtime.fixtureMayAbsorbUnknownRefusal = true
       if (damaged === 'missing') fs.unlinkSync(record)
       else fs.writeFileSync(record, '{')
-      runtime.stop = async () => { throw new Error('synthetic stop timeout') }
-      await endLeftService(runtime)()
+      try {
+        const cleanup = await cleanupOwnedRuntime(runtime)
+        assert.equal(cleanup.held.joined, true)
+      } catch (error) {
+        assert.ok(error instanceof IsolationRefusal)
+        assert.equal(error.code, 'owned-service-cleanup-unverified')
+        assert.equal(error.detail.held.joined, true)
+      }
       assert.equal(runtime.alive(pid), false, 'missing or malformed records cannot hide a held child')
     } finally {
       const recovery = await runtime.stopHeld()
       assert.equal(recovery.joined, true, 'regression recovery must join its owned service')
+      // A malformed retained record is diagnostic state; remove only this test's
+      // damaged fixture after proving the real cleanup refusal and child join.
+      fs.rmSync(path.join(world.workspaceRoot, 'state', 'service', 'runtime.json'), { force: true })
     }
   })
 }
 
-test('AP-03 cleanup: unheld records use force stop and a failed held join fails cleanup', async () => {
-  const calls = []
-  const runtime = {
-    async stop(options) { calls.push(options); return { stopped: options.force === true } },
-    record: () => ({ pid: 4242 }), kill: () => ({ sent: false }), alive: () => true,
-    async stopHeld() { calls.push('held-sweep'); return { joined: true } },
-  }
-  await endLeftService(runtime)()
-  assert.deepEqual(calls, [{ stopTimeoutMs: 5000 }, { stopTimeoutMs: 5000, force: true }, 'held-sweep'])
-  runtime.stopHeld = async () => ({ joined: false })
-  await assert.rejects(endLeftService(runtime), /held service cleanup must join/)
+test('AP-03 production cleanup joins a real launcher-started unheld service', needsExchange, async (t) => {
+  const { runtime } = ap03ServiceWorld(t, 'ap03-unheld-cleanup')
+  const started = await runtime.startFromExitingLauncher()
+  const status = await runtime.status()
+  const pid = started.reported?.pid ?? status.record?.pid
+  assert.equal(started.reported?.state ?? status.state, 'healthy')
+  assert.equal(runtime.alive(pid), true)
+  assert.equal(runtime.kill(pid).sent, false, 'the launcher child is not a retained service handle')
+  const cleanup = await cleanupOwnedRuntime(runtime)
+  assert.equal(cleanup.graceful.stopped, true)
+  assert.equal(cleanup.held.joined, true)
+  assert.equal(runtime.alive(pid), false)
 })
 
 test('AP-03 cleanup: held sweep reports an unjoined live child without PID signalling', needsExchange, async (t) => {
@@ -2848,13 +3143,14 @@ function inProcessRuntime(t, world, env) {
   const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
   const contributions = [createSourceApplyContribution({ context }), createProposalAdapterContribution(), createSelectionContribution()]
   const runtime = createInProcessServiceRuntime({ ...context, consent: { actor: 'op-synthetic', coverage: 'service' }, probeTimeoutMs: 2000, adapterFactory: () => absentAdapter(), extensions: createObsidianRegistry({ contributions }).extensions })
-  t.after(async () => { try { await runtime.stop() } catch { /* already stopped */ } })
   return Object.assign(runtime, { contributions })
 }
 
 async function ap05World(t, label, { onTick, inProcess = false } = {}) {
+  let runtime = null
+  if (inProcess) t.after(async () => { try { await runtime?.stop() } catch { /* already stopped */ } })
   const { world, env, fixture } = serviceWorld(t, label, { scoped: true })
-  const runtime = inProcess ? inProcessRuntime(t, world, env) : engineRuntime(world, env, { onTick })
+  runtime = inProcess ? inProcessRuntime(t, world, env) : engineRuntime(world, env, { onTick })
   const command = await createCommandRunner({ projectFile: fixture.projectFile, dataRoot: world.dataRoot, env, contributions: runtime.contributions })
   const views = { full: { scopeId: AP05_SCOPES.full, editor: fileEditor(world, AP05_SCOPES.full) }, scoped: { scopeId: AP05_SCOPES.scoped, editor: fileEditor(world, AP05_SCOPES.scoped) } }
   return { world, runtime, command, views, fixture }
@@ -2864,7 +3160,13 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
   const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05', { inProcess: true })
   assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md', 'north-desk/plans/mooring-notes.md'])
   const run = await runAp05({ world, views, runtime, command, operator: 'op-synthetic' })
-  assert.deepEqual({ start: [run.steps.baseline.start.state, run.steps.baseline.start.started, run.steps.baseline.start.record.pid], restart: [run.steps.automatic.restart.stop.stopped, run.steps.automatic.restart.start.state, run.steps.automatic.restart.start.record.runtimeId !== run.steps.baseline.start.record.runtimeId], stopped: run.steps.retention.uninstall.serviceStatus.state, log: runtime.logLines.filter((entry) => entry.event === 'started').length }, { start: ['healthy', true, process.pid], restart: [true, 'healthy', true], stopped: 'stopped', log: 2 }, 'the in-process service body was started twice, proven by health, and stopped')
+  // runAp05 stops between its retention assertions; restart the same runtime so
+  // cleanupOwnedRuntime is proven against a live in-process service as well.
+  const live = await runtime.start()
+  assert.equal(live.state, 'healthy')
+  const cleanup = await cleanupOwnedRuntime(runtime)
+  assert.equal(cleanup.held.joined, true, 'production cleanup joins a live real in-process AP-05 runtime')
+  assert.deepEqual({ start: [run.steps.baseline.start.state, run.steps.baseline.start.started, run.steps.baseline.start.record.pid], restart: [run.steps.automatic.restart.stop.stopped, run.steps.automatic.restart.start.state, run.steps.automatic.restart.start.record.runtimeId !== run.steps.baseline.start.record.runtimeId], stopped: run.steps.retention.uninstall.serviceStatus.state, log: runtime.logLines.filter((entry) => entry.event === 'started').length }, { start: ['healthy', true, process.pid], restart: [true, 'healthy', true], stopped: 'stopped', log: 3 }, 'the in-process service body was started twice, proven by health, restarted for live cleanup coverage, and stopped')
   assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => item.role) }, { passed: true, failures: [], roles: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention', null] })
   const { steps } = run
   assert.deepEqual({ identical: [steps['multi-vault'].identical.object.state, steps['multi-vault'].identical.object.operations.length, steps['multi-vault'].identical.object.pendingEdits.length], divergent: [steps['multi-vault'].divergent.object.state, steps['multi-vault'].divergent.object.conflictedOperations.length] }, { identical: ['pending', 1, 2], divergent: ['conflicted', 2] })
@@ -2885,6 +3187,73 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
   assert.ok(steps.retention.retained.vaultHolds.length >= 8 && steps.retention.retained.vaultHolds.every((item) => item.present) && steps.retention.retained.recoveryObjects.every((item) => item.present))
   assert.deepEqual(run.timings.sourceChangesSinceBaseline, ['north-desk/plans/quay-notes.md', 'north-desk/plans/shared-b.md', 'south-desk/tables/tide-table.md'], 'exactly the moved stale source, the automatic apply and the manual apply changed a source')
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('AP-05 production cleanup joins a live in-process service after a bounded graceful timeout', needsExchange, async (t) => {
+  let release
+  t.after(async () => { if (release) await release('test-cleanup') })
+  const { world, env } = serviceWorld(t, 'ap05-stop-held-join', { scoped: true })
+  const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
+  const runtime = createInProcessServiceRuntime({
+    ...context,
+    consent: { actor: 'op-synthetic', coverage: 'service' },
+    probeTimeoutMs: 100,
+    adapterFactory: () => absentAdapter(),
+    runService: async (input) => {
+      const service = await runMaintenanceService({ ...input, shutdownGraceMs: 0 })
+      const shutdown = service.shutdown
+      release = () => shutdown('test-cleanup')
+      return { ...service, shutdown: async (reason) => { await new Promise((resolve) => setTimeout(resolve, 250)); return shutdown(reason) } }
+    },
+  })
+  let started
+  try { started = await runtime.start() }
+  catch (error) {
+    if (error?.code === 'EPERM') return t.skip('host loopback is unavailable in this sandbox')
+    throw error
+  }
+  assert.equal(started.started, true)
+  const timed = await runtime.stop({ stopTimeoutMs: 10 })
+  assert.equal(timed.reason, 'stop-timed-out')
+  const cleanup = await cleanupOwnedRuntime(runtime, { gracefulTimeoutMs: 10, heldTimeoutMs: 5000 })
+  assert.equal(cleanup.graceful.stopped, false)
+  assert.equal(cleanup.held.joined, true)
+  assert.equal(cleanup.after.record, null)
+})
+
+test('AP-05 production cleanup fails closed when a live in-process shutdown never settles', needsExchange, async (t) => {
+  let release
+  t.after(async () => { if (release) await release('test-cleanup') })
+  const { world, env } = serviceWorld(t, 'ap05-stop-timeout', { scoped: true })
+  const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
+  const runtime = createInProcessServiceRuntime({
+    ...context,
+    consent: { actor: 'op-synthetic', coverage: 'service' },
+    probeTimeoutMs: 100,
+    adapterFactory: () => absentAdapter(),
+    runService: async (input) => {
+      const service = await runMaintenanceService({ ...input, shutdownGraceMs: 0 })
+      release = service.shutdown
+      return { ...service, shutdown: () => new Promise(() => {}) }
+    },
+  })
+  let started
+  try { started = await runtime.start() }
+  catch (error) {
+    if (error?.code === 'EPERM') return t.skip('host loopback is unavailable in this sandbox')
+    throw error
+  }
+  assert.equal(started.started, true)
+  const stop = await runtime.stop({ stopTimeoutMs: 10 })
+  assert.equal(stop.reason, 'stop-timed-out')
+  const held = await runtime.stopHeld({ timeoutMs: 10 })
+  assert.deepEqual([held.joined, held.remaining.length], [false, 1])
+  const outcome = await cleanupProcedureRuntime(runtime, { gracefulTimeoutMs: 10, heldTimeoutMs: 10 })
+  assert.equal(outcome.retainRoots, true)
+  assert.ok(outcome.error instanceof IsolationRefusal)
+  assert.equal(outcome.error.code, 'owned-service-cleanup-incomplete')
+  assert.equal(outcome.error.detail.held.joined, false)
+  assert.equal(outcome.error.detail.held.remaining.length, 1)
 })
 
 test('mutation control: a recorder blind to source digests accepts a manual-mode tick that wrote a source; the real recorder refuses it', needsExchange, async (t) => {

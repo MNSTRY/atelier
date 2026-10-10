@@ -11,7 +11,7 @@ import { defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMa
 import { isProcessAlive } from '../../../src/runtime/obsidian/private-lock.mjs'
 import { probeHealth } from '../../../src/runtime/obsidian/service-client.mjs'
 import { SERVICE_ENTRY_PATH } from '../../../src/runtime/obsidian/service-main.mjs'
-import { resolveServiceWorkspace, runMaintenanceService } from '../../../src/runtime/obsidian/service.mjs'
+import { DEFAULT_SHUTDOWN_GRACE_MS, resolveServiceWorkspace, runMaintenanceService } from '../../../src/runtime/obsidian/service.mjs'
 import { SERVICE_SETTINGS_SCHEMA, readServiceRecord, readServiceSettings, servicePaths, writeServiceSettings } from '../../../src/runtime/obsidian/service-record.mjs'
 import { createMaintenanceStateStore } from '../../../src/runtime/obsidian/state-store.mjs'
 import { isoNow, sha256Digest, walkFiles } from './common.mjs'
@@ -28,6 +28,7 @@ import { waitUntil } from './measure.mjs'
 export const PRODUCTION_ENTRY_ARGS = Object.freeze(['--adapter=obsidian-cli'])
 export const LAUNCHER_PATH = fileURLToPath(new URL('./service-launcher.mjs', import.meta.url))
 const IGNORED_SOURCE_DIRECTORIES = new Set(['.git', '.atelier-proposals', '.atelier-local', '.mnstry-local'])
+const DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS = DEFAULT_SHUTDOWN_GRACE_MS + 5_000
 
 // The project configuration of a synthetic workspace, read without any
 // overlay this process may carry.
@@ -181,7 +182,7 @@ export function createServiceRuntime({
         catch (error) { return { pid: child.pid, sent: false, reason: error.code ?? 'signal-failed', through: 'handle' } }
       })
       const settled = await waitUntil(() => held.every((child) => !running(child)), { timeoutMs, intervalMs: 25 })
-      return { joined: settled.met, signals, remaining: held.filter(running).map((child) => child.pid) }
+      return { joined: settled.met, heldCount: held.length, handleKind: held.length > 0 ? 'child-handle' : 'none', signals, remaining: held.filter(running).map((child) => child.pid) }
     },
     // A service this runtime started is answered from its handle; any other number is probed as before.
     alive(pid) { const own = services.filter((item) => item.pid === pid); return own.length > 0 ? own.some(running) : probeAlive(pid) },
@@ -221,10 +222,16 @@ export function createServiceRuntime({
 // environment cannot do. Ownership, status and ticks go through the same
 // lifecycle API as for a detached service; a stop is the service's own
 // shutdown, awaited.
-export function createInProcessServiceRuntime({ loadProject, dataRoot, env, consent, adapterFactory, extensions, intervalMs = 60 * 60 * 1000, probeTimeoutMs, startTimeoutMs = 120 * 1000, entryPath = SERVICE_ENTRY_PATH, clock = () => new Date(), log = () => {} }) {
+export function createInProcessServiceRuntime({ loadProject, dataRoot, env, consent, adapterFactory, extensions, intervalMs = 60 * 60 * 1000, probeTimeoutMs, startTimeoutMs = 120 * 1000, entryPath = SERVICE_ENTRY_PATH, clock = () => new Date(), log = () => {}, runService = runMaintenanceService }) {
   const lifecycle = { loadProject, dataRoot, env, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
   const workspace = () => resolveServiceWorkspace({ project: loadProject(), dataRoot, env, create: true })
   let service = null
+  let shutdownPromise = null
+  const awaitShutdown = async (timeoutMs) => {
+    let timer
+    try { return await Promise.race([shutdownPromise.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs) })]) }
+    finally { clearTimeout(timer) }
+  }
   const logLines = []
   const record = () => { const found = workspace(); return found?.workspaceRoot ? readServiceRecord({ workspaceRoot: found.workspaceRoot, workspaceId: found.workspaceId }) : null }
   return {
@@ -233,13 +240,14 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
     logLines,
     async start() {
       if (service !== null) { const status = await serviceStatus(lifecycle); return { ...status, started: false, alreadyRunning: true } }
+      shutdownPromise = null
       const { workspaceRoot, workspaceId } = workspace()
       const current = readServiceSettings({ workspaceRoot, workspaceId })
       if (current === null) {
         const port = await new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => { const { port: chosen } = server.address(); server.close(() => resolve(chosen)) }) })
         writeServiceSettings({ workspaceRoot, workspaceId, settings: { schema: SERVICE_SETTINGS_SCHEMA, workspaceId, host: '127.0.0.1', port, consent: { grantedAt: clock().toISOString(), actor: consent.actor, coverage: consent.coverage ?? 'service' }, updatedAt: clock().toISOString() } })
       }
-      service = await runMaintenanceService({ loadProject, dataRoot, env, adapterFactory, entryPath, intervalMs, clock, log: (entry) => { logLines.push(entry); log(entry) }, engineOptions: { ...(extensions ? { extensions } : {}), quietPeriodMs: 0 } })
+      service = await runService({ loadProject, dataRoot, env, adapterFactory, entryPath, intervalMs, clock, log: (entry) => { logLines.push(entry); log(entry) }, engineOptions: { ...(extensions ? { extensions } : {}), quietPeriodMs: 0 } })
       // The first tick runs in this process the moment the loop starts and holds the event loop through its synchronous
       // parts, so health may not answer at once. A detached service in that state reads `busy` (its command line
       // names the entry); this process's does not, so the status is asked again until the tick has let go.
@@ -250,13 +258,27 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
     status: () => serviceStatus(lifecycle),
     statusDocument: () => readServiceStatusDocument(lifecycle),
     tick: (options = {}) => requestServiceTick({ ...lifecycle, ...options }),
-    async stop() {
+    async stop({ stopTimeoutMs = DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS } = {}) {
+      if (!Number.isFinite(stopTimeoutMs) || stopTimeoutMs < 0 || stopTimeoutMs > DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS) throw new RangeError(`in-process service cleanup timeout must be between 0 and ${DEFAULT_IN_PROCESS_STOP_TIMEOUT_MS} ms`)
       if (service === null) return { state: 'stopped', stopped: false, refused: false, reason: 'not-running-in-this-process' }
-      const { identity } = service
-      await service.shutdown('stop-requested')
-      await service.done
+      const target = service
+      const { identity } = target
+      if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
+      const settled = await awaitShutdown(stopTimeoutMs)
+      if (!settled) return { state: 'stopping', stopped: false, refused: true, reason: 'stop-timed-out', runtimeId: identity.runtimeId, pid: identity.pid, heldCount: 1, handleKind: 'in-process-service' }
       service = null
-      return { state: 'stopped', stopped: true, refused: false, reason: 'stopped-the-in-process-runtime', runtimeId: identity.runtimeId, pid: identity.pid }
+      shutdownPromise = null
+      return { state: 'stopped', stopped: true, refused: false, reason: 'stopped-the-in-process-runtime', runtimeId: identity.runtimeId, pid: identity.pid, heldCount: 1, handleKind: 'in-process-service' }
+    },
+    async stopHeld({ timeoutMs = 5000 } = {}) {
+      if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new RangeError('held-service cleanup timeout must be between 0 and 5000 ms')
+      if (service === null) return { joined: true, heldCount: 0, handleKind: 'none', signals: [], remaining: [] }
+      const target = service
+      const { identity } = target
+      if (shutdownPromise === null) shutdownPromise = Promise.resolve(target.shutdown('stop-requested'))
+      const settled = await awaitShutdown(timeoutMs)
+      if (settled) { service = null; shutdownPromise = null }
+      return { joined: settled, heldCount: 1, handleKind: 'in-process-service', signals: [], remaining: settled ? [] : [identity.pid] }
     },
     record,
     alive: isProcessAlive,

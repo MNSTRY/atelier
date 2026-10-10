@@ -55,6 +55,7 @@ import { FULL_SCOPE, absentAdapter, createEngineSeams, deriveWorkspace, loadProj
 import { PROPOSED_TARGETS, waitUntil, warmChangeSummary } from './lib/measure.mjs'
 import { buildReceipt, evidenceFileName, writeGateReceipt } from './lib/receipts.mjs'
 import { bindLayoutToVault, createAppEditor, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, initialiseRepositories, prepareWorkspace, stripProjectEnv } from './lib/service-world.mjs'
+import { publicRecord } from '../../src/runtime/obsidian/service-record.mjs'
 
 export const DEFAULT_RECEIPT_DIR = path.join(REPOSITORY_ROOT, '.artifacts', 'obsidian', 'desktop')
 // The sentinels the production eligibility rule keeps out of a view the real service maintains (see the fixture's description).
@@ -121,6 +122,136 @@ export class IsolationRefusal extends Error {
     this.code = code
     this.detail = detail
   }
+}
+
+export function combineProcedureAndCleanupError(primary, cleanup) {
+  if (!primary) return cleanup
+  return new AggregateError([primary, cleanup], 'procedure failed and owned-service cleanup was not proven')
+}
+
+export function formatDesktopReceiptError(error) {
+  const label = `${error?.name ?? 'Error'}${error?.code ? ` [${error.code}]` : ''}: ${error?.message ?? error}`
+  return error instanceof AggregateError ? [label, ...error.errors.map(formatDesktopReceiptError)].join('\n') : label
+}
+
+export function desktopReceiptErrorExitCode(error) {
+  if (error instanceof AggregateError) return error.errors.some((item) => desktopReceiptErrorExitCode(item) === 2) ? 2 : 1
+  return error instanceof OutputRefusal || error instanceof IsolationRefusal ? 2 : 1
+}
+
+// The runner uses this outcome to retain every disposable root on refusal.
+export async function cleanupProcedureRuntime(runtime, { procedureError = null, ...budgets } = {}) {
+  try { return { cleanup: await cleanupOwnedRuntime(runtime, budgets), retainRoots: false, error: null } }
+  catch (error) { return { cleanup: null, retainRoots: true, error: combineProcedureAndCleanupError(procedureError, error) } }
+}
+
+const publicCleanupRecord = (record) => {
+  if (record === null || record === undefined || record.__error) return record
+  try {
+    return publicRecord(record)
+  } catch {
+    return Object.fromEntries(['runtimeId', 'pid', 'host', 'port', 'serviceName', 'workspaceId', 'executableDigest'].filter((key) => Object.hasOwn(record, key)).map((key) => [key, record[key]]))
+  }
+}
+
+const publicCleanupAnswer = (answer) => answer && typeof answer === 'object' && Object.hasOwn(answer, 'record') ? { ...answer, record: publicCleanupRecord(answer.record) } : answer
+
+const cleanupDetail = ({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record, alive, lastKnownPids = [], lastKnownAlive = null }) => ({
+  graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: publicCleanupRecord(record), alive, lastKnownPids, lastKnownAlive,
+})
+
+// The service is a child owned by this run, so teardown cannot depend on a
+// healthy status document. A missing or malformed record makes the graceful
+// stop unavailable, but it must never erase the run's custody of the child.
+// The retained handle is the only authority used by stopHeld; an incomplete
+// join refuses cleanup and callers must retain the disposable roots. A
+// detached service has no retained child handle, so a refused graceful stop
+// must be followed by an identity-checked force stop or an explicit stopped
+// status before roots can be removed.
+export async function cleanupOwnedRuntime(runtime, { gracefulTimeoutMs = 35_000, heldTimeoutMs = 5_000, timeoutMs } = {}) {
+  if (timeoutMs !== undefined) gracefulTimeoutMs = timeoutMs
+  if (!Number.isFinite(gracefulTimeoutMs) || gracefulTimeoutMs < 0 || gracefulTimeoutMs > 35_000) throw new RangeError('graceful service cleanup timeout must be between 0 and 35000 ms')
+  if (!Number.isFinite(heldTimeoutMs) || heldTimeoutMs < 0 || heldTimeoutMs > 5_000) throw new RangeError('held service cleanup timeout must be between 0 and 5000 ms')
+  let graceful = null
+  let gracefulError = null
+  try { graceful = publicCleanupAnswer(await runtime.stop({ stopTimeoutMs: gracefulTimeoutMs })) } catch (error) { gracefulError = { name: error.name, message: error.message } }
+  let held = null
+  let heldError = null
+  // The retained child handle is the cleanup authority even when the record
+  // is missing or malformed. Sweep it before any detached proof gate.
+  try { held = await runtime.stopHeld({ timeoutMs: heldTimeoutMs }) } catch (error) { heldError = { name: error.name, message: error.message } }
+  if (heldError) throw new IsolationRefusal('owned-service-cleanup-failed', `held service cleanup could not be verified: ${heldError.message}`, cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, forceAlive: null, held, heldError, record: null, alive: null }))
+  if (held?.joined !== true) throw new IsolationRefusal('owned-service-cleanup-incomplete', 'an owned service child remained live after bounded handle cleanup', cleanupDetail({ graceful, gracefulError, status: null, forced: null, forceError: null, forceAlive: null, held, heldError, record: null, alive: null }))
+  let observed = null
+  let observedLive = null
+  let status = null
+  let forced = null
+  let forceError = null
+  let forceAlive = null
+  const readRecord = () => {
+    if (typeof runtime.record !== 'function') return null
+    try { return publicCleanupRecord(runtime.record()) } catch (error) { return { __error: { name: error.name, message: error.message } } }
+  }
+  const readLive = (record) => {
+    if (!record || record.__error || !Number.isInteger(record.pid) || typeof runtime.alive !== 'function') return null
+    try {
+      const result = runtime.alive(record.pid)
+      return typeof result === 'boolean' ? result : null
+    } catch { return null }
+  }
+  if (typeof runtime.status === 'function') {
+    try { status = publicCleanupAnswer(await runtime.status()) } catch { status = null }
+  }
+  observed = readRecord()
+  observedLive = readLive(observed)
+  let lastKnownPids = [...new Set([graceful?.record?.pid, graceful?.pid, status?.record?.pid, observed?.pid].filter((pid) => Number.isInteger(pid)))]
+  const readLastKnownAlive = () => {
+    const states = lastKnownPids.map((pid) => {
+      if (typeof runtime.alive !== 'function') return null
+      try {
+        const result = runtime.alive(pid)
+        return typeof result === 'boolean' ? result : null
+      } catch { return null }
+    })
+    return states.includes(true) ? true : states.includes(null) ? null : states.length > 0 ? false : null
+  }
+  let lastKnownAlive = readLastKnownAlive()
+  if (graceful?.stopped !== true && observedLive === true) {
+    const forcedPid = Number.isInteger(observed?.pid) ? observed.pid : null
+    try { forced = publicCleanupAnswer(await runtime.stop({ stopTimeoutMs: heldTimeoutMs, force: true })) } catch (error) { forceError = { name: error.name, message: error.message } }
+    if (forcedPid !== null && typeof runtime.alive === 'function') {
+      try {
+        const result = runtime.alive(forcedPid)
+        forceAlive = typeof result === 'boolean' ? result : null
+      } catch { forceAlive = null }
+    }
+    observed = readRecord()
+    observedLive = readLive(observed)
+    if (Number.isInteger(observed?.pid) && !lastKnownPids.includes(observed.pid)) lastKnownPids = [...lastKnownPids, observed.pid]
+    lastKnownAlive = readLastKnownAlive()
+  }
+  const occupied = status?.state === 'occupied'
+  const heldProof = (answer) => answer?.heldCount > 0 || answer?.handleKind === 'in-process-service'
+  const heldPids = new Set([...(held?.signals ?? []), ...(held?.remaining ?? [])].map((item) => typeof item === 'number' ? item : item?.pid).filter((pid) => Number.isInteger(pid)))
+  const inProcessHeldProof = (heldProof(graceful) || held?.handleKind === 'in-process-service') && lastKnownPids.every((pid) => pid === process.pid)
+  const heldCoversLastKnown = lastKnownPids.every((pid) => heldPids.has(pid) || (inProcessHeldProof && pid === process.pid))
+  const heldStopProof = held?.joined === true && (heldProof(held) || heldProof(graceful)) && heldCoversLastKnown && (lastKnownAlive !== true || inProcessHeldProof)
+  const knownStopped = lastKnownPids.length === 0 || lastKnownAlive === false || (heldStopProof && inProcessHeldProof)
+  const gracefulStopped = graceful?.stopped === true && knownStopped
+  const gracefulStateStopped = graceful?.state === 'stopped' && graceful?.stopped !== false && observedLive !== true && !observed?.__error && knownStopped
+  const statusStopped = status?.state === 'stopped' && !status.record && observedLive !== true && (heldStopProof || lastKnownPids.length === 0 || lastKnownAlive === false)
+  const explicitlyStopped = gracefulStopped || gracefulStateStopped || statusStopped
+  const forceAttempted = forced !== null || forceError !== null
+  const forceProofSatisfied = !forceAttempted || forceAlive === false
+  const lastKnownProof = lastKnownPids.length === 0 || lastKnownAlive === false || heldStopProof
+  const stoppedProof = explicitlyStopped || observedLive === false || (forced?.stopped === true && forceAlive === false)
+  if (occupied || !forceProofSatisfied || !lastKnownProof || !stoppedProof) {
+    throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service was not proven stopped before cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: observed, alive: observedLive, lastKnownPids, lastKnownAlive }))
+  }
+  const afterRecord = readRecord()
+  const afterLive = readLive(afterRecord)
+  if (afterLive === true) throw new IsolationRefusal('owned-service-cleanup-unverified', 'the owned service still reports live after bounded cleanup', cleanupDetail({ graceful, gracefulError, status, forced, forceError, forceAlive, held, heldError, record: afterRecord, alive: afterLive, lastKnownPids, lastKnownAlive }))
+  return { graceful, gracefulError, status, forced, forceError, observed: { record: observed, alive: observedLive }, held, after: { record: afterRecord, alive: afterLive } }
 }
 
 // ---------------------------------------------------------------------------
@@ -683,8 +814,8 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
 //     handle of a service process the runtime started and still holds (lib/ap03.mjs, lib/service-world.mjs): a
 //     number it does not hold is never signalled, and the interruption is recorded as a failure instead;
 //   - at the end the temporary directories this runner created (its own root, and each launched instance's
-//     root) are removed by path, with no check that the path still names the directory it created, and whether
-//     or not the instances were seen to end. Links inside them are removed as links.
+//     root) are removed by path only after every owned service has been proven stopped; a failed cleanup retains
+//     the roots and reports a typed refusal. Links inside retained roots are preserved for diagnosis.
 async function runIsolated({ plan, args, candidate, operator, host, receiptDir }) {
   if (plan.app === 'small-fixture') return runOwnedSmallFixture({ plan, args, candidate, operator, host, receiptDir })
   const { createLayout, Instance } = await import('../../experiments/obsidian-publication/lib/instance.mjs')
@@ -702,6 +833,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
   const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-desktop-'))
   const startedAt = isoNow()
   const instances = []
+  let retainRoots = false
   const launch = async (layout, options = {}) => {
     const app = new Instance(layout)
     const launchedAtMs = Date.now()
@@ -779,6 +911,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
           extensions: createObsidianRegistry({ contributions: [createSourceApplyContribution({ context: { loadProject: world.loadProject, dataRoot, env, platform: process.platform } }), createProposalAdapterContribution()] }).extensions,
         })
         : createServiceRuntime({ loadProject: world.loadProject, dataRoot, env, consent, intervalMs: PROCEDURE_TICK_INTERVAL_MS, probeTimeoutMs: 5000 })
+      let procedureError = null
       try {
         if (!scoped) {
           const appSeam = { openNote: (notePath) => full.app.stimulus('open', notePath), readIncludes: async ({ path: notePath, needle }) => (await evalValue(full.app, PROBES.readIncludes, { path: notePath, needle })) === 'true' }
@@ -802,9 +935,19 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
           passedByGate.G17 = run.passed
           timingsByGate.G17 = { launchedAt: new Date(full.launchedAtMs).toISOString(), derivation: derivations, ...run.timings, failures: run.failures }
         }
+      } catch (error) {
+        procedureError = error
+        throw error
       } finally {
-        // The service is the disposable one this run started; its record names it, and only it is stopped.
-        try { const status = await runtime.status(); if (status.state === 'healthy') await runtime.stop({ stopTimeoutMs: 20000 }) } catch { /* recorded in the service log */ }
+        // This service is the disposable one this run started. Graceful stop is
+        // useful when its record is healthy, but the retained child handle is
+        // the cleanup authority when the record is missing or malformed.
+        const outcome = await cleanupProcedureRuntime(runtime, { procedureError })
+        retainRoots ||= outcome.retainRoots
+        if (outcome.error) throw outcome.error
+        for (const gate of plan.gates) {
+          (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-cleanup.json`, bytes: Buffer.from(`${JSON.stringify(outcome.cleanup, null, 2)}\n`) })
+        }
         if (runtime.logLines) for (const gate of plan.gates) (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-in-process.log`, bytes: Buffer.from(`${runtime.logLines.map((entry) => JSON.stringify(entry)).join('\n')}\n`) })
       }
       plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layouts.full.home, isolatedProfile: layouts.full.profile, workspaceDir, dataRoot })
@@ -839,10 +982,10 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
     return { written: recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, dataset }), plan }
   } finally {
     for (const app of instances) await app.quit().catch(() => {})
-    if (!args.keep) {
+    if (!args.keep && !retainRoots) {
       fs.rmSync(temp, { recursive: true, force: true })
       for (const app of instances) fs.rmSync(app.layout.root, { recursive: true, force: true })
-    } else console.log(`[desktop-receipts] kept ${temp}${instances.map((app) => ` ${app.layout.root}`).join('')}`)
+    } else console.log(`[desktop-receipts] kept ${temp}${instances.map((app) => ` ${app.layout.root}`).join('')}${retainRoots ? ' (cleanup incomplete; roots retained)' : ''}`)
   }
 }
 
@@ -880,5 +1023,5 @@ async function main(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => { if (!error?.finalOutputHandled) console.error(`[desktop-receipts] ${error?.message ?? error}`); process.exitCode = error instanceof OutputRefusal || error instanceof IsolationRefusal ? 2 : 1 })
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => { if (!error?.finalOutputHandled) console.error(`[desktop-receipts] ${formatDesktopReceiptError(error)}`); process.exitCode = desktopReceiptErrorExitCode(error) })
 }
