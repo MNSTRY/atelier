@@ -947,12 +947,15 @@ test('observation on a tick: the event loop has a turn between two edits, so the
   world.queueDirectly()
   const loop = loopTurns()
   t.after(() => loop.stop())
-  // The turns in which git is asked about the source of an edit, which is where its observation begins, and the turn
-  // in which the object store is asked to record it.
+  // The turn in which the object store is asked what it holds of an edit, which is the first thing its observation
+  // does, and the turn in which the object store is asked to record it.
   const begunIn = []
   const recordedIn = []
-  const objectStore = (options) => { const store = openObjectStore(options); return { ...store, observe: (...args) => { recordedIn.push(loop.now()); return store.observe(...args) } } }
-  const adapter = adapterFor(world, { objectStore, isGitIgnored: (...args) => { begunIn.push(loop.now()); return isGitIgnored(...args) } })
+  const objectStore = (options) => {
+    const store = openObjectStore(options)
+    return { ...store, stateOf: (...args) => { begunIn.push(loop.now()); return store.stateOf(...args) }, observe: (...args) => { recordedIn.push(loop.now()); return store.observe(...args) } }
+  }
+  const adapter = adapterFor(world, { objectStore })
   const [first, second] = await Promise.all([adapter.observe(world.context()), adapter.observe(world.context())])
   loop.stop()
 
@@ -965,7 +968,7 @@ test('observation on a tick: the event loop has a turn between two edits, so the
   ], 'what is observed and recorded is what an uninterrupted observation records')
   assert.equal(recordedIn.length, 4, 'each edit is recorded once')
   assert.ok(eachLaterThanTheLast(recordedIn), `a turn of the event loop passed between every two edits: recorded in turns ${recordedIn.join(', ')}`)
-  assert.deepEqual([...new Set(begunIn)], recordedIn, 'and none within an edit: each is recorded in the turn in which it began')
+  assert.deepEqual(begunIn, recordedIn, 'and none within an edit: each is recorded in the turn in which it began')
 })
 
 test('observation on a tick: an observation that failed holds back none that follow, and the edit it failed on is looked at again', async (t) => {
@@ -1009,6 +1012,9 @@ test('observation on a tick: the uninterrupted form refuses to run beside a coop
   assert.throws(() => observation(workspace, { edits: [] }), { code: 'observation-under-way' })
   assert.deepEqual(await underWay, [])
   assert.deepEqual(observation(workspace, { edits: [] }), [], 'nothing is under way now')
+  // A cooperative observation that fails is no longer under way either: here the edits are not a list.
+  await assert.rejects(observation.cooperatively(workspace, { edits: null }), TypeError)
+  assert.deepEqual(observation(workspace, { edits: [] }), [], 'nor is one that failed')
 })
 
 test('routing on a tick: the event loop has a turn between two operations, whether they are of one repository or of two', async (t) => {
@@ -1019,8 +1025,9 @@ test('routing on a tick: the event loop has a turn between two operations, wheth
   world.queueDirectly()
   const loop = loopTurns()
   t.after(() => loop.stop())
-  // The turn in which the store of a repository is opened for an operation, which is where settling it begins, and
-  // the turn in which its proposal is appended; and the order of taking a lock, appending and letting the lock go.
+  // The turn in which the store of a repository is opened for an operation and the turn in which its proposal is
+  // appended; and the order of taking a lock, appending and letting the lock go. (Settling an operation begins a
+  // little earlier, with a read of the adapter's own record and the route, which nothing here marks.)
   const openedIn = []
   const createdIn = []
   const order = []
@@ -1038,7 +1045,7 @@ test('routing on a tick: the event loop has a turn between two operations, wheth
   assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.dedupe]).sort(), [['east-wing:guide', 'acknowledged', 'new'], ['east-wing:third', 'acknowledged', 'new'], ['west-wing:guide', 'acknowledged', 'new']])
   assert.equal(createdIn.length, 3, 'one proposal for each structural edit')
   assert.ok(eachLaterThanTheLast(createdIn), `a turn of the event loop passed between every two operations: appended in turns ${createdIn.join(', ')}`)
-  assert.deepEqual(openedIn, createdIn, 'and none within an operation: each proposal is appended in the turn in which its operation began')
+  assert.deepEqual(openedIn, createdIn, 'and none between opening the store for an operation and appending its proposal')
   assert.deepEqual(order, ['lock', 'append', 'append', 'release', 'lock', 'append', 'release'], 'the lock of a repository is held from its first operation to its last, across the turn between them')
 })
 

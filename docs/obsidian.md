@@ -1143,9 +1143,10 @@ kept notes with their candidates reads asynchronously, sixteen at a time, and
 does not hold the listener. Observing pending edits and routing proposals
 wait between two edits and between two operations, so a burst of edits does
 not hold the listener for its whole length. One edit, or one operation, is
-still one stretch. The first edit an observation looks at builds the
-canonical graph in its stretch, and the first operation routed builds it
-again while the lock of its repository is held. An edit whose published note
+still one stretch. The first edit an observation looks at that the object
+store does not hold yet builds the canonical graph in its stretch, and the
+first operation routed builds it again while the lock of its repository is
+held. An edit whose published note
 is not retained has its whole view prepared again in its stretch: once for a
 view and generation in an observation when the preparation succeeds, and for
 every such edit when it fails. A stop whose grace runs out while proposals
@@ -1162,8 +1163,10 @@ starts each one on the loop by reading the selection history. A load that holds 
 for a second or more is logged (`status-project-loaded`).
 
 What the waits cost. The waits of observation and routing are taken at
-every boundary between two edits or two operations, whatever time was spent,
-and nothing is checked around them. In preparation and publication a wait
+every boundary between two edits or two operations and before each
+repository, whatever time was spent; while routing describes its operations
+a wait comes after about 8 ms of work or 32 units. Nothing is checked around
+any of them. In preparation and publication a wait
 comes after about 8 ms of work or 32 units,
 whichever is first, and around each one the engine checks that the tick's
 settings still hold: it reads and hashes every configuration file it observes
