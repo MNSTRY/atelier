@@ -45,7 +45,8 @@ import { PROPOSAL_BACKPRESSURE } from './backpressure.mjs'
 // uses on a tick) gives the event loop a turn, so the process that runs the
 // tick goes on answering while a burst of edits is observed. A second
 // cooperative observation waits for the first to finish; what is looked at,
-// and in what order, is the same in both forms.
+// and in what order, is the same in both forms. The uninterrupted form
+// cannot wait, so it refuses to run beside a cooperative one.
 
 const EXT = OBSIDIAN_EXT_KEY
 const GONE = new Set(['ENOENT', 'ENOTDIR', 'ELOOP'])
@@ -237,14 +238,19 @@ export function createTickObservation(options = {}) {
     return observed
   }
 
+  // Cooperative observations asked for and not yet finished, and the last of them.
+  let underWay = 0
+  let last = Promise.resolve()
   function observePendingEdits(workspace, input) {
+    if (underWay > 0) throw Object.assign(new Error('a cooperative observation of this instance is under way; the uninterrupted form cannot run beside it'), { code: 'observation-under-way' })
     const steps = observeSteps(workspace, input)
     for (;;) { const step = steps.next(); if (step.done) return step.value }
   }
   // The same observation with a turn of the event loop between two edits. One at a time: an observation asked for
-  // while another is under way starts when that one has finished, so no edit is looked at by both.
-  let last = Promise.resolve()
+  // while another is under way starts when that one has finished, so no edit is looked at by both. One that failed
+  // holds back none that follow.
   observePendingEdits.cooperatively = (workspace, input) => {
+    underWay += 1
     const run = last.then(async () => {
       const budget = createCooperativeBudget()
       const steps = observeSteps(workspace, input)
@@ -253,7 +259,7 @@ export function createTickObservation(options = {}) {
         if (step.done) { budget.finish('observe-finalize'); return step.value }
         await budget.checkpoint(step.value, true)
       }
-    })
+    }).finally(() => { underWay -= 1 })
     last = run.catch(() => {})
     return run
   }

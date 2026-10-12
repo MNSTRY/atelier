@@ -143,7 +143,7 @@ export async function endOwnedChild(child, terminal, { kill = (pid, signal) => p
 }
 function sourcePin() {
   const git = args => childProcess.execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
-  const paths = ['src/projection/obsidian/materialize/prepare-view.mjs', 'src/projection/obsidian/publication/publisher.mjs', 'src/runtime/obsidian/engine.mjs', 'src/runtime/obsidian/pipeline.mjs', 'src/runtime/obsidian/service.mjs', 'test/helpers/obsidian-event-loop-corpus.mjs', 'scripts/obsidian/benchmark-event-loop.mjs', 'package-lock.json']
+  const paths = ['src/projection/obsidian/materialize/prepare-view.mjs', 'src/projection/obsidian/proposals/adapter.mjs', 'src/projection/obsidian/proposals/observation.mjs', 'src/projection/obsidian/publication/publisher.mjs', 'src/runtime/obsidian/engine.mjs', 'src/runtime/obsidian/pipeline.mjs', 'src/runtime/obsidian/service.mjs', 'test/helpers/obsidian-event-loop-corpus.mjs', 'scripts/obsidian/benchmark-event-loop.mjs', 'package-lock.json']
   return { head: git(['rev-parse', 'HEAD']), tree: git(['rev-parse', 'HEAD^{tree}']), dirty: git(['status', '--porcelain']).length > 0, files: paths.map(relative => ({ path: relative, sha256: createHash('sha256').update(fs.readFileSync(path.join(repository, relative))).digest('hex') })) }
 }
 

@@ -1143,10 +1143,16 @@ kept notes with their candidates reads asynchronously, sixteen at a time, and
 does not hold the listener. Observing pending edits and routing proposals
 wait between two edits and between two operations, so a burst of edits does
 not hold the listener for its whole length. One edit, or one operation, is
-still one stretch, and an edit whose published note is not retained has its
-whole view prepared again within that stretch. A service in one of those
-stretches does not answer until it ends, and is `busy` if that outlasts the
-probe. A request can
+still one stretch. The first edit an observation looks at builds the
+canonical graph in its stretch, and the first operation routed builds it
+again while the lock of its repository is held. An edit whose published note
+is not retained has its whole view prepared again in its stretch: once for a
+view and generation in an observation when the preparation succeeds, and for
+every such edit when it fails. A stop whose grace runs out while proposals
+are routed can end the process between two operations of a repository with
+that repository's proposal lock still held, as a crash can. A service in one
+of those stretches does not answer until it ends, and is `busy` if that
+outlasts the probe. A request can
 hold the listener too: the plugin's status read loads the project on the event
 loop when a configuration file changed, every two and a half minutes, and at
 every request while one of those files vouches for nothing. For a project
@@ -1155,7 +1161,10 @@ personal home they compose in a worker, as the engine's loads do, and the read
 starts each one on the loop by reading the selection history. A load that holds the loop
 for a second or more is logged (`status-project-loaded`).
 
-What the waits cost. A wait comes after about 8 ms of work or 32 units,
+What the waits cost. The waits of observation and routing are taken at
+every boundary between two edits or two operations, whatever time was spent,
+and nothing is checked around them. In preparation and publication a wait
+comes after about 8 ms of work or 32 units,
 whichever is first, and around each one the engine checks that the tick's
 settings still hold: it reads and hashes every configuration file it observes
 (the project configuration, the repository access file, local overlays and,
