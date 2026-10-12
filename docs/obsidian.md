@@ -1013,8 +1013,10 @@ unit and loader is what it was.
 - **Nothing confirmed publishes nothing.** No record refuses
   `nothing-selected`; a confirmed generation whose inputs were edited and not
   confirmed again refuses `stale-generation`; a history whose hash chain does
-  not hold refuses `selection-history-corrupt`; a home whose history cannot be
-  read refuses `personal-home-unavailable`, and a home that is gone or not
+  not hold refuses `selection-history-corrupt`; a history that ends at an
+  earlier record than the running service has read refuses
+  `selection-history-shortened`; a home whose history cannot be read refuses
+  `personal-home-unavailable`, and a home that is gone or not
   private refuses with the module's own code (`root-missing`,
   `not-private-location`, `root-symlinked`). Every other refusal of the
   composition keeps its code. Nothing falls back to another generation or to
@@ -1042,13 +1044,22 @@ unit and loader is what it was.
   (`service-workspace-not-prepared`).
 - **Following the history.** A loaded project is pinned to the record it was
   loaded under, and the engine observes that record and the place of the next
-  one as configuration. A confirmation is therefore loaded at the next tick, and
-  a history cut short is followed as it then stands: the head it ends with is
-  loaded, and composition decides whether its generation still holds. The
-  service keeps no head across a restart, so after one it cannot tell a cut
-  history from one never longer. At every full reconciliation the history is
-  read again, so a record before the last that no longer links, or a
-  confirmation that landed before the engine first looked at the record,
+  one as configuration. A confirmation is therefore loaded at the next tick. A
+  history cut short is seen at the next tick too, and is not followed back.
+  Selections are only ever appended, so a history that ends at an earlier
+  record than this process has read it ending at was cut by something other
+  than a confirmation, and the record it now ends with was not confirmed after
+  the ones removed. It refuses `selection-history-shortened` and nothing is
+  loaded from it, until the history is as long again or the service is started
+  again. Followed back, a history cut after a restore nobody confirmed would
+  publish that restore. A record counts once it was read, whether or not its
+  generation could be used. The service keeps the record's number only, and
+  only in its process. A record in a place it has read, with other content,
+  is read as a confirmation; and a service started after the cut cannot tell a
+  cut history from one never longer, so it reads the history as it then
+  stands, as each command run once does. At every full reconciliation the
+  history is read again, so a record before the last that no longer links, or
+  a confirmation that landed before the engine first looked at the record,
   refuses with its code within the reconciliation interval. A confirmation
   during a tick changes an observed file: the view being prepared or published
   refuses `mixed-read` at its next wait, before its generation commits (one

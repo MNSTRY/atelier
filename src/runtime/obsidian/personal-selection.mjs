@@ -33,6 +33,16 @@ import { refuse } from './errors.mjs'
 // history was cut short. At every full reconciliation the history is read
 // again, and a project whose record it no longer ends with is refused.
 //
+// A history never gets shorter through the module: selections are appended and
+// nothing removes one. So a history that ends at a lower record than this
+// process has read it ending at was cut short by something else, and what it
+// now ends with was not confirmed after what came later. It refuses
+// `selection-history-shortened`, and nothing is loaded from it, until it is as
+// long again or the process is started again. Only the record number is kept,
+// and only in this process: a record in a place already read, with other
+// content, is read as a confirmation, and a process started after the cut
+// reads the history as it then stands.
+//
 // Who may see a vault is not decided here: that stays the machine's setting.
 //
 // Where the workspace is does not wait for a load: a bound project's folder is
@@ -44,6 +54,8 @@ import { refuse } from './errors.mjs'
 // sensitive to. Production always uses these; a test hands a loader a broken
 // one (`rules`) to prove that its oracle can fail.
 export const SELECTION_PRIMITIVES = Object.freeze({
+  // A history that ends at a lower record than this process has read is refused.
+  refusesShortened: true,
   // The head is read again once the generation is loaded.
   readsHeadAgain: true,
   // What the loaded project is pinned for (pinPersonalSelection).
@@ -53,13 +65,19 @@ export const SELECTION_PRIMITIVES = Object.freeze({
 const SOURCE = Object.freeze({ source: 'personal-workspace' })
 const LOCATED = Symbol('atelier.obsidian.located-personal-home')
 
-// The record the history ends with. A history without one refuses.
-function confirmedHead(personalHome) {
+// The highest record number this process has read each home's history ending at.
+const READ_UP_TO = new Map()
+
+// The record the history ends with. A history without one refuses, and so does one shorter than it was read before.
+function confirmedHead(personalHome, rules) {
   let head
   try { head = readPersonalSelectionHead({ personalHome }) } catch (error) {
     if (!(error instanceof PersonalWorkspaceRefusal)) throw error
     refuse(error.code, 'the selection history of the personal workspace could not be read; nothing is loaded from it', SOURCE)
   }
+  const before = READ_UP_TO.get(personalHome) ?? 0
+  if (head.sequence > before) READ_UP_TO.set(personalHome, head.sequence)
+  else if (rules.refusesShortened && head.sequence < before) refuse('selection-history-shortened', 'the selection history of the personal workspace ends at an earlier record than it did when it was last read here; nothing is loaded from it until it is as long again or the service is started again', SOURCE)
   if (head.selected === null) refuse('nothing-selected', 'no generation of the personal workspace is confirmed; nothing is loaded until one is', SOURCE)
   return head
 }
@@ -88,12 +106,12 @@ export { personalSelectionOf }
 // The project of the confirmed selection, for a loader that may block (a command run once). `bind` and `rules` are
 // test seams.
 export function loadSelectedProject({ personalHome } = {}, { bind, rules = SELECTION_PRIMITIVES } = {}) {
-  const head = confirmedHead(personalHome)
+  const head = confirmedHead(personalHome, rules)
   return pinned(loadBoundProject({ personalHome, generationId: head.selected }, { bind }), head, rules)
 }
 
 // The same, for a loader on a service's event loop: the composition runs in a worker, and the engine awaits it.
 export async function loadSelectedProjectOffThread({ personalHome } = {}, { bind, rules = SELECTION_PRIMITIVES } = {}) {
-  const head = confirmedHead(personalHome)
+  const head = confirmedHead(personalHome, rules)
   return pinned(await loadBoundProjectOffThread({ personalHome, generationId: head.selected }, { bind }), head, rules)
 }
