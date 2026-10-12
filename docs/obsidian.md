@@ -1140,8 +1140,13 @@ and planning its units, the exchange probe, writing and syncing the journal
 before the candidates move, the look again at displaced files after the units
 (`recheckDisplacedFiles`), and the read-back after a commit. The comparison of
 kept notes with their candidates reads asynchronously, sixteen at a time, and
-does not hold the listener. A service in one of those stretches does not
-answer until it ends, and is `busy` if that outlasts the probe. A request can
+does not hold the listener. Observing pending edits and routing proposals
+wait between two edits and between two operations, so a burst of edits does
+not hold the listener for its whole length. One edit, or one operation, is
+still one stretch, and an edit whose published note is not retained has its
+whole view prepared again within that stretch. A service in one of those
+stretches does not answer until it ends, and is `busy` if that outlasts the
+probe. A request can
 hold the listener too: the plugin's status read loads the project on the event
 loop when a configuration file changed, every two and a half minutes, and at
 every request while one of those files vouches for nothing. For a project

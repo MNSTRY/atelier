@@ -3,6 +3,7 @@
 ## Unreleased
 
 - AP-03 cleanup joins owned child handles even when the runtime status record is missing or malformed, and retains disposable roots when cleanup cannot be proven.
+- The Obsidian maintenance service goes on answering health and status while a tick observes and routes pending edits. Observation gives the event loop a turn between two edits, and proposal routing gives it one before each repository and between two operations. Each edit and each operation is still handled in one stretch, and what is observed, recorded and proposed is unchanged. Before, a tick with a burst of edits held the listener for the whole observation. An observation asked for while another is under way now waits for it.
 
 ## 0.2.0-alpha.14
 

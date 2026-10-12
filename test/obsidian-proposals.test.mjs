@@ -924,6 +924,64 @@ test('observation on a tick: an edit whose observation refuses before anything i
   assert.deepEqual((({ kind, state }) => [kind, state])(recordedOperationOf(objects, world.editOf('east-wing:third'))), ['semantic-proposal', 'proposed'])
 })
 
+// The turns of the event loop that have passed so far, counted from when this is called until `stop()`.
+function loopTurns() {
+  let turns = 0
+  let counting = true
+  const count = () => { if (counting) { turns += 1; setImmediate(count) } }
+  setImmediate(count)
+  return { now: () => turns, stop: () => { counting = false } }
+}
+const eachLaterThanTheLast = (turns) => turns.every((turn, index) => index === 0 || turn > turns[index - 1])
+
+test('observation on a tick: the event loop has a turn between two edits, so the process that runs the tick goes on answering, and an observation asked for while another is under way waits for it', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:plain')
+  world.editFrontMatter('west-wing:guide', WEST_TITLE, 'Tide tables')
+  world.editNote('east-wing:plain', 'Only the body', 'Nothing but the body')
+  world.editNote('east-wing:second', 'A second sheet.', 'A second sheet, reworded.')
+  world.queueDirectly()
+  const loop = loopTurns()
+  t.after(() => loop.stop())
+  // The turn in which the object store is asked to record each edit.
+  const recordedIn = []
+  const objectStore = (options) => { const store = openObjectStore(options); return { ...store, observe: (...args) => { recordedIn.push(loop.now()); return store.observe(...args) } } }
+  const adapter = adapterFor(world, { objectStore })
+  const [first, second] = await Promise.all([adapter.observe(world.context()), adapter.observe(world.context())])
+  loop.stop()
+
+  assert.deepEqual([first.observed.length, second.observed.length], [4, 0], 'the second observation began when the first had finished, and no edit was looked at by both')
+  assert.deepEqual(classifiedOf(first), [
+    ['east-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+    ['east-wing:plain', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['east-wing:second', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['west-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+  ], 'what is observed and recorded is what an uninterrupted observation records')
+  assert.equal(recordedIn.length, 4, 'each edit is recorded once')
+  assert.ok(eachLaterThanTheLast(recordedIn), `a turn of the event loop passed between every two edits: recorded in turns ${recordedIn.join(', ')}`)
+})
+
+test('routing on a tick: the event loop has a turn between two operations, whether they are of one repository or of two', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:plain')
+  world.addLink('east-wing:third', 'east-wing:plain')
+  world.editFrontMatter('west-wing:guide', WEST_TITLE, 'Tide tables')
+  world.queueDirectly()
+  const loop = loopTurns()
+  t.after(() => loop.stop())
+  // The turn in which each proposal is appended to the store of its repository.
+  const createdIn = []
+  const openStore = (options) => { const store = createProposalStore(options); return { ...store, createProposal: (...args) => { createdIn.push(loop.now()); return store.createProposal(...args) } } }
+  const adapter = adapterFor(world, { openStore })
+  await adapter.observe(world.context())
+  const report = await adapter.propose(world.context())
+  loop.stop()
+
+  assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.dedupe]).sort(), [['east-wing:guide', 'acknowledged', 'new'], ['east-wing:third', 'acknowledged', 'new'], ['west-wing:guide', 'acknowledged', 'new']])
+  assert.equal(createdIn.length, 3, 'one proposal for each structural edit')
+  assert.ok(eachLaterThanTheLast(createdIn), `a turn of the event loop passed between every two operations: appended in turns ${createdIn.join(', ')}`)
+})
+
 import { createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 
 test('observation on a tick: a source replaced while the published note is prepared again refuses stale-source typed, and that failed preparation is not the answer for the other edit of the generation in the same tick', async (t) => {
