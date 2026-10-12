@@ -263,7 +263,7 @@ async function controller() {
     const listening = result.events.find(event => event.type === 'listening')
     assert.ok(listening)
     await sleep(50)
-    // The last stretch of a tick can hold the listener (the read-back after a commit does not wait): the request
+    // The last stretch of a tick can hold the listener: the request
     // sent during it is answered only after the tick has ended. It covers the trailing edge, and its latency is the
     // measure of that stretch, so it is waited for and judged below like every other.
     const atEnd = await settleProbeInFlight({ inFlight: () => probeSentAt, untilMs: tick.endedMs })

@@ -318,35 +318,44 @@ test('the read-back after a commit gives the event loop a turn between notes, an
 })
 
 test('a note changed in the vault while the read-back waits is seen: by the read-back when its turn has not come, by the next tick when it has', needsExchange, async (t) => {
-  // A vault note edited at the fortieth look the read-back takes, which comes after a wait: `pick` chooses the note
-  // from the order of the walk.
-  const editedDuringReadBack = async (pick) => {
+  // A vault note edited from a turn of the event loop that the read-back gives up: asked for at the twentieth look of
+  // the walk, so it runs at the first wait after it, between two looks. `pick` chooses the note from the order of
+  // the walk. With 74 notes and a wait at least every 32, that wait comes before the sixtieth look.
+  const editedAtAWait = async (pick) => {
     const world = makeWorld(t)
     for (let number = 0; number < 70; number += 1) fs.writeFileSync(world.source(`east-wing/notes/buoy-${String(number).padStart(2, '0')}.md`), note({ id: `east-wing:buoy-${number}`, title: `Buoy ${number}`, body: `Buoy ${number} marks the channel.` }))
     const vault = world.vault()
-    let seen = 0
-    let made = false
+    let looks = 0
+    let inALook = false
+    let made = null
     const lstat = (file, ...rest) => {
-      if (String(file).startsWith(vault + path.sep) && !made && (seen += 1) === 40) {
-        made = true
-        const target = pick(world.manifest().notes.map((item) => path.join(vault, ...item.path.split('/'))))
-        fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8')}\nWritten while the view was read back.\n`)
-      }
-      return fs.lstatSync(file, ...rest)
+      if (!String(file).startsWith(vault + path.sep)) return fs.lstatSync(file, ...rest)
+      inALook = true
+      try {
+        looks += 1
+        if (looks === 20) {
+          setImmediate(() => {
+            const target = pick(world.manifest().notes.map((item) => path.join(vault, ...item.path.split('/'))))
+            fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8')}\nWritten while the view was read back.\n`)
+            made = { afterLooks: looks, inALook }
+          })
+        }
+        return fs.lstatSync(file, ...rest)
+      } finally { inALook = false }
     }
     const engine = world.engine({ lstat })
     const first = world.scope(await engine.tick())
-    assert.equal(made, true, 'the edit was made during the read-back')
+    assert.ok(made !== null && made.inALook === false && made.afterLooks >= 20 && made.afterLooks < 60, `the edit was made at a wait of the read-back: ${JSON.stringify(made)}`)
     const next = await engine.tick()
     return { first, next: world.scope(next), pending: next.pendingEdits.length }
   }
   // A note the walk has not reached: the read-back reads it as edited, and the view is not reported current.
-  const ahead = await editedDuringReadBack((order) => order[60])
+  const ahead = await editedAtAWait((order) => order[60])
   assert.deepEqual([ahead.first.state, ahead.first.reason], ['updating', 'read-back-differs'], JSON.stringify(ahead.first))
   assert.deepEqual([ahead.next.state, ahead.pending], ['held-for-your-edit', 1], JSON.stringify(ahead.next))
   // A note the walk has passed: this read-back does not see it, as one that ran through would not see an edit made
   // just after it, and the next tick preserves the edit and holds the view.
-  const behind = await editedDuringReadBack((order) => order[5])
+  const behind = await editedAtAWait((order) => order[5])
   assert.deepEqual([behind.first.state, behind.first.reason], ['current', 'published-and-verified'], JSON.stringify(behind.first))
   assert.deepEqual([behind.next.state, behind.pending], ['held-for-your-edit', 1], JSON.stringify(behind.next))
 })

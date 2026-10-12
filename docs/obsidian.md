@@ -1178,17 +1178,23 @@ and held the listener for all of it, and now a request is answered between two
 notes. Nothing is checked at those waits, since the generation is committed. A
 note edited in the vault while the read-back is under way is read as edited
 when the walk has not reached it, and is seen by the next tick when it has, as
-an edit made just after a read-back is. The same walk at a full reconciliation
-(every source file, and every vault note of every view) still runs through.
+an edit made just after a read-back is. A stop whose grace runs out while a
+read-back waits ends the process after the commit and before the view is
+recorded as current, as a crash there does: the next start's first tick reads
+the committed generation back. The same walk over the vault at the start of a
+tick still runs through, and it comes round sooner than a full
+reconciliation (every source file, and every vault note of every view): a
+service that watches its vaults is told of every note a publication wrote,
+so the tick after a publication opens and hashes each of them in one
+stretch.
 The comparison of kept notes with their candidates reads asynchronously,
 sixteen at a time, and does not hold the listener. Observing pending edits
 and routing proposals wait between two edits and between two operations, so
 a burst of edits does not hold the listener for its whole length. One edit,
 or one operation, is still one stretch. The first edit an observation looks
-at that the object
-store does not hold yet builds the canonical graph in its stretch, and the
-first operation routed builds it again while the lock of its repository is
-held. An edit whose published note
+at that the object store does not hold yet builds the canonical graph in its
+stretch, and the first operation routed builds it again while the lock of
+its repository is held. An edit whose published note
 is not retained has its whole view prepared again in its stretch: once for a
 view and generation in an observation when the preparation succeeds, and for
 every such edit when it fails. A stop whose grace runs out while proposals
