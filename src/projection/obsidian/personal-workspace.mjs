@@ -412,7 +412,9 @@ export async function validatePersonalWorkspace(project) {
 const selectionRecord = ({ personalHome }, sequence) => path.join(personalHome, 'selections', `${String(sequence).padStart(6, '0')}.json`)
 
 // The highest record number this process has read each home's selection history ending at, at any read of it: a
-// loader's first read, its read-again, and the recheck of a pinned project.
+// loader's first read, its read-again, the recheck of a pinned project, and the read the engine's guard asks for when
+// it stops a view (notePersonalSelectionNow). Kept in the main thread: no composition worker reads the history's end,
+// and one that did would have a map of its own and escape the rule.
 const READ_UP_TO = new Map()
 
 // Notes where a home's selection history ends, as just read, and answers that head. Selections are only ever appended,
@@ -457,6 +459,14 @@ export function assertPersonalSelection(project) {
   try { now = readPersonalSelectionHead({ personalHome: pinned.personalHome }) } catch (error) { asMaintenanceRefusal(error, 'the selection history of the personal workspace could not be read; nothing is used from it') }
   notePersonalSelectionHead(pinned.personalHome, now, SELECTED.get(personalWorkspaceBindingOf(project)))
   if (now.sequence !== pinned.sequence || now.head !== pinned.head) refuse('personal-selection-changed', 'the confirmed selection of the personal workspace is no longer the one this project was loaded under; nothing is used from it', { source: 'personal-workspace' })
+}
+
+// Reads where the history of a pinned project's home ends now, for the note alone: what the read refuses is not this
+// caller's to raise. For the engine's guard, which sees a selection record's file change in the middle of a tick and
+// stops the view as `mixed-read` without reading the history: the record that stopped it is read while it is there, so
+// it counts when it is removed before the next tick. Nothing for a project that is not pinned.
+export function notePersonalSelectionNow(project) {
+  try { assertPersonalSelection(project) } catch (error) { if (!(error instanceof ObsidianMaintenanceRefusal)) throw error }
 }
 
 // The authored and generation files whose change means the binding must be asked again: the manifest, the overlay and

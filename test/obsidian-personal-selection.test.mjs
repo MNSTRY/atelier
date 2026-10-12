@@ -45,7 +45,7 @@ const {
   restorePersonalInputs, selectPersonalGeneration, selectionConfirmDigest,
 } = await import('@mnstry/atelier/personal-workspace')
 const { createEditorAdapter, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
-const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
+const { ENGINE_PRIMITIVES, createMaintenanceEngine, createMaintenanceEngineForOracleTests } = await import('../src/runtime/obsidian/engine.mjs')
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { createProductionSeams } = await import('../src/runtime/obsidian/pipeline.mjs')
@@ -139,7 +139,8 @@ function makePerson(t) {
     const exit = await runObsidianCommandForOracleTests({ argv: [...argv, `--personal-home=${home}`, '--json'], seams: {}, dataRoot: person.dataRoot, env: process.env, cwd: base, clock, contributions: [], stdout: (text) => out.push(text), stderr: (text) => out.push(text), account: () => 'person-synthetic' })
     return { exit, json: JSON.parse(out.join('\n')) }
   }
-  person.engine = ({ rules, ...options } = {}) => createMaintenanceEngine({
+  // `primitives` replaces rules of the engine itself, for a mutation control.
+  person.engine = ({ rules, primitives, ...options } = {}) => (primitives === undefined ? createMaintenanceEngine : (given) => createMaintenanceEngineForOracleTests(given, { ...ENGINE_PRIMITIVES, ...primitives }))({
     loadProject: () => person.load(rules === undefined ? {} : { rules }), dataRoot: person.dataRoot, adapterFactory: absentAdapter, clock, randomBytes: person.randomBytes, quietPeriodMs: 0, env: process.env, ...options,
   })
   person.materialize()
@@ -246,7 +247,7 @@ test('a history cut short does not publish a restore nobody confirmed; mutation 
   // What a view held for this reason is told: both ways out, and that starting the service again accepts the history as it stands.
   const next = nextStep('stale-readable', 'selection-history-shortened')
   assert.match(next, /Put the removed records back/)
-  assert.match(next, /a service started again .* reads the history as it is and publishes that selection/)
+  assert.match(next, /a service started again .* reads the history as it is and follows the selection it then ends with, publishing it if its generation still holds/)
   // The record back in its place: composition decides again, and the restore still waits for its confirmation.
   fs.writeFileSync(ari.record(2), second)
   const back = await engine.tick()
@@ -384,6 +385,33 @@ test('a record first read by the recheck counts, and a project already loaded is
   assert.ok(everyView(after, 'stale', 'selection-history-shortened'), JSON.stringify(after.scopes))
   const next = await held.tick()
   assert.deepEqual([next.state, next.refusal?.code], ['refused', 'selection-history-shortened'], JSON.stringify(next))
+})
+
+test('a confirmation that stops a view in the middle of a tick is read while it is there, and counts when it is removed before the next tick; mutation control: not read at the guard, a restore nobody confirmed is published', async (t) => {
+  // While a view is published the person revises the overlay and confirms the new generation: the tick's guard sees
+  // the files change and stops the view. Before the next tick the first generation's inputs are restored, not
+  // confirmed, and the new record is removed.
+  const stoppedThenCut = async (primitives) => {
+    const ari = makePerson(t)
+    const first = ari.generationId
+    ari.select()
+    let during = null
+    const production = createProductionSeams()
+    const engine = ari.engine({ ...(primitives === undefined ? {} : { primitives }), seams: { publishView: (input) => { if (during !== null) { const act = during; during = null; act() } return production.publishView(input) } } })
+    t.after(() => engine.stop())
+    assert.ok(everyView(await engine.tick(), 'current'))
+    fs.writeFileSync(path.join(ari.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replace('Tide tables', 'Changed tide tables'))
+    during = () => { reviseOverlay(ari); ari.materialize(); ari.select() }
+    const stopped = await engine.tick()
+    assert.ok(during === null && stopped.scopes.every((scope) => scope.state !== 'current') && stopped.scopes.some((scope) => scope.reason === 'mixed-read'), JSON.stringify(stopped.scopes))
+    const plan = planPersonalRestore({ personalHome: ari.home, generationId: first })
+    restorePersonalInputs(plan, { personalHome: ari.home, confirm: plan.confirm })
+    fs.rmSync(ari.record(2))
+    return engine.tick()
+  }
+  assert.ok(everyView(await stoppedThenCut({ noteSelectionAtGuard: () => {} }), 'current'), 'the oracle can fail: the restore is published, and nobody confirmed it')
+  const after = await stoppedThenCut()
+  assert.ok(after.state === 'refused' ? after.refusal?.code === 'selection-history-shortened' : everyView(after, 'stale', 'selection-history-shortened'), JSON.stringify(after))
 })
 
 test('the record number is kept in the process only: a process started after the cut reads the history as it then stands', (t) => {

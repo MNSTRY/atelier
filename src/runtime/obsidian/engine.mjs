@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { createCooperativeBudget } from '../../projection/obsidian/materialize/prepare-view.mjs'
-import { PERSONAL_VALIDATION_PENDING, personalWorkspaceBindingOf, personalWorkspaceInputs, validatePersonalWorkspace } from '../../projection/obsidian/personal-workspace.mjs'
+import { PERSONAL_VALIDATION_PENDING, notePersonalSelectionNow, personalWorkspaceBindingOf, personalWorkspaceInputs, validatePersonalWorkspace } from '../../projection/obsidian/personal-workspace.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
 import { PublicationRefusal, allocatedFolderState, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
@@ -105,6 +105,8 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   },
   // The embedded assets observed beside the walk: those the last built graph lets a view copy, and no withheld one.
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
+  // A change the guard sees in the middle of a tick is read, where it may be a confirmed selection, while it is there.
+  noteSelectionAtGuard: notePersonalSelectionNow,
   // One engine per workspace at a time, across processes.
   acquireEngineLock: acquirePrivateGenerationLock,
   // The registered proposal adapter observes the open edits on every tick, so a structural edit is recorded as
@@ -647,6 +649,10 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         }
         if (changed) {
           forceFull = true
+          // The change may be a confirmation in a personal home. The guard compares files and reads no history, so the
+          // history's end is read here for the note: a record that stopped this view counts from now on, also when it
+          // is gone again before the next tick looks.
+          rules.noteSelectionAtGuard(project)
           refuse('mixed-read', 'source selection or eligibility changed while a view was being prepared or published')
         }
       }
