@@ -135,20 +135,40 @@ export function hasIndexedHint(entry, absolute, lstat = fs.lstatSync) {
 // the changes, decided by digest alone. `full` hashes everything; otherwise a
 // file is hashed when it is new, when its stat hint differs or when a watcher
 // named it. Entries under `prefix` that are no longer listed are removals.
-export function reconcile({ index, files, prefix, full, hinted = () => false, lstat = fs.lstatSync }) {
+export function reconcile(input) {
+  const steps = reconcileSteps(input)
+  for (;;) { const step = steps.next(); if (step.done) return step.value }
+}
+
+// The same reconciliation with the event loop given a turn between files, under the caller's cooperative budget
+// (createCooperativeBudget): for a walk long enough to hold a service's listener, such as the read-back of a large
+// view. Each file is still looked at once, in the listed order, and the index holds what was seen when each was read;
+// a file that changes after its turn is the next look's to see, as one that changes after an uninterrupted walk is.
+// The caller must not let another reconciliation of the same index run before this one has answered.
+export async function reconcileCooperatively(input, budget) {
+  const steps = reconcileSteps(input)
+  for (;;) {
+    const step = steps.next()
+    if (step.done) return step.value
+    await budget.checkpoint('reconcile-file')
+  }
+}
+
+// One step a listed file; the removals and the answer after the last.
+function* reconcileSteps({ index, files, prefix, full, hinted = () => false, lstat = fs.lstatSync }) {
   const changes = []
   const present = new Set()
   let hashed = 0
-  for (const file of files) {
+  const look = (file) => {
     present.add(file.key)
     const previous = index.get(file.key)
     const hint = statHint(file.absolute, lstat)
     if (hint === null) {
       if (previous && previous.digest !== null) changes.push({ key: file.key, changeClass: previous.changeClass, kind: 'removed' })
       index.set(file.key, { changeClass: file.changeClass, hint: null, digest: null, byteLength: null })
-      continue
+      return
     }
-    if (!full && previous && previous.digest !== null && previous.hint && sameHint(previous.hint, hint) && !hinted(file.key)) continue
+    if (!full && previous && previous.digest !== null && previous.hint && sameHint(previous.hint, hint) && !hinted(file.key)) return
     const facts = readFileFacts(file.absolute)
     const digest = facts?.digest ?? null
     hashed += 1
@@ -156,6 +176,10 @@ export function reconcile({ index, files, prefix, full, hinted = () => false, ls
       if (digest !== null || (previous && previous.digest !== null)) changes.push({ key: file.key, changeClass: file.changeClass, kind: !previous || previous.digest === null ? 'added' : digest === null ? 'removed' : 'changed' })
     }
     index.set(file.key, { changeClass: file.changeClass, hint: digest === null ? null : hint, digest, byteLength: facts?.byteLength ?? null })
+  }
+  for (const file of files) {
+    look(file)
+    yield
   }
   for (const [key, previous] of index) {
     if (!key.startsWith(prefix) || present.has(key)) continue

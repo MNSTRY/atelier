@@ -1171,13 +1171,21 @@ corpus. Parts of a tick still run without yielding: reading the sources and
 building the canonical graph, capturing the source snapshot, observing source
 and vault files, the publisher's restart recovery, validating a prepared view
 and planning its units, the exchange probe, writing and syncing the journal
-before the candidates move, the look again at displaced files after the units
-(`recheckDisplacedFiles`), and the read-back after a commit. The comparison of
-kept notes with their candidates reads asynchronously, sixteen at a time, and
-does not hold the listener. Observing pending edits and routing proposals
-wait between two edits and between two operations, so a burst of edits does
-not hold the listener for its whole length. One edit, or one operation, is
-still one stretch. The first edit an observation looks at that the object
+before the candidates move, and the look again at displaced files after the
+units (`recheckDisplacedFiles`). The read-back after a commit waits between
+notes: on a loaded host it took 16.8 s for one view of 10,000 invented notes
+and held the listener for all of it, and now a request is answered between two
+notes. Nothing is checked at those waits, since the generation is committed. A
+note edited in the vault while the read-back is under way is read as edited
+when the walk has not reached it, and is seen by the next tick when it has, as
+an edit made just after a read-back is. The same walk at a full reconciliation
+(every source file, and every vault note of every view) still runs through.
+The comparison of kept notes with their candidates reads asynchronously,
+sixteen at a time, and does not hold the listener. Observing pending edits
+and routing proposals wait between two edits and between two operations, so
+a burst of edits does not hold the listener for its whole length. One edit,
+or one operation, is still one stretch. The first edit an observation looks
+at that the object
 store does not hold yet builds the canonical graph in its stretch, and the
 first operation routed builds it again while the lock of its repository is
 held. An edit whose published note
