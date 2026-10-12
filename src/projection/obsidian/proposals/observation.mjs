@@ -10,6 +10,7 @@ import { SOURCE_APPLY_PRIMITIVES, SourceApplyRefusal, locateSource } from '../ed
 import { EditArbitrationRefusal } from '../edits/arbitrate.mjs'
 import { createEditObserverForOracleTests, editIdempotencyKey, observeEdit } from '../edits/observe.mjs'
 import { decideApply } from '../edits/policy.mjs'
+import { createCooperativeBudget } from '../materialize/prepare-view.mjs'
 import { PublicationRefusal, readFileBytes, sha256Digest } from '../recovery/store.mjs'
 import { PROPOSAL_BACKPRESSURE } from './backpressure.mjs'
 
@@ -38,6 +39,14 @@ import { PROPOSAL_BACKPRESSURE } from './backpressure.mjs'
 // reconciliation cadence, never on every tick. A bounded number of edits is
 // looked at per tick, in the order they were observed, starting where the last
 // tick stopped.
+//
+// One edit is one unit: it is read, judged and recorded without interruption.
+// Between two edits the cooperative form (`cooperatively`, which the adapter
+// uses on a tick) gives the event loop a turn, so the process that runs the
+// tick goes on answering while a burst of edits is observed. A second
+// cooperative observation waits for the first to finish; what is looked at,
+// and in what order, is the same in both forms. The uninterrupted form
+// cannot wait, so it refuses to run beside a cooperative one.
 
 const EXT = OBSIDIAN_EXT_KEY
 const GONE = new Set(['ENOENT', 'ENOTDIR', 'ELOOP'])
@@ -203,7 +212,8 @@ export function createTickObservation(options = {}) {
   // `workspace` is the opened workspace of the adapter; `edits` the pending edit records, open and closed;
   // `retryRefused` offers the edits whose observation refused earlier once more. Returns one entry per edit looked
   // at: { editId, repoId, nodeId, status: 'observed' | 'refused', code, kind?, operationState?, idempotencyKey? }.
-  return function observePendingEdits(workspace, { edits, retryRefused = false }) {
+  // Yields between two edits, never within one, and returns the entries when it is done.
+  function* observeSteps(workspace, { edits, retryRefused = false }) {
     if (retryRefused) unobservable.clear()
     const now = isoTime(workspace.clock)
     const candidates = edits.filter((edit) => edit.closedAt === null && OPEN_EDIT_STATES.includes(edit.state) && !recorded.has(edit.editId) && !unobservable.has(edit.editId))
@@ -212,7 +222,8 @@ export function createTickObservation(options = {}) {
     const looked = [...candidates.slice(start), ...candidates.slice(0, start)].slice(0, bounds.maxObservedPerTick)
     cursor = candidates.length > bounds.maxObservedPerTick ? start + looked.length : 0
     const observed = []
-    for (const edit of looked) {
+    for (const [index, edit] of looked.entries()) {
+      if (index > 0) yield 'observe-edit'
       const entry = { editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId }
       try {
         const outcome = observeOne(workspace, edit, now)
@@ -226,4 +237,31 @@ export function createTickObservation(options = {}) {
     }
     return observed
   }
+
+  // Cooperative observations asked for and not yet finished, and the last of them.
+  let underWay = 0
+  let last = Promise.resolve()
+  function observePendingEdits(workspace, input) {
+    if (underWay > 0) throw Object.assign(new Error('a cooperative observation of this instance is under way; the uninterrupted form cannot run beside it'), { code: 'observation-under-way' })
+    const steps = observeSteps(workspace, input)
+    for (;;) { const step = steps.next(); if (step.done) return step.value }
+  }
+  // The same observation with a turn of the event loop between two edits. One at a time: an observation asked for
+  // while another is under way starts when that one has finished, so no edit is looked at by both. One that failed
+  // holds back none that follow.
+  observePendingEdits.cooperatively = (workspace, input) => {
+    underWay += 1
+    const run = last.then(async () => {
+      const budget = createCooperativeBudget()
+      const steps = observeSteps(workspace, input)
+      for (;;) {
+        const step = steps.next()
+        if (step.done) { budget.finish('observe-finalize'); return step.value }
+        await budget.checkpoint(step.value, true)
+      }
+    }).finally(() => { underWay -= 1 })
+    last = run.catch(() => {})
+    return run
+  }
+  return observePendingEdits
 }

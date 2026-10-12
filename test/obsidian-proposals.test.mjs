@@ -924,6 +924,131 @@ test('observation on a tick: an edit whose observation refuses before anything i
   assert.deepEqual((({ kind, state }) => [kind, state])(recordedOperationOf(objects, world.editOf('east-wing:third'))), ['semantic-proposal', 'proposed'])
 })
 
+import { PERSONAL_VALIDATION_PENDING } from '../src/projection/obsidian/personal-workspace.mjs'
+import { createTickObservation } from '../src/projection/obsidian/proposals/index.mjs'
+import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
+
+// The turns of the event loop that have passed so far, counted from when this is called until `stop()`.
+function loopTurns() {
+  let turns = 0
+  let counting = true
+  const count = () => { if (counting) { turns += 1; setImmediate(count) } }
+  setImmediate(count)
+  return { now: () => turns, stop: () => { counting = false } }
+}
+const eachLaterThanTheLast = (turns) => turns.every((turn, index) => index === 0 || turn > turns[index - 1])
+
+test('observation on a tick: the event loop has a turn between two edits, so the process that runs the tick goes on answering, and an observation asked for while another is under way waits for it', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:plain')
+  world.editFrontMatter('west-wing:guide', WEST_TITLE, 'Tide tables')
+  world.editNote('east-wing:plain', 'Only the body', 'Nothing but the body')
+  world.editNote('east-wing:second', 'A second sheet.', 'A second sheet, reworded.')
+  world.queueDirectly()
+  const loop = loopTurns()
+  t.after(() => loop.stop())
+  // The turn in which the object store is asked what it holds of an edit, which is the first thing its observation
+  // does, and the turn in which the object store is asked to record it.
+  const begunIn = []
+  const recordedIn = []
+  const objectStore = (options) => {
+    const store = openObjectStore(options)
+    return { ...store, stateOf: (...args) => { begunIn.push(loop.now()); return store.stateOf(...args) }, observe: (...args) => { recordedIn.push(loop.now()); return store.observe(...args) } }
+  }
+  const adapter = adapterFor(world, { objectStore })
+  const [first, second] = await Promise.all([adapter.observe(world.context()), adapter.observe(world.context())])
+  loop.stop()
+
+  assert.deepEqual([first.observed.length, second.observed.length], [4, 0], 'the second observation began when the first had finished, and no edit was looked at by both')
+  assert.deepEqual(classifiedOf(first), [
+    ['east-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+    ['east-wing:plain', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['east-wing:second', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['west-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+  ], 'what is observed and recorded is what an uninterrupted observation records')
+  assert.equal(recordedIn.length, 4, 'each edit is recorded once')
+  assert.ok(eachLaterThanTheLast(recordedIn), `a turn of the event loop passed between every two edits: recorded in turns ${recordedIn.join(', ')}`)
+  assert.deepEqual(begunIn, recordedIn, 'and none within an edit: each is recorded in the turn in which it began')
+})
+
+test('observation on a tick: an observation that failed holds back none that follow, and the edit it failed on is looked at again', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:third', 'east-wing:plain')
+  world.queueDirectly()
+  const objects = openObjectStore({ stateRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID, repositoryRoots: protectedRoots(world.loadProject()), clock: world.clock })
+  // The object store fails once in a way no refusal names, as a full disk would.
+  let failures = 1
+  const objectStore = (options) => { const store = openObjectStore(options); return { ...store, observe: (...args) => { if (failures > 0) { failures -= 1; throw new Error('invented failure of the object store') } return store.observe(...args) } } }
+  const adapter = adapterFor(world, { objectStore })
+  await assert.rejects(adapter.observe(world.context()), /invented failure of the object store/, 'the failure reaches the caller')
+  assert.equal(recordedOperationOf(objects, world.editOf('east-wing:third')), null, 'nothing was recorded')
+  assert.deepEqual(classifiedOf(await adapter.observe(world.context())), [['east-wing:third', 'observed', 'observed', 'semantic-proposal', 'proposed']], 'the next observation of the same adapter runs, and looks at the edit again')
+  assert.deepEqual((({ kind, state }) => [kind, state])(recordedOperationOf(objects, world.editOf('east-wing:third'))), ['semantic-proposal', 'proposed'])
+})
+
+test('observation on a tick: an observation asked for while another is under way sees what that one left, so edits a pending personal workspace held back are looked at again without a full reconciliation', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:third', 'east-wing:plain')
+  world.editNote('east-wing:plain', 'Only the body', 'Nothing but the body')
+  world.queueDirectly()
+  // The graph is pending for as long as this says so, as that of a personal workspace is while it is composed.
+  let pending = true
+  const production = createProductionSeams()
+  const buildGraph = (input) => { if (pending) throw new ObsidianMaintenanceRefusal(PERSONAL_VALIDATION_PENDING, 'invented: the graph is not composed yet'); return production.buildGraph(input) }
+  const adapter = adapterFor(world, { seams: { buildGraph } })
+  const [first, second] = await Promise.all([adapter.observe(world.context()), adapter.observe(world.context())])
+  assert.deepEqual([first.observed, first.deferred, second.observed, second.deferred], [[], PERSONAL_VALIDATION_PENDING, [], PERSONAL_VALIDATION_PENDING], 'the second began when the first had ended, offered the edits again and met the same pending graph')
+  pending = false
+  assert.deepEqual(classifiedOf(await adapter.observe(world.context())), [
+    ['east-wing:plain', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['east-wing:third', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+  ], 'an ordinary observation, not asked to retry, looks at them again')
+})
+
+test('observation on a tick: the uninterrupted form refuses to run beside a cooperative observation of the same instance, and runs when that one has finished', async () => {
+  const observation = createTickObservation({ seams: createProductionSeams() })
+  const workspace = { clock: () => new Date('2026-01-05T09:00:00.000Z') }
+  const underWay = observation.cooperatively(workspace, { edits: [] })
+  assert.throws(() => observation(workspace, { edits: [] }), { code: 'observation-under-way' })
+  assert.deepEqual(await underWay, [])
+  assert.deepEqual(observation(workspace, { edits: [] }), [], 'nothing is under way now')
+  // A cooperative observation that fails is no longer under way either: here the edits are not a list.
+  await assert.rejects(observation.cooperatively(workspace, { edits: null }), TypeError)
+  assert.deepEqual(observation(workspace, { edits: [] }), [], 'nor is one that failed')
+})
+
+test('routing on a tick: the event loop has a turn between two operations, whether they are of one repository or of two', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:plain')
+  world.addLink('east-wing:third', 'east-wing:plain')
+  world.editFrontMatter('west-wing:guide', WEST_TITLE, 'Tide tables')
+  world.queueDirectly()
+  const loop = loopTurns()
+  t.after(() => loop.stop())
+  // The turn in which the store of a repository is opened for an operation and the turn in which its proposal is
+  // appended; and the order of taking a lock, appending and letting the lock go. (Settling an operation begins a
+  // little earlier, with a read of the adapter's own record and the route, which nothing here marks.)
+  const openedIn = []
+  const createdIn = []
+  const order = []
+  const openStore = (options) => { openedIn.push(loop.now()); const store = createProposalStore(options); return { ...store, createProposal: (...args) => { createdIn.push(loop.now()); order.push('append'); return store.createProposal(...args) } } }
+  const acquireLock = async (options) => {
+    const lock = await PROPOSAL_ADAPTER_PRIMITIVES.acquireLock(options)
+    if (lock.acquired) order.push('lock')
+    return { ...lock, release: () => { order.push('release'); return lock.release() } }
+  }
+  const adapter = adapterFor(world, { openStore }, { ...PROPOSAL_ADAPTER_PRIMITIVES, acquireLock })
+  await adapter.observe(world.context())
+  const report = await adapter.propose(world.context())
+  loop.stop()
+
+  assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.dedupe]).sort(), [['east-wing:guide', 'acknowledged', 'new'], ['east-wing:third', 'acknowledged', 'new'], ['west-wing:guide', 'acknowledged', 'new']])
+  assert.equal(createdIn.length, 3, 'one proposal for each structural edit')
+  assert.ok(eachLaterThanTheLast(createdIn), `a turn of the event loop passed between every two operations: appended in turns ${createdIn.join(', ')}`)
+  assert.deepEqual(openedIn, createdIn, 'and none between opening the store for an operation and appending its proposal')
+  assert.deepEqual(order, ['lock', 'append', 'append', 'release', 'lock', 'append', 'release'], 'the lock of a repository is held from its first operation to its last, across the turn between them')
+})
+
 import { createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 
 test('observation on a tick: a source replaced while the published note is prepared again refuses stale-source typed, and that failed preparation is not the answer for the other edit of the generation in the same tick', async (t) => {

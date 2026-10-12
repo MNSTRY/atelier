@@ -15,6 +15,7 @@ import { isIdentifier } from '../edits/object-identity.mjs'
 import { openObjectStore } from '../edits/object-store.mjs'
 import { decideApply } from '../edits/policy.mjs'
 import { applyEditLens } from '../edits/regions.mjs'
+import { createCooperativeBudget } from '../materialize/prepare-view.mjs'
 import { PERSONAL_VALIDATION_PENDING, personalOverlayRepoOf } from '../personal-workspace.mjs'
 import { PublicationRefusal } from '../recovery/store.mjs'
 import {
@@ -188,6 +189,9 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
     // Set when an observation found the personal workspace's graph pending: the edits it could not look at are offered
     // again on the next observation, not parked until a full reconciliation.
     let observePendingAgain = false
+    // The observation under way, if any. An observation waits between two edits, and what it reads of this adapter
+    // (the flag above, the workspace it opens) is read when it begins: so the next one begins when this one has ended.
+    let observing = Promise.resolve()
 
     // -- the workspace of one call -------------------------------------------
 
@@ -431,10 +435,13 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
 
     // One repository: its lock, then each of its operations in turn. What goes wrong with one repository, or with one
     // operation, is reported by its code and stops nothing else.
-    async function settleRepository(workspace, repoId, works, report) {
+    // `budget`, when a tick hands one over, gives the event loop a turn between two operations: each operation is
+    // settled without interruption, and the lock of the repository is held from the first to the last.
+    async function settleRepository(workspace, repoId, works, report, budget = null) {
       try {
-        const held = await withRepositoryLock(workspace, repoId, () => {
-          for (const work of works) {
+        const held = await withRepositoryLock(workspace, repoId, async () => {
+          for (const [index, work] of works.entries()) {
+            if (budget !== null && index > 0) await budget.checkpoint('settle-operation', true)
             try { report.outcomes.push(settleOne(workspace, work.item, work)) } catch (error) {
               if (error?.crashSeam === true || !isTyped(error)) throw error
               report.outcomes.push({ status: 'failed', code: error.code, editId: work.item.editId, repoId, nodeId: work.item.nodeId, adapterOperationId: work.item.adapterOperationId, state: null, proposalId: null })
@@ -448,6 +455,26 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
       }
     }
 
+    // One observation, from opening the workspace to the flag it leaves for the next.
+    async function observeNow(context, { retryRefused = false } = {}) {
+      const workspace = open(context)
+      const edits = Array.isArray(context.edits) ? context.edits : []
+      // A private note of a personal workspace lives in a generation the personal-workspace module owns: its edit is
+      // not observed, recorded or proposed, and stays held in the vault. Answered by name, with nothing written.
+      const overlayRepoId = personalOverlayRepoOf(workspace.project)
+      const isPrivate = (edit) => overlayRepoId !== null && edit?.identity?.repoId === overlayRepoId
+      const privateNotes = edits.filter((edit) => isPrivate(edit) && edit.closedAt === null)
+        .map((edit) => ({ editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId, status: 'refused', code: 'personal-overlay-not-proposed' }))
+      const shared = edits.filter((edit) => !isPrivate(edit))
+      // The graph is built only when an edit is looked at, as for any project. When the personal workspace's graph is
+      // pending, the edits it reached are not reported or recorded, and are offered again on the next observation.
+      const retry = retryRefused || observePendingAgain
+      const looked = await observation.run.cooperatively(workspace, { edits: shared, retryRefused: retry })
+      const pending = looked.filter((item) => item.code === PERSONAL_VALIDATION_PENDING)
+      observePendingAgain = pending.length > 0
+      return { adapterId: PROPOSAL_ADAPTER_ID, observed: [...privateNotes, ...looked.filter((item) => item.code !== PERSONAL_VALIDATION_PENDING)], ...(pending.length > 0 ? { deferred: PERSONAL_VALIDATION_PENDING } : {}) }
+    }
+
     return {
       id: PROPOSAL_ADAPTER_ID,
 
@@ -455,23 +482,10 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
       // observed from its preserved bytes against the source as it is now and recorded as what it is, a bounded number
       // per tick and never twice. `retryRefused` offers once more the edits whose observation refused before anything
       // could be recorded. Writes no source and no vault. Returns codes and identifiers only.
-      async observe(context, { retryRefused = false } = {}) {
-        const workspace = open(context)
-        const edits = Array.isArray(context.edits) ? context.edits : []
-        // A private note of a personal workspace lives in a generation the personal-workspace module owns: its edit is
-        // not observed, recorded or proposed, and stays held in the vault. Answered by name, with nothing written.
-        const overlayRepoId = personalOverlayRepoOf(workspace.project)
-        const isPrivate = (edit) => overlayRepoId !== null && edit?.identity?.repoId === overlayRepoId
-        const privateNotes = edits.filter((edit) => isPrivate(edit) && edit.closedAt === null)
-          .map((edit) => ({ editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId, status: 'refused', code: 'personal-overlay-not-proposed' }))
-        const shared = edits.filter((edit) => !isPrivate(edit))
-        // The graph is built only when an edit is looked at, as for any project. When the personal workspace's graph is
-        // pending, the edits it reached are not reported or recorded, and are offered again on the next observation.
-        const retry = retryRefused || observePendingAgain
-        const looked = observation.run(workspace, { edits: shared, retryRefused: retry })
-        const pending = looked.filter((item) => item.code === PERSONAL_VALIDATION_PENDING)
-        observePendingAgain = pending.length > 0
-        return { adapterId: PROPOSAL_ADAPTER_ID, observed: [...privateNotes, ...looked.filter((item) => item.code !== PERSONAL_VALIDATION_PENDING)], ...(pending.length > 0 ? { deferred: PERSONAL_VALIDATION_PENDING } : {}) }
+      observe(context, options = {}) {
+        const run = observing.then(() => observeNow(context, options))
+        observing = run.catch(() => {})
+        return run
       },
 
       // The tick. `context` is { project, workspaceRoot, workspaceId, repositoryRoots, edits }: the pending edit
@@ -481,6 +495,9 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         const nowMs = Date.parse(isoTime(clock))
         const report = { adapterId: PROPOSAL_ADAPTER_ID, examined: 0, outcomes: [], repositories: [] }
         const edits = Array.isArray(context.edits) ? context.edits : []
+        // The tick goes on answering while it routes: a turn of the event loop when describing has taken its share
+        // of time, and one before each repository and between two of its operations.
+        const budget = createCooperativeBudget()
         const { operations: heads, unreadable } = workspace.queue().heads()
         for (const item of unreadable) report.repositories.push({ repoId: null, code: item.code })
         const byEdit = new Map(edits.map((edit) => [edit.editId, edit]))
@@ -497,7 +514,8 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
           const editState = edit === null || edit.closedAt === null ? 'open' : ['withdrawn', 'superseded'].includes(edit.state) ? edit.state : 'closed'
           let item = itemOfHead(head, edit)
           if (edit !== null && head.state !== 'submitted') {
-            try { item = { ...item, ...(describe(workspace, edit) ?? {}) } } catch (error) { if (!isTyped(error)) throw error; report.outcomes.push({ status: 'failed', code: error.code, editId: head.editId, repoId: head.repoId, nodeId: head.nodeId, adapterOperationId: head.adapterOperationId, state: head.state, proposalId: null }); continue }
+            try { item = { ...item, ...(describe(workspace, edit) ?? {}) } } catch (error) { if (!isTyped(error)) throw error; report.outcomes.push({ status: 'failed', code: error.code, editId: head.editId, repoId: head.repoId, nodeId: head.nodeId, adapterOperationId: head.adapterOperationId, state: head.state, proposalId: null }); await budget.checkpoint('describe-operation'); continue }
+            await budget.checkpoint('describe-operation')
           }
           add(head.repoId, { item, editState })
         }
@@ -510,11 +528,16 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         for (const edit of looked) {
           report.examined += 1
           let item
-          try { item = describe(workspace, edit) } catch (error) { if (!isTyped(error)) throw error; report.outcomes.push({ status: 'failed', code: error.code, editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId, adapterOperationId: null, state: null, proposalId: null }); continue }
+          try { item = describe(workspace, edit) } catch (error) { if (!isTyped(error)) throw error; report.outcomes.push({ status: 'failed', code: error.code, editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId, adapterOperationId: null, state: null, proposalId: null }); await budget.checkpoint('describe-edit'); continue }
           if (item !== null) add(item.repoId, { item, editState: 'open' })
+          await budget.checkpoint('describe-edit')
         }
 
-        for (const [repoId, list] of [...works].sort(([left], [right]) => compareText(left, right))) await settleRepository(workspace, repoId, list, report)
+        for (const [repoId, list] of [...works].sort(([left], [right]) => compareText(left, right))) {
+          await budget.checkpoint('settle-repository', true)
+          await settleRepository(workspace, repoId, list, report, budget)
+        }
+        budget.finish('propose-finalize')
         return report
       },
 
