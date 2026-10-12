@@ -15,7 +15,7 @@ import {
   assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
   readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
 } from './machine-settings.mjs'
-import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
+import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, reconcileCooperatively, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP } from './plugin-presence.mjs'
@@ -807,12 +807,17 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             const byEdit = blocking.length > 0 && blocking.every((note) => EDIT_OUTCOMES.has(note.outcome))
             settle(byEdit ? 'held-for-your-edit' : 'publisher-conflict', blocking[0]?.outcome ?? 'publication-incomplete', { ...common, heldNotes: [...new Set([...held, ...blocking.filter((note) => EDIT_OUTCOMES.has(note.outcome)).map((note) => note.path)])].sort(compareText) })
           } else {
-            // Read back: every note of the committed generation, by digest.
-            const { bases } = measured('publication-read-back', () => {
-              const { manifest, bases } = trustedNoteBases(store)
-              reconcile({ index, files: listVaultNotes({ scopeId, vaultRoot: store.vaultRoot, manifest }), prefix: vaultKey(scopeId, ''), full: true, lstat })
-              return { bases }
-            })
+            // Read back: every note of the committed generation, by digest. The walk waits between notes, so a large
+            // view does not hold the service's listener for its whole length. Nothing is checked at those waits: the
+            // generation is committed, the view is reported as it was read, and what changes from here on is the next
+            // tick's to see, as it is after a read-back that ran through.
+            const readBackStartedMs = phaseTime()
+            let bases
+            try {
+              const committed = trustedNoteBases(store)
+              bases = committed.bases
+              await reconcileCooperatively({ index, files: listVaultNotes({ scopeId, vaultRoot: store.vaultRoot, manifest: committed.manifest }), prefix: vaultKey(scopeId, ''), full: true, lstat }, createCooperativeBudget())
+            } finally { reportPhase('publication-read-back', readBackStartedMs) }
             basesOf.set(scopeId, bases)
             const differing = [...bases].filter(([notePath, base]) => index.get(vaultKey(scopeId, notePath))?.digest !== base.digest).map(([notePath]) => notePath).sort(compareText)
             const editedUnderPublisher = result.notes.some((note) => note.outcome === 'edit-kept' || note.changedAfterPublication === true)
