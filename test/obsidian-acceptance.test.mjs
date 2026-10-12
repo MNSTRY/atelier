@@ -1413,6 +1413,38 @@ try {
     assert.deepEqual(await settle({ sent: 900, waitMs: 20 }), { waited: true, settled: false, pauses: 4 })
   })
 
+  test('outside an owned run: the event-loop benchmark counts what a watcher reports, names the published notes among it, and passes every event on', async () => {
+    const { SECOND_TICK_SCENARIOS, countingWatcherFactory } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
+    assert.deepEqual(SECOND_TICK_SCENARIOS, ['next-tick', 'full-reconciliation'])
+    // A watcher driven by hand: `emit` is what the factory under count was given to call.
+    let emit = null
+    let closed = 0
+    let clock = 100
+    const counted = countingWatcherFactory({ inner: ({ roots, onEvent }) => { emit = onEvent; return { roots, close() { closed += 1 } } }, now: () => clock })
+    assert.deepEqual(counted.seen(), { events: 0, unnamed: 0, lastAtMs: null, vaultNotesNamed: 0 })
+    const passed = []
+    const roots = [{ id: 'vault:scope-1', path: '/vault-1', recursive: true }, { id: 'repo:east', path: '/east', recursive: true }]
+    const handle = counted({ roots, onEvent: (event) => passed.push(event) })
+    assert.equal(handle.roots, roots, 'the watcher is made by the factory counted, from the same roots')
+    const events = [
+      { rootId: 'vault:scope-1', relative: 'notes/harbor.md' },
+      // The same note again, as a watcher repeats itself: one note named.
+      { rootId: 'vault:scope-1', relative: 'notes/harbor.md' },
+      { rootId: 'vault:scope-1', relative: 'notes/tide.md' },
+      // The app's own folder in a vault, a file that is no note, and a source file: none is a published note.
+      { rootId: 'vault:scope-1', relative: '.obsidian/plugins/atelier/notes.md' },
+      { rootId: 'vault:scope-1', relative: 'attachments/chart.pdf' },
+      { rootId: 'repo:east', relative: 'notes/harbor.md' },
+      // "Something under it": no file named.
+      { rootId: 'vault:scope-1', relative: null },
+    ]
+    for (const event of events) { clock += 5; emit(event) }
+    assert.deepEqual(passed, events, 'every event reaches the engine unchanged, in order')
+    assert.deepEqual(counted.seen(), { events: 7, unnamed: 1, lastAtMs: 135, vaultNotesNamed: 2 })
+    handle.close()
+    assert.equal(closed, 1)
+  })
+
   test('outside an owned run: the event-loop benchmark judges a window by every request in it, the one answered after the end included, however many there are', async () => {
     const { judgeFirstTickWindow, judgeTransitionWindow } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
     const identity = { runtimeId: 'runtime-invented', pid: 4242, workspaceId: 'workspace-invented' }
