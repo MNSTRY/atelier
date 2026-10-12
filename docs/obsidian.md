@@ -1184,9 +1184,9 @@ recorded as current, as a crash there does: the next start's first tick reads
 the committed generation back. The same walk over the vault at the start of a
 tick still runs through, and it comes round sooner than a full
 reconciliation (every source file, and every vault note of every view): a
-service that watches its vaults is told of every note a publication wrote,
-so the tick after a publication opens and hashes each of them in one
-stretch.
+service that watches its vaults is told of the notes a publication wrote (a
+watcher may miss some), so the tick after a publication opens and hashes
+each note it was told of in one stretch.
 The comparison of kept notes with their candidates reads asynchronously,
 sixteen at a time, and does not hold the listener. Observing pending edits
 and routing proposals wait between two edits and between two operations, so

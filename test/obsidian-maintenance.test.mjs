@@ -326,26 +326,24 @@ test('a note changed in the vault while the read-back waits is seen: by the read
     for (let number = 0; number < 70; number += 1) fs.writeFileSync(world.source(`east-wing/notes/buoy-${String(number).padStart(2, '0')}.md`), note({ id: `east-wing:buoy-${number}`, title: `Buoy ${number}`, body: `Buoy ${number} marks the channel.` }))
     const vault = world.vault()
     let looks = 0
-    let inALook = false
-    let made = null
+    let asked = null
+    let madeAfterLooks = null
     const lstat = (file, ...rest) => {
-      if (!String(file).startsWith(vault + path.sep)) return fs.lstatSync(file, ...rest)
-      inALook = true
-      try {
-        looks += 1
-        if (looks === 20) {
-          setImmediate(() => {
-            const target = pick(world.manifest().notes.map((item) => path.join(vault, ...item.path.split('/'))))
-            fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8')}\nWritten while the view was read back.\n`)
-            made = { afterLooks: looks, inALook }
-          })
-        }
-        return fs.lstatSync(file, ...rest)
-      } finally { inALook = false }
+      if (String(file).startsWith(vault + path.sep) && (looks += 1) === 20) {
+        asked = setImmediate(() => {
+          const target = pick(world.manifest().notes.map((item) => path.join(vault, ...item.path.split('/'))))
+          fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8')}\nWritten while the view was read back.\n`)
+          madeAfterLooks = looks
+        })
+      }
+      return fs.lstatSync(file, ...rest)
     }
     const engine = world.engine({ lstat })
-    const first = world.scope(await engine.tick())
-    assert.ok(made !== null && made.inALook === false && made.afterLooks >= 20 && made.afterLooks < 60, `the edit was made at a wait of the read-back: ${JSON.stringify(made)}`)
+    let first
+    // A read-back that gives up no turn leaves the edit unmade: it is not made after the walk, or after the test.
+    try { first = world.scope(await engine.tick()) } finally { clearImmediate(asked) }
+    // An immediate runs between two looks, never inside one; made before the sixtieth, it was made at a wait of the walk.
+    assert.ok(madeAfterLooks !== null && madeAfterLooks >= 20 && madeAfterLooks < 60, `the edit was made at a wait of the read-back: after ${madeAfterLooks} looks`)
     const next = await engine.tick()
     return { first, next: world.scope(next), pending: next.pendingEdits.length }
   }
