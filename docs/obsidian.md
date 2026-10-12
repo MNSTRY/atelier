@@ -1024,6 +1024,9 @@ unit and loader is what it was.
   a confirmed generation. `status`, `open` and `service start` load the
   selection and refuse with its code; the service's freshness shows every view
   `stale` with it, and its status document has it as the last tick's reason.
+  `selection-history-shortened` is the running service's alone: a command reads
+  the history in a process of its own, as it then stands, so `status` reports
+  the selection a cut history ends with while the service refuses it.
   A confirmed selection is reported by `status` (`selection`: the generation
   and the number of its record).
 - **The service starts whatever the selection.** A bound project's folder is
@@ -1045,19 +1048,33 @@ unit and loader is what it was.
 - **Following the history.** A loaded project is pinned to the record it was
   loaded under, and the engine observes that record and the place of the next
   one as configuration. A confirmation is therefore loaded at the next tick. A
-  history cut short is seen at the next tick too, and is not followed back.
-  Selections are only ever appended, so a history that ends at an earlier
-  record than this process has read it ending at was cut by something other
-  than a confirmation, and the record it now ends with was not confirmed after
-  the ones removed. It refuses `selection-history-shortened` and nothing is
-  loaded from it, until the history is as long again or the service is started
-  again. Followed back, a history cut after a restore nobody confirmed would
-  publish that restore. A record counts once it was read, whether or not its
-  generation could be used. The service keeps the record's number only, and
-  only in its process. A record in a place it has read, with other content,
-  is read as a confirmation; and a service started after the cut cannot tell a
-  cut history from one never longer, so it reads the history as it then
-  stands, as each command run once does. At every full reconciliation the
+  history cut short is seen at the next tick too, and a running service does
+  not follow it back. Selections are only ever appended, so a history that
+  ends at an earlier record than the service has read it ending at was cut by
+  something other than a confirmation, and following it back could publish
+  what nobody confirmed after the records removed: cut after a restore nobody
+  confirmed, it would publish that restore. The service notes the highest
+  record number at every read of the history's end (a load's first read, its
+  read once the generation is loaded, and the recheck at a full
+  reconciliation), whether or not the record's generation could be used, and
+  whichever part of the service read it. A history that ends earlier refuses
+  `selection-history-shortened` at each of those reads, and nothing is loaded
+  or published from it while it is shorter. A project already loaded is held
+  to this at its next recheck, at the latest the next full reconciliation. The
+  views say why (`status` names the ways out), and the vault keeps what it
+  last published.
+- **What ends that refusal.** The removed records put back; a history as long
+  again, since a record in a place already read, with other content, is read
+  as a confirmation (after a cut of one record the person's next confirmation
+  is followed; after a cut of several, one confirmation is not enough); or a
+  start of the service. The number is kept in the process only, so a service
+  started after the cut cannot tell a cut history from one never longer: it
+  reads the history as it then stands and publishes what it ends with. Every
+  start counts, the person's own and one at login, after an upgrade or after
+  a failure. Stopping and starting the service is therefore how a person
+  accepts a shorter history, and a start nobody chose accepts it too. Nothing
+  here keeps the number across a start.
+- **What the history is checked for besides.** At every full reconciliation the
   history is read again, so a record before the last that no longer links, or
   a confirmation that landed before the engine first looked at the record,
   refuses with its code within the reconciliation interval. A confirmation

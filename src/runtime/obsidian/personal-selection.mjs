@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { PersonalWorkspaceRefusal, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
 import { ensureLocalState } from '@mnstry/atelier/project'
-import { assertPersonalSelection, loadBoundProject, loadBoundProjectOffThread, personalSelectionOf, pinPersonalSelection } from '../../projection/obsidian/personal-workspace.mjs'
+import { assertPersonalSelection, loadBoundProject, loadBoundProjectOffThread, notePersonalSelectionHead, personalSelectionOf, pinPersonalSelection } from '../../projection/obsidian/personal-workspace.mjs'
 import { refuse } from './errors.mjs'
 
 // A person's confirmed selection, bound to the maintenance runtime.
@@ -35,13 +35,19 @@ import { refuse } from './errors.mjs'
 //
 // A history never gets shorter through the module: selections are appended and
 // nothing removes one. So a history that ends at a lower record than this
-// process has read it ending at was cut short by something else, and what it
-// now ends with was not confirmed after what came later. It refuses
-// `selection-history-shortened`, and nothing is loaded from it, until it is as
-// long again or the process is started again. Only the record number is kept,
-// and only in this process: a record in a place already read, with other
-// content, is read as a confirmation, and a process started after the cut
-// reads the history as it then stands.
+// process has read it ending at was cut short by something else, and following
+// it back could publish what nobody confirmed after the records removed. Every
+// read of the history's end is noted (notePersonalSelectionHead): the first
+// read here, the read once the generation is loaded, and the recheck of a
+// project already loaded. A history that ends earlier than the highest record
+// noted refuses `selection-history-shortened` at each of them, and nothing is
+// loaded or used from it while it is shorter.
+//
+// Only the record number is kept, and only in this process. A record in a
+// place already read, with other content, is read as a confirmation. A process
+// started after the cut reads the history as it then stands and publishes what
+// it ends with: starting the service again accepts the shorter history, and so
+// does any start of it (a login, a restart after an upgrade or a failure).
 //
 // Who may see a vault is not decided here: that stays the machine's setting.
 //
@@ -54,7 +60,7 @@ import { refuse } from './errors.mjs'
 // sensitive to. Production always uses these; a test hands a loader a broken
 // one (`rules`) to prove that its oracle can fail.
 export const SELECTION_PRIMITIVES = Object.freeze({
-  // A history that ends at a lower record than this process has read is refused.
+  // A history that ends at a lower record than this process has read is refused, at every read of it.
   refusesShortened: true,
   // The head is read again once the generation is loaded.
   readsHeadAgain: true,
@@ -65,25 +71,20 @@ export const SELECTION_PRIMITIVES = Object.freeze({
 const SOURCE = Object.freeze({ source: 'personal-workspace' })
 const LOCATED = Symbol('atelier.obsidian.located-personal-home')
 
-// The highest record number this process has read each home's history ending at.
-const READ_UP_TO = new Map()
-
-// The record the history ends with. A history without one refuses, and so does one shorter than it was read before.
+// The record the history ends with. A history without one refuses, and so does one shorter than this process read it.
 function confirmedHead(personalHome, rules) {
   let head
   try { head = readPersonalSelectionHead({ personalHome }) } catch (error) {
     if (!(error instanceof PersonalWorkspaceRefusal)) throw error
     refuse(error.code, 'the selection history of the personal workspace could not be read; nothing is loaded from it', SOURCE)
   }
-  const before = READ_UP_TO.get(personalHome) ?? 0
-  if (head.sequence > before) READ_UP_TO.set(personalHome, head.sequence)
-  else if (rules.refusesShortened && head.sequence < before) refuse('selection-history-shortened', 'the selection history of the personal workspace ends at an earlier record than it did when it was last read here; nothing is loaded from it until it is as long again or the service is started again', SOURCE)
+  notePersonalSelectionHead(personalHome, head, rules)
   if (head.selected === null) refuse('nothing-selected', 'no generation of the personal workspace is confirmed; nothing is loaded until one is', SOURCE)
   return head
 }
 
 function pinned(project, head, rules) {
-  pinPersonalSelection(project, head, rules.pin)
+  pinPersonalSelection(project, head, { ...rules.pin, refusesShortened: rules.refusesShortened })
   if (rules.readsHeadAgain) assertPersonalSelection(project)
   return project
 }

@@ -411,13 +411,30 @@ export async function validatePersonalWorkspace(project) {
 
 const selectionRecord = ({ personalHome }, sequence) => path.join(personalHome, 'selections', `${String(sequence).padStart(6, '0')}.json`)
 
+// The highest record number this process has read each home's selection history ending at, at any read of it: a
+// loader's first read, its read-again, and the recheck of a pinned project.
+const READ_UP_TO = new Map()
+
+// Notes where a home's selection history ends, as just read, and answers that head. Selections are only ever appended,
+// so a history that ends at an earlier record than this process has read it ending at was cut short by something other
+// than a confirmation. It refuses `selection-history-shortened` at every read, the read-again and the recheck of a
+// project already loaded included, while it is shorter. Only the number is kept, and only in this process: a record in
+// a place already read, with other content, is read as a confirmation, and a process started after the cut reads the
+// history as it then stands. `refusesShortened: false` is a test seam only, the rule's mutation control.
+export function notePersonalSelectionHead(personalHome, head, { refusesShortened = true } = {}) {
+  const before = READ_UP_TO.get(personalHome) ?? 0
+  if (head.sequence > before) READ_UP_TO.set(personalHome, head.sequence)
+  else if (refusesShortened && head.sequence < before) refuse('selection-history-shortened', 'the selection history of the personal workspace ends at an earlier record than this process has read it ending at; nothing is used from it while it is shorter', { source: 'personal-workspace' })
+  return head
+}
+
 // Pins a bound project to the selection record it was loaded under, and answers the project. From then on the engine
 // observes that record and the place of the next one as configuration (personalWorkspaceInputs): a confirmation
 // appended to the history, or a history cut short, is a change. And every time the composition is asked again
-// (validatePersonalWorkspace) the history is read again and must still end with that record. `observe: false` and
-// `recheck: false` are test seams only, the mutation controls of each.
-export function pinPersonalSelection(project, { sequence, head }, { observe = true, recheck = true } = {}) {
-  SELECTED.set(personalWorkspaceBindingOf(project), Object.freeze({ sequence, head, observe, recheck }))
+// (validatePersonalWorkspace) the history is read again and must still end with that record. `observe: false`,
+// `recheck: false` and `refusesShortened: false` are test seams only, the mutation controls of each.
+export function pinPersonalSelection(project, { sequence, head }, { observe = true, recheck = true, refusesShortened = true } = {}) {
+  SELECTED.set(personalWorkspaceBindingOf(project), Object.freeze({ sequence, head, observe, recheck, refusesShortened }))
   return project
 }
 
@@ -429,12 +446,16 @@ export function personalSelectionOf(project) {
 }
 
 // Refuses `personal-selection-changed` unless the history still ends with the record this project is pinned to; a
-// history that cannot be read refuses with the module's own code. Nothing for a project that is not pinned.
+// history that cannot be read refuses with the module's own code. What is read is noted first
+// (notePersonalSelectionHead): a later record seen here counts from then on, and a history shorter than this process
+// has read refuses `selection-history-shortened`, also when it ends with the pinned record. Nothing for a project that
+// is not pinned.
 export function assertPersonalSelection(project) {
   const pinned = personalSelectionOf(project)
   if (pinned === null) return
   let now
   try { now = readPersonalSelectionHead({ personalHome: pinned.personalHome }) } catch (error) { asMaintenanceRefusal(error, 'the selection history of the personal workspace could not be read; nothing is used from it') }
+  notePersonalSelectionHead(pinned.personalHome, now, SELECTED.get(personalWorkspaceBindingOf(project)))
   if (now.sequence !== pinned.sequence || now.head !== pinned.head) refuse('personal-selection-changed', 'the confirmed selection of the personal workspace is no longer the one this project was loaded under; nothing is used from it', { source: 'personal-workspace' })
 }
 

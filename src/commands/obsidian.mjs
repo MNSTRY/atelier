@@ -281,6 +281,7 @@ const NEXT = Object.freeze({
   'login-item-remove-failed': 'see `atelier obsidian status`; `atelier obsidian service unit --remove` tries again',
   'login-item-file-unsafe': 'the login item\'s file is a link or not a regular file and is left alone; remove it by hand, then try again',
   'invalid-login-item': 'the login item record in private state does not validate; inspect it, remove it, then install the login item again',
+  'selection-history-shortened': 'records of the selection history were removed after this process read them; put them back, or run the command in a process of its own, which reads the history as it now stands',
 })
 
 // The login item of `status`, in words.

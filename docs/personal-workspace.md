@@ -128,8 +128,9 @@ remove only their own temporary files. Every failure is a
   rewriting, any trailing run of records (up to the whole history) yields another
   valid chain; it changes the returned `head`, so a host that needs to detect it
   keeps the head it last observed and compares it. The Obsidian maintenance
-  service keeps the number of the last record it read, for as long as it runs,
-  and refuses a history that ends earlier (see [obsidian.md](obsidian.md)).
+  service keeps the highest record number it has read a history ending at, for
+  as long as it runs and no longer, and refuses a history that ends earlier
+  (see [obsidian.md](obsidian.md)).
 - `readPersonalSelectionHead({ personalHome })` returns `{ selected, sequence,
   head }` from the history alone, with `sequence` 0 while nothing is selected.
   It composes nothing, so it does not say whether the selection is still
