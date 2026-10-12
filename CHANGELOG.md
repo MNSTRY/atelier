@@ -4,6 +4,7 @@
 
 - AP-03 cleanup joins owned child handles even when the runtime status record is missing or malformed, and retains disposable roots when cleanup cannot be proven.
 - The Obsidian maintenance service goes on answering health and status while a tick observes and routes pending edits. Observation gives the event loop a turn between two edits, and proposal routing gives it one before each repository and between two operations. Each edit and each operation is still handled in one stretch, and what is observed, recorded and proposed is unchanged. Before, a tick with a burst of edits held the listener for the whole observation. An observation asked for while another is under way now waits for it.
+- The event-loop benchmark (`scripts/obsidian/benchmark-event-loop.mjs`) waits for the health request in flight at the end of the first tick, and of a transition, before it judges the window. A stretch at the end that holds the listener is then measured by that request's latency instead of being read as a gap in the sampling. The rules a request is judged by are unchanged. `--timeout-ms` may now be up to four hours, so a first publication of ten thousand notes in six views can be run.
 
 ## 0.2.0-alpha.14
 

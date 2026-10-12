@@ -141,6 +141,21 @@ export async function endOwnedChild(child, terminal, { kill = (pid, signal) => p
   }
   return { pid: child.pid, groupId: platform === 'win32' ? null : child.pid, terminal: terminal.value, signals, ...(refused === null ? {} : { notSignalled: `${refused}: the child was collected, so its group is not signalled` }), groupAbsent: !groupExists() }
 }
+// Waits for the request that was in flight when a stretch of work ended. A request sent before the stretch ended and
+// not answered yet is the one that says how long the listener was held at its end, so it is waited for, for no longer
+// than a request may take and a little more, and then judged with the rest. A request sent after the stretch ended is
+// not waited for. `inFlight()` answers when the request under way was sent, or null when none is.
+export async function settleProbeInFlight({ inFlight, untilMs, now = epochMs, pause = sleep, waitMs = 6000 }) {
+  const giveUpAt = now() + waitMs
+  let waited = false
+  for (;;) {
+    const sentAt = inFlight()
+    if (sentAt === null || sentAt > untilMs) return { waited, settled: true }
+    if (now() >= giveUpAt) return { waited, settled: false }
+    waited = true
+    await pause(5)
+  }
+}
 function sourcePin() {
   const git = args => childProcess.execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
   const paths = ['src/projection/obsidian/materialize/prepare-view.mjs', 'src/projection/obsidian/proposals/adapter.mjs', 'src/projection/obsidian/proposals/observation.mjs', 'src/projection/obsidian/publication/publisher.mjs', 'src/runtime/obsidian/engine.mjs', 'src/runtime/obsidian/pipeline.mjs', 'src/runtime/obsidian/service.mjs', 'test/helpers/obsidian-event-loop-corpus.mjs', 'scripts/obsidian/benchmark-event-loop.mjs', 'package-lock.json']
@@ -149,7 +164,8 @@ function sourcePin() {
 
 async function controller() {
   const notes = integer('notes', 32, 1, 10000), scopes = integer('scopes', 1, 1, 6)
-  const timeoutMs = integer('timeout-ms', 30000, 1000, 30 * 60 * 1000)
+  // A first publication of ten thousand notes in six views takes more than an hour on an ordinary machine.
+  const timeoutMs = integer('timeout-ms', 30000, 1000, 4 * 60 * 60 * 1000)
   const output = arg('output')
   const scenario = arg('scenario') ?? 'publication'
   if (scenario !== 'publication' && !TRANSITION_SCENARIOS.includes(scenario)) throw new TypeError('unknown transition scenario')
@@ -157,6 +173,8 @@ async function controller() {
   if (output && fs.existsSync(output)) throw new Error('measurement output already exists; preserve it and choose a fresh result path')
   const result = { kind: 'production-service-event-loop-measurement', scenario, node: process.version, notes, scopes, source: sourcePin(), status: 'failed', events: [], probes: [], cleanup: null }
   let corpus = null, child = null, probeLoop = null, probing = true, interrupted = false
+  // When the health request under way was sent, or null between two requests.
+  let probeSentAt = null
   const terminal = { value: null }, startedMs = epochMs()
   const interrupt = () => { interrupted = true }
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, interrupt)
@@ -173,8 +191,10 @@ async function controller() {
     probeLoop = (async () => {
       while (probing) {
         const fromMs = epochMs()
+        probeSentAt = fromMs
         const answer = await probeHealth({ host: '127.0.0.1', port, timeoutMs: 5000 })
         result.probes.push({ startedMs: fromMs, endedMs: epochMs(), kind: answer.kind, ...(answer.kind === 'health' ? { runtimeId: answer.body.runtimeId, pid: answer.body.pid, workspaceId: answer.body.workspaceId, serviceName: answer.body.serviceName, executableDigest: answer.body.executableDigest } : {}) })
+        probeSentAt = null
         if (probing) await sleep(25)
       }
     })()
@@ -197,6 +217,11 @@ async function controller() {
     const listening = result.events.find(event => event.type === 'listening')
     assert.ok(listening)
     await sleep(50)
+    // The last stretch of a tick can hold the listener (the read-back after a commit does not wait): the request
+    // sent during it is answered only after the tick has ended. It covers the trailing edge, and its latency is the
+    // measure of that stretch, so it is waited for and judged below like every other.
+    const atEnd = await settleProbeInFlight({ inFlight: () => probeSentAt, untilMs: tick.endedMs })
+    assert.ok(atEnd.settled, 'the request in flight at the end of the first tick must be answered or time out')
     // A request may start while the listener writes its record, then remain
     // in flight across the first tick. That matching health response covers
     // the leading edge too; do not discard it merely for starting earlier.
@@ -218,7 +243,7 @@ async function controller() {
     const firstProbeLagMs = Math.max(0, during[0].startedMs - tick.startedMs)
     const lastProbeLagMs = Math.max(0, tick.endedMs - during.at(-1).endedMs)
     assert.ok(firstProbeLagMs < 250 && lastProbeLagMs < 250, 'health sampling must cover both edges of the first tick within 250ms')
-    result.health = { identity, probesDuringFirstTick: during.length, maxResponseMs: Math.max(...during.map(probe => probe.endedMs - probe.startedMs)), firstTickMs: tick.endedMs - tick.startedMs, firstProbeLagMs, lastProbeLagMs }
+    result.health = { identity, probesDuringFirstTick: during.length, maxResponseMs: Math.max(...during.map(probe => probe.endedMs - probe.startedMs)), firstTickMs: tick.endedMs - tick.startedMs, firstProbeLagMs, lastProbeLagMs, awaitedProbeInFlightAtEnd: atEnd.waited }
     // Check committed counts and plugin installation from actual durable state.
     result.publications = corpus.manifest.scopes.map(({ scopeId }) => {
       const directory = path.join(corpus.workspaceRoot, 'state', 'manifests', scopeId)
@@ -240,6 +265,9 @@ async function controller() {
       assert.ok(transition, JSON.stringify(result.events.find(event => event.type === 'transition-error') ?? { finiteTimeout: true, interrupted, terminal: terminal.value }))
       assert.ok(transition.typedAndByteOraclesPassed && transition.fsOpenRestored)
       await sleep(50)
+      // As at the end of the first tick: the request in flight when the transition ended is part of its window.
+      const atTransitionEnd = await settleProbeInFlight({ inFlight: () => probeSentAt, untilMs: transition.endedMs })
+      assert.ok(atTransitionEnd.settled, 'the request in flight at the end of the transition must be answered or time out')
       // Transition coverage includes any result, even an invalid or timed-out
       // answer; none may be filtered away by its response kind.
       const window = result.probes.filter(probe => probe.startedMs <= transition.endedMs && probe.endedMs >= transition.startedMs)
@@ -253,7 +281,7 @@ async function controller() {
       }
       const firstLagMs = Math.max(0, window[0].startedMs - transition.startedMs), lastLagMs = Math.max(0, transition.endedMs - window.at(-1).endedMs)
       assert.ok(firstLagMs < 250 && lastLagMs < 250)
-      result.transitionHealth = { identity, probes: window.length, maxResponseMs: Math.max(...window.map(probe => probe.endedMs - probe.startedMs)), firstLagMs, lastLagMs }
+      result.transitionHealth = { identity, probes: window.length, maxResponseMs: Math.max(...window.map(probe => probe.endedMs - probe.startedMs)), firstLagMs, lastLagMs, awaitedProbeInFlightAtEnd: atTransitionEnd.waited }
       result.transition = transition
     }
     result.status = 'passed'

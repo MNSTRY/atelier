@@ -1389,6 +1389,30 @@ try {
     assert.deepEqual([windows.sent, windows.child.signals, windows.result.groupAbsent], [[], ['SIGTERM'], true])
   })
 
+  test('outside an owned run: the event-loop benchmark waits for the health request in flight when a stretch ended, and for no other', async () => {
+    const { settleProbeInFlight } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
+    // `sent` is when the request under way was sent, or null; `after` says what becomes of it at each pause.
+    const settle = async ({ sent, untilMs = 1000, after = () => sent, waitMs = 100 }) => {
+      let clock = 2000
+      let pauses = 0
+      let current = sent
+      const result = await settleProbeInFlight({ inFlight: () => current, untilMs, now: () => clock, pause: async (ms) => { clock += ms; pauses += 1; current = after(pauses, current) }, waitMs })
+      return { ...result, pauses }
+    }
+    // Nothing under way: nothing to wait for.
+    assert.deepEqual(await settle({ sent: null }), { waited: false, settled: true, pauses: 0 })
+    // Sent before the stretch ended and answered at the third pause: waited for until then.
+    assert.deepEqual(await settle({ sent: 900, after: (pauses, current) => (pauses >= 3 ? null : current) }), { waited: true, settled: true, pauses: 3 })
+    // Sent at the very end of the stretch: it is in flight across the end, and is waited for too.
+    assert.deepEqual(await settle({ sent: 1000, after: (pauses, current) => (pauses >= 1 ? null : current) }), { waited: true, settled: true, pauses: 1 })
+    // Sent after the stretch ended: not part of its window, and not waited for.
+    assert.deepEqual(await settle({ sent: 1001 }), { waited: false, settled: true, pauses: 0 })
+    // Answered, and the next request already under way: that one was sent after the stretch ended.
+    assert.deepEqual(await settle({ sent: 900, after: (pauses) => (pauses >= 2 ? 2010 : 900) }), { waited: true, settled: true, pauses: 2 })
+    // Never answered: given up after the time a request may take, and said so.
+    assert.deepEqual(await settle({ sent: 900, waitMs: 20 }), { waited: true, settled: false, pauses: 4 })
+  })
+
   test('owned run: nothing here tried to start the app', () => assert.deepEqual(guardErrors, []))
 }
 if (CLEANUP_ONLY) test('the rest of this file is skipped by ATELIER_OBSIDIAN_CLEANUP_ONLY=1', { skip: 'cleanup-only run: the acceptance cases below were not run' }, () => {})
