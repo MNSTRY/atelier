@@ -26,6 +26,9 @@ import { createNullWatcherFactory } from '../../src/runtime/obsidian/watchers.mj
 // Defaults are a small smoke run. A large run takes minutes and wants a host
 // with little else on it. Every run builds, reads and removes its own invented
 // corpus; nothing here can be pointed at a real one.
+// The longest a run may declare. A first publication of ten thousand notes in six views takes more than an hour on
+// an ordinary machine. The service's own interval is longer still, so the first tick is the only one its loop starts.
+const CEILING_MS = 4 * 60 * 60 * 1000
 const entry = fileURLToPath(import.meta.url)
 const repository = fileURLToPath(new URL('../../', import.meta.url))
 const epochMs = () => performance.timeOrigin + performance.now()
@@ -85,7 +88,7 @@ async function serviceChild() {
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { void stop() })
   try {
     service = await runMaintenanceService({
-      loadProject, dataRoot, entryPath: entry, intervalMs: 60 * 60 * 1000,
+      loadProject, dataRoot, entryPath: entry, intervalMs: CEILING_MS + 60 * 60 * 1000,
       ...(driver ? { clock: driver.clock } : {}),
       adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app in a synthetic benchmark') }, processProbe: () => 'absent', kind: 'absent' }),
       log(event) { if (event.event === 'started') send({ type: 'listening', atMs: epochMs(), runtimeId: event.runtimeId, pid: event.pid }) },
@@ -156,6 +159,50 @@ export async function settleProbeInFlight({ inFlight, untilMs, now = epochMs, pa
     await pause(5)
   }
 }
+// How long the slowest of these requests took. A fold: a long run has more requests than a call takes arguments.
+const slowestMs = (probes) => probes.reduce((slowest, probe) => Math.max(slowest, probe.endedMs - probe.startedMs), 0)
+
+// The health requests that cover the first tick, judged. Each must be a health answer of this service and under five
+// seconds, and the sampling must reach both edges of the tick. Throws what the controller reports; answers what it
+// records. `probes` are the controller's own, `tick` the child's, `identity` and `record` the service's.
+export function judgeFirstTickWindow({ probes, tick, listeningAtMs, identity, record }) {
+  // A request may start while the listener writes its record, then remain
+  // in flight across the first tick. That matching health response covers
+  // the leading edge too; do not discard it merely for starting earlier.
+  const during = probes.filter(probe => probe.startedMs <= tick.endedMs
+    && (probe.startedMs >= listeningAtMs || (probe.kind === 'health' && probe.endedMs >= tick.startedMs)))
+  assert.ok(during.length > 0, 'separate controller must observe health during the first publication')
+  for (const probe of during) {
+    assert.equal(probe.kind, 'health', `health answered ${probe.kind}`)
+    assert.equal(probe.runtimeId, identity.runtimeId)
+    assert.equal(probe.pid, identity.pid)
+    assert.equal(probe.workspaceId, identity.workspaceId)
+    assert.equal(probe.serviceName, record.serviceName)
+    assert.equal(probe.executableDigest, record.executable.digest)
+    assert.ok(probe.endedMs - probe.startedMs < 5000, 'health must answer in under five seconds')
+  }
+  const firstProbeLagMs = Math.max(0, during[0].startedMs - tick.startedMs)
+  const lastProbeLagMs = Math.max(0, tick.endedMs - during.at(-1).endedMs)
+  assert.ok(firstProbeLagMs < 250 && lastProbeLagMs < 250, 'health sampling must cover both edges of the first tick within 250ms')
+  return { probesDuringFirstTick: during.length, maxResponseMs: slowestMs(during), firstTickMs: tick.endedMs - tick.startedMs, firstProbeLagMs, lastProbeLagMs }
+}
+
+// The same for a transition. Its coverage includes any result, even an invalid or timed-out answer; none may be
+// filtered away by its response kind.
+export function judgeTransitionWindow({ probes, transition, identity, record }) {
+  const window = probes.filter(probe => probe.startedMs <= transition.endedMs && probe.endedMs >= transition.startedMs)
+  assert.ok(window.length > 0)
+  for (const probe of window) {
+    assert.equal(probe.kind, 'health')
+    for (const key of ['runtimeId', 'pid', 'workspaceId']) assert.equal(probe[key], identity[key])
+    assert.equal(probe.serviceName, record.serviceName)
+    assert.equal(probe.executableDigest, record.executable.digest)
+    assert.ok(probe.endedMs - probe.startedMs < 5000)
+  }
+  const firstLagMs = Math.max(0, window[0].startedMs - transition.startedMs), lastLagMs = Math.max(0, transition.endedMs - window.at(-1).endedMs)
+  assert.ok(firstLagMs < 250 && lastLagMs < 250)
+  return { probes: window.length, maxResponseMs: slowestMs(window), firstLagMs, lastLagMs }
+}
 function sourcePin() {
   const git = args => childProcess.execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
   const paths = ['src/projection/obsidian/materialize/prepare-view.mjs', 'src/projection/obsidian/proposals/adapter.mjs', 'src/projection/obsidian/proposals/observation.mjs', 'src/projection/obsidian/publication/publisher.mjs', 'src/runtime/obsidian/engine.mjs', 'src/runtime/obsidian/pipeline.mjs', 'src/runtime/obsidian/service.mjs', 'test/helpers/obsidian-event-loop-corpus.mjs', 'scripts/obsidian/benchmark-event-loop.mjs', 'package-lock.json']
@@ -164,8 +211,7 @@ function sourcePin() {
 
 async function controller() {
   const notes = integer('notes', 32, 1, 10000), scopes = integer('scopes', 1, 1, 6)
-  // A first publication of ten thousand notes in six views takes more than an hour on an ordinary machine.
-  const timeoutMs = integer('timeout-ms', 30000, 1000, 4 * 60 * 60 * 1000)
+  const timeoutMs = integer('timeout-ms', 30000, 1000, CEILING_MS)
   const output = arg('output')
   const scenario = arg('scenario') ?? 'publication'
   if (scenario !== 'publication' && !TRANSITION_SCENARIOS.includes(scenario)) throw new TypeError('unknown transition scenario')
@@ -222,28 +268,10 @@ async function controller() {
     // measure of that stretch, so it is waited for and judged below like every other.
     const atEnd = await settleProbeInFlight({ inFlight: () => probeSentAt, untilMs: tick.endedMs })
     assert.ok(atEnd.settled, 'the request in flight at the end of the first tick must be answered or time out')
-    // A request may start while the listener writes its record, then remain
-    // in flight across the first tick. That matching health response covers
-    // the leading edge too; do not discard it merely for starting earlier.
-    const during = result.probes.filter(probe => probe.startedMs <= tick.endedMs
-      && (probe.startedMs >= listening.atMs || (probe.kind === 'health' && probe.endedMs >= tick.startedMs)))
-    assert.ok(during.length > 0, 'separate controller must observe health during the first publication')
     const identity = { runtimeId: listening.runtimeId, pid: child.pid, workspaceId: corpus.workspaceId }
     const record = readServiceRecord({ workspaceRoot: corpus.workspaceRoot, workspaceId: corpus.workspaceId })
     assert.ok(record)
-    for (const probe of during) {
-      assert.equal(probe.kind, 'health', `health answered ${probe.kind}`)
-      assert.equal(probe.runtimeId, identity.runtimeId)
-      assert.equal(probe.pid, identity.pid)
-      assert.equal(probe.workspaceId, identity.workspaceId)
-      assert.equal(probe.serviceName, record.serviceName)
-      assert.equal(probe.executableDigest, record.executable.digest)
-      assert.ok(probe.endedMs - probe.startedMs < 5000, 'health must answer in under five seconds')
-    }
-    const firstProbeLagMs = Math.max(0, during[0].startedMs - tick.startedMs)
-    const lastProbeLagMs = Math.max(0, tick.endedMs - during.at(-1).endedMs)
-    assert.ok(firstProbeLagMs < 250 && lastProbeLagMs < 250, 'health sampling must cover both edges of the first tick within 250ms')
-    result.health = { identity, probesDuringFirstTick: during.length, maxResponseMs: Math.max(...during.map(probe => probe.endedMs - probe.startedMs)), firstTickMs: tick.endedMs - tick.startedMs, firstProbeLagMs, lastProbeLagMs, awaitedProbeInFlightAtEnd: atEnd.waited }
+    result.health = { identity, ...judgeFirstTickWindow({ probes: result.probes, tick, listeningAtMs: listening.atMs, identity, record }), awaitedProbeInFlightAtEnd: atEnd.waited }
     // Check committed counts and plugin installation from actual durable state.
     result.publications = corpus.manifest.scopes.map(({ scopeId }) => {
       const directory = path.join(corpus.workspaceRoot, 'state', 'manifests', scopeId)
@@ -268,20 +296,7 @@ async function controller() {
       // As at the end of the first tick: the request in flight when the transition ended is part of its window.
       const atTransitionEnd = await settleProbeInFlight({ inFlight: () => probeSentAt, untilMs: transition.endedMs })
       assert.ok(atTransitionEnd.settled, 'the request in flight at the end of the transition must be answered or time out')
-      // Transition coverage includes any result, even an invalid or timed-out
-      // answer; none may be filtered away by its response kind.
-      const window = result.probes.filter(probe => probe.startedMs <= transition.endedMs && probe.endedMs >= transition.startedMs)
-      assert.ok(window.length > 0)
-      for (const probe of window) {
-        assert.equal(probe.kind, 'health')
-        for (const key of ['runtimeId', 'pid', 'workspaceId']) assert.equal(probe[key], identity[key])
-        assert.equal(probe.serviceName, record.serviceName)
-        assert.equal(probe.executableDigest, record.executable.digest)
-        assert.ok(probe.endedMs - probe.startedMs < 5000)
-      }
-      const firstLagMs = Math.max(0, window[0].startedMs - transition.startedMs), lastLagMs = Math.max(0, transition.endedMs - window.at(-1).endedMs)
-      assert.ok(firstLagMs < 250 && lastLagMs < 250)
-      result.transitionHealth = { identity, probes: window.length, maxResponseMs: Math.max(...window.map(probe => probe.endedMs - probe.startedMs)), firstLagMs, lastLagMs, awaitedProbeInFlightAtEnd: atTransitionEnd.waited }
+      result.transitionHealth = { identity, ...judgeTransitionWindow({ probes: result.probes, transition, identity, record }), awaitedProbeInFlightAtEnd: atTransitionEnd.waited }
       result.transition = transition
     }
     result.status = 'passed'

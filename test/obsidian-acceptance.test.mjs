@@ -1413,6 +1413,43 @@ try {
     assert.deepEqual(await settle({ sent: 900, waitMs: 20 }), { waited: true, settled: false, pauses: 4 })
   })
 
+  test('outside an owned run: the event-loop benchmark judges a window by every request in it, the one answered after the end included, however many there are', async () => {
+    const { judgeFirstTickWindow, judgeTransitionWindow } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
+    const identity = { runtimeId: 'runtime-invented', pid: 4242, workspaceId: 'workspace-invented' }
+    const record = { serviceName: 'service-invented', executable: { digest: `sha256:${'a'.repeat(64)}` } }
+    const answer = (startedMs, endedMs, over = {}) => ({ startedMs, endedMs, kind: 'health', ...identity, serviceName: record.serviceName, executableDigest: record.executable.digest, ...over })
+    // A tick from 1,000 to 10,000, sampled every 100 ms up to `until`, each request answered in 20 ms.
+    const tick = { startedMs: 1000, endedMs: 10000 }
+    const steady = (until) => Array.from({ length: Math.floor((until - 1000) / 100) }, (_, index) => answer(1000 + index * 100, 1020 + index * 100))
+    const first = (probes) => judgeFirstTickWindow({ probes, tick, listeningAtMs: 1000, identity, record })
+
+    // The listener is held for the last 2.3 s of the tick: the request sent then is answered after the tick ended.
+    // It covers the trailing edge, and its latency is what the hold is measured by.
+    const held = first([...steady(7700), answer(7700, 10050)])
+    assert.deepEqual([held.lastProbeLagMs, held.maxResponseMs, held.firstProbeLagMs, held.firstTickMs], [0, 2350, 0, 9000])
+    // The same request never answered: it timed out, and the run fails by it.
+    assert.throws(() => first([...steady(7700), { startedMs: 7700, endedMs: 12700, kind: 'timeout' }]), /health answered timeout/)
+    // Answered, but only after five seconds.
+    assert.throws(() => first([...steady(4900), answer(4900, 10100)]), /under five seconds/)
+    // Answered by another process.
+    assert.throws(() => first([...steady(7700), answer(7700, 10050, { pid: 4243 })]), { code: 'ERR_ASSERTION' })
+    // No request was in flight at the end, and the last answer is half a second old: the sampling missed the edge.
+    assert.throws(() => first(steady(9500)), /cover both edges/)
+    // Nothing answered at all.
+    assert.throws(() => first([]), /must observe health/)
+    // More requests than a call takes arguments: a run of hours is judged like a short one.
+    const many = Array.from({ length: 600000 }, (_, index) => answer(1000 + index * 0.015, 1000 + index * 0.015 + 0.01))
+    assert.deepEqual((({ probesDuringFirstTick, lastProbeLagMs }) => [probesDuringFirstTick, lastProbeLagMs < 250])(first(many)), [600000, true])
+
+    const transition = { startedMs: 20000, endedMs: 23000 }
+    const within = (probes) => judgeTransitionWindow({ probes, transition, identity, record })
+    assert.deepEqual(within([answer(19990, 20040), answer(20100, 23050)]), { probes: 2, maxResponseMs: 2950, firstLagMs: 0, lastLagMs: 0 })
+    // In a transition a request that was refused, or timed out, is in the window like any other, and fails it.
+    assert.throws(() => within([answer(19990, 20040), { startedMs: 20100, endedMs: 20101, kind: 'refused' }, answer(20200, 23050)]), { code: 'ERR_ASSERTION' })
+    assert.throws(() => within([]), { code: 'ERR_ASSERTION' })
+    assert.equal(within(Array.from({ length: 600000 }, (_, index) => answer(20000 + index * 0.005, 20000 + index * 0.005 + 0.001))).probes, 600000)
+  })
+
   test('owned run: nothing here tried to start the app', () => assert.deepEqual(guardErrors, []))
 }
 if (CLEANUP_ONLY) test('the rest of this file is skipped by ATELIER_OBSIDIAN_CLEANUP_ONLY=1', { skip: 'cleanup-only run: the acceptance cases below were not run' }, () => {})
