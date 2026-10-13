@@ -617,6 +617,26 @@ test('declared-binary text that a narrowed diff pairs differently is read again 
   assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
 })
 
+test('a file that replaces a directory is never judged by a pairing the main diff did not make', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  const contents = `head = 0\n${KEY_MATERIAL}\n${Array.from({ length: 18 }, (_, index) => `setting_${index} = value_${index}`).join('\n')}\n`
+  fs.mkdirSync(path.join(site, 'conf.cfg'))
+  fs.writeFileSync(path.join(site, 'conf.cfg', 'main.cfg'), contents)
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'accepted earlier use in conf.cfg/main.cfg'])
+  // The directory moves away unchanged and a file takes its name. Narrowed to
+  // conf.cfg, Git sees the old conf.cfg/main.cfg as the new file's source; the
+  // main diff does not, so the file is new and its key is never an accepted use.
+  fs.mkdirSync(path.join(site, 'conf.d'))
+  git(site, ['mv', 'conf.cfg/main.cfg', 'conf.d/main.cfg'])
+  fs.rmSync(path.join(site, 'conf.cfg'), { recursive: true, force: true })
+  fs.writeFileSync(path.join(site, 'conf.cfg'), `${contents}extra = 1\n`)
+  git(site, ['add', '.'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'conf.cfg' && (item.rule === 'secret-material' || item.code === 'content-scan-incomplete')), JSON.stringify(errors))
+})
+
 test('declared-binary text is read in batches, and file by file when a batch cannot be read', (t) => {
   const { site } = makeWorkspace(t)
   fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
