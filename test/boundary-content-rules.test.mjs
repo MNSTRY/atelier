@@ -358,6 +358,41 @@ test('staged binary credentials block and oversized binary evidence cannot pass 
   assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.path === 'large.bin'))
 })
 
+test('a staged or pushed deletion of a tracked binary has nothing to read and does not block', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, 'retired.bin'), Buffer.from([0, 1, 2, 3]))
+  git(site, ['add', 'retired.bin'])
+  git(site, ['commit', '--quiet', '-m', 'binary asset'])
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+
+  // The deletion is staged beside a binary added in the same change. Git orders
+  // sections by path, so the added zz-opaque.bin comes after the deleted file:
+  // a deleted section that did not reset would leave the addition unscanned.
+  git(site, ['rm', '--quiet', 'retired.bin'])
+  const signature = Buffer.from(['-----BEGIN ', 'PRIVATE KEY-----'].join(''))
+  fs.writeFileSync(path.join(site, 'zz-opaque.bin'), Buffer.concat([Buffer.from([0]), signature]))
+  git(site, ['add', 'zz-opaque.bin'])
+  const report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(!report.errors.some((item) => item.path === 'retired.bin'), JSON.stringify(report.errors))
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'zz-opaque.bin' && item.binary === true))
+
+  // The same holds across a push range.
+  git(site, ['commit', '--quiet', '-m', 'retire one binary, add another'])
+  let pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(pushed.ok, false)
+  assert.ok(!pushed.errors.some((item) => item.path === 'retired.bin'), JSON.stringify(pushed.errors))
+  assert.ok(pushed.errors.some((item) => item.rule === 'secret-material' && item.path === 'zz-opaque.bin'))
+
+  // A deletion on its own passes both checks.
+  git(site, ['reset', '--quiet', '--hard', 'HEAD~1'])
+  git(site, ['rm', '--quiet', 'retired.bin'])
+  const deletionOnly = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(!deletionOnly.errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(deletionOnly.errors))
+  git(site, ['commit', '--quiet', '-m', 'retire binary asset'])
+  pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(pushed.ok, true, JSON.stringify(pushed.errors))
+})
+
 test('generated hooks single-quote config paths and reject control characters', () => {
   const config = '/tmp/project $(touch marker).json'
   const script = boundaryHookScript(config, 'pre-push', '/tmp/elsewhere')
