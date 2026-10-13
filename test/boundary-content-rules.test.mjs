@@ -821,12 +821,13 @@ test('a declared path that differs only in case still names the repo being commi
 
 test('a hook index is resolved against the work tree the hook runs in', (t) => {
   const { site } = makeWorkspace(t)
-  const real = fs.realpathSync(site)
+  // The file system's own spelling: on Windows a temp path can carry an 8.3 short name.
+  const real = fs.realpathSync.native(site)
   assert.equal(hookIndexFromEnvironment({ env: {}, cwd: site }), null)
   const plain = hookIndexFromEnvironment({ env: { GIT_INDEX_FILE: '.git/index' }, cwd: site })
   assert.equal(plain.workTree, real)
   assert.equal(plain.indexFile, path.join(real, '.git', 'index'))
-  assert.equal(plain.commonDir, fs.realpathSync(path.join(site, '.git')))
+  assert.equal(plain.commonDir, fs.realpathSync.native(path.join(site, '.git')))
   // A chained hook that moved into a subdirectory still names the top of the work tree.
   const nested = hookIndexFromEnvironment({ env: { GIT_INDEX_FILE: '.git/index' }, cwd: path.join(site, 'src') })
   assert.deepEqual(nested, plain)
