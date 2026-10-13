@@ -15,6 +15,7 @@ import {
   writeJson,
 } from '../project/config.mjs'
 import { packageRootFrom } from '../project/package-root.mjs'
+import { canonicalDiffArgs, gitOutputResult, parseDiffSections } from '../boundary/content-rules.mjs'
 import {
   BOUNDARY_POLICY_SCHEMA,
   checkBoundaryPolicy,
@@ -413,13 +414,18 @@ function stagedSemanticFindings(project) {
   const findings = []
   for (const repo of project.repos ?? []) {
     if (!isGitRepo(repo.path)) continue
-    const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
-    if (result.status !== 0 || !result.stdout.trim()) continue
-    const diff = result.stdout
-    const changedSemantic = diff
-      .split('\n')
-      .some((line) => /^[+-](?![+-])/.test(line) && SEMANTIC_FIELD_RE.test(line))
-    if (changedSemantic && !REVIEW_MARKER_RE.test(diff)) findings.push(`${repo.name}: staged semantic field change needs Atelier-Boundary-Review marker`)
+    // The boundary guard's pinned diff and parser; only a marker added in this
+    // change approves it, never a removed line or a file name.
+    const result = gitOutputResult(repo.path, [...canonicalDiffArgs(['--cached'], ['--text']), '--', '*.md', '*.kg.json'])
+    if (!result.ok) {
+      findings.push(`${repo.name}: staged semantic fields could not be read (${result.code})`)
+      continue
+    }
+    const sections = parseDiffSections(result.stdout, { detail: true })
+    const changedSemantic = sections.some((section) => section.incomplete
+      || section.hunks.some((hunk) => [...hunk.added, ...hunk.removed].some((line) => SEMANTIC_FIELD_RE.test(line))))
+    const approved = sections.some((section) => section.hunks.some((hunk) => hunk.added.some((line) => REVIEW_MARKER_RE.test(line))))
+    if (changedSemantic && !approved) findings.push(`${repo.name}: staged semantic field change needs Atelier-Boundary-Review marker`)
   }
   return findings
 }
