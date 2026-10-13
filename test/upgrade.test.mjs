@@ -249,6 +249,45 @@ test('semantic field change without review marker blocks upgrade', () => {
   assert.match(plan.blockers.join('\n'), /Atelier-Boundary-Review/)
 })
 
+test('only a review marker added in the change approves a semantic field change in upgrade', () => {
+  const { repo, project } = fixture()
+  const file = path.join(repo, 'README.md')
+  const marker = '\n<!-- Atelier-Boundary-Review: approved — an earlier change -->\n'
+  fs.appendFileSync(file, marker)
+  git(repo, ['commit', '-qam', 'an earlier approval'])
+  writeAtelierLock({ project })
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('audience: "private"', 'audience: "team"').replace(marker, '\n'))
+  git(repo, ['add', 'README.md'])
+  // The upgrade's own check, apart from the boundary policy's.
+  const upgradeMarker = /staged semantic field change needs Atelier-Boundary-Review marker/
+  assert.match(planUpgrade({ project }).blockers.join('\n'), upgradeMarker, 'a removed marker approves nothing')
+  fs.appendFileSync(file, '\n<!-- Atelier-Boundary-Review: approved — widened for the team -->\n')
+  git(repo, ['add', 'README.md'])
+  assert.doesNotMatch(planUpgrade({ project }).blockers.join('\n'), upgradeMarker)
+})
+
+test('upgrade refuses a semantic check it cannot complete: an unmerged document or an unreadable diff', () => {
+  const upgradeMarker = /staged semantic field change needs Atelier-Boundary-Review marker/
+  const unmerged = fixture()
+  writeAtelierLock({ project: unmerged.project })
+  const readme = path.join(unmerged.repo, 'README.md')
+  const base = git(unmerged.repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  git(unmerged.repo, ['checkout', '-q', '-b', 'side'])
+  fs.appendFileSync(readme, '\nSide text.\n')
+  git(unmerged.repo, ['commit', '-qam', 'side'])
+  git(unmerged.repo, ['checkout', '-q', base])
+  fs.appendFileSync(readme, '\nMain text.\n')
+  git(unmerged.repo, ['commit', '-qam', 'main'])
+  assert.throws(() => git(unmerged.repo, ['merge', '-q', 'side']))
+  assert.match(planUpgrade({ project: unmerged.project }).blockers.join('\n'), upgradeMarker)
+
+  const oversized = fixture()
+  writeAtelierLock({ project: oversized.project })
+  fs.appendFileSync(path.join(oversized.repo, 'README.md'), `${'a line of text that fills the diff\n'.repeat(500000)}`)
+  git(oversized.repo, ['add', 'README.md'])
+  assert.match(planUpgrade({ project: oversized.project }).blockers.join('\n'), /staged semantic fields could not be read \(git-output-limit-exceeded\)/)
+})
+
 test('hook update preserves unrelated user hook via sidecar', () => {
   const { repo, project } = fixture()
   writeOldLock(project)

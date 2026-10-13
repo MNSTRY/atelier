@@ -7,6 +7,9 @@ import { matchesPathPattern } from '../project/path-match.mjs'
 import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 import {
   CHECK_AGGREGATE_MAX_BYTES,
+  canonicalDiffArgs,
+  gitOutputResult,
+  parseDiffSections,
   parsePushRefInput,
   resolveContentRules,
   scanPushUpdate,
@@ -358,17 +361,83 @@ function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActo
   return findings
 }
 
-export function stagedPathsForProject(project, { gitExecutable = 'git' } = {}) {
+/**
+ * The index a pre-commit hook is judging. Git names it in GIT_INDEX_FILE (a
+ * temporary index under `git commit -a` or `git commit <paths>`, a linked
+ * worktree's own index, or `.git/index` relative to the work tree's top) and
+ * runs the hook at that top, though a chained hook may have moved. The work
+ * tree is found by Git's own discovery from where the hook runs; the hook's
+ * GIT_DIR is not used, because in a linked worktree Git exports it without a
+ * work tree, which would make any subdirectory look like the top. A work tree
+ * discovery cannot find is unresolved, and blocks. Returns null when no index
+ * is named.
+ */
+export function hookIndexFromEnvironment({ env = process.env, cwd = process.cwd(), gitExecutable = 'git' } = {}) {
+  const named = typeof env.GIT_INDEX_FILE === 'string' ? env.GIT_INDEX_FILE : ''
+  if (!named) return null
+  const workTree = gitPathOutput(cwd, ['rev-parse', '--show-toplevel'], sanitizedGitEnvironment(), gitExecutable)
+  const commonDir = gitPathOutput(cwd, ['rev-parse', '--git-common-dir'], sanitizedGitEnvironment(), gitExecutable)
+  return { workTree, indexFile: path.resolve(workTree ?? cwd, named), commonDir }
+}
+
+function gitPathOutput(cwd, args, env, gitExecutable = 'git') {
+  const result = spawnSync(gitExecutable, ['-C', cwd, ...args], { encoding: 'utf8', env })
+  const output = result.status === 0 ? String(result.stdout ?? '').replace(/\r?\n$/, '') : ''
+  return output ? nativeRealPath(path.resolve(cwd, output)) : null
+}
+
+// The file system's own spelling of a path, so a configured path that differs
+// only in case (macOS, Windows) still names the same repo.
+function nativeRealPath(value) {
+  try {
+    return fs.realpathSync.native(path.resolve(value))
+  } catch {
+    return path.resolve(value)
+  }
+}
+
+/**
+ * Where each managed repo's staged state is read. The repo the hook is
+ * committing is read from the hook's work tree and index: the managed repo
+ * configured at that work tree, or the one managed repo sharing its Git
+ * directory (a linked worktree of it). Every other repo is read as configured.
+ * When an index is named but no single managed repo is being committed, the
+ * guard cannot tell what it is judging, and says so.
+ */
+function stagedTargets(project, hookIndex, gitExecutable = 'git') {
+  const repos = managedRepos(project)
+  const targets = new Map(repos.map((repo) => [repo, { root: repo.path, indexFile: null }]))
+  if (!hookIndex) return { targets, unresolved: null }
+  let committing = hookIndex.workTree ? repos.filter((repo) => repo.path && nativeRealPath(repo.path) === hookIndex.workTree) : []
+  if (committing.length === 0 && hookIndex.commonDir) {
+    committing = repos.filter((repo) => repo.path && fs.existsSync(repo.path)
+      && gitPathOutput(repo.path, ['rev-parse', '--git-common-dir'], sanitizedGitEnvironment(), gitExecutable) === hookIndex.commonDir)
+  }
+  if (committing.length !== 1) return { targets, unresolved: hookIndex.workTree ?? '(an unresolved work tree)' }
+  targets.set(committing[0], { root: hookIndex.workTree, indexFile: hookIndex.indexFile })
+  return { targets, unresolved: null }
+}
+
+function stagedPathsResult(targets, { gitExecutable = 'git' } = {}) {
   const paths = []
-  for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
-    const result = spawnSync(gitExecutable, ['-C', repo.path, 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
-    if (result.status !== 0) continue
-    for (const rel of result.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
-      paths.push({ repo: repo.name, repoRoot: repo.path, path: normalize(rel) })
+  const failures = []
+  for (const [repo, target] of targets) {
+    if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) continue
+    // NUL-separated names are exact: a quoted name could never match a forbidden-path glob.
+    const result = gitOutputResult(target.root, ['diff', '--cached', '--name-only', '-z', '--no-relative', '--diff-filter=ACMR'], { gitExecutable, indexFile: target.indexFile })
+    if (!result.ok) {
+      failures.push({ repo, reason: result.code })
+      continue
+    }
+    for (const rel of result.stdout.split('\0').filter(Boolean)) {
+      paths.push({ repo: repo.name, repoRoot: target.root, path: normalize(rel) })
     }
   }
-  return paths
+  return { paths, failures }
+}
+
+export function stagedPathsForProject(project, { gitExecutable = 'git', hookIndex = null } = {}) {
+  return stagedPathsResult(stagedTargets(project, hookIndex, gitExecutable).targets, { gitExecutable }).paths
 }
 
 function forbiddenPathFindings({ policy, stagedPaths }) {
@@ -410,30 +479,14 @@ function isInitializationDefault(field, value) {
   return Array.isArray(defaults) && defaults.includes(value)
 }
 
+/** Diff sections with their hunks, read by the same parser as the content scan. */
 export function diffFileSections(diff) {
-  const files = []
-  let current = null
-  let hunk = null
-  for (const line of String(diff ?? '').split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      const header = line.match(/^diff --git a\/(.*) b\/(.*)$/)
-      current = { path: header ? normalize(header[2]) : null, hunks: [], lines: [] }
-      files.push(current)
-      hunk = null
-      continue
-    }
-    if (!current) continue
-    current.lines.push(line)
-    if (line.startsWith('@@')) {
-      hunk = { added: [], removed: [] }
-      current.hunks.push(hunk)
-      continue
-    }
-    if (!hunk) continue
-    if (/^\+(?!\+)/.test(line)) hunk.added.push(line.slice(1))
-    else if (/^-(?!-)/.test(line)) hunk.removed.push(line.slice(1))
-  }
-  return files
+  return parseDiffSections(diff, { detail: true }).map((section) => ({
+    path: section.path,
+    hunks: section.hunks,
+    lines: section.lines,
+    incomplete: section.incomplete,
+  }))
 }
 
 export function semanticChangesInFile(file) {
@@ -456,26 +509,38 @@ export function semanticChangesInFile(file) {
   return changes
 }
 
-function semanticDiffFindings({ policy, project, gitExecutable = 'git' }) {
+function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
   const findings = []
   const severity = 'error'
-  for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+  for (const [repo, target] of targets) {
+    if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) {
       findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
       continue
     }
-    const result = spawnSync(gitExecutable, ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
-    if (result.status !== 0) {
+    // --text: a document declared binary, or holding a NUL byte, still has its fields read.
+    const result = gitOutputResult(target.root, [...canonicalDiffArgs(['--cached'], ['--text']), '--', '*.md', '*.kg.json'], { gitExecutable, indexFile: target.indexFile })
+    if (!result.ok) {
       findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
       continue
     }
     if (!result.stdout.trim()) continue
     for (const file of diffFileSections(result.stdout)) {
+      if (file.incomplete) {
+        findings.push(finding({
+          severity,
+          code: 'semantic-field-scan-incomplete',
+          repo: repo.name,
+          path: file.path,
+          message: `${repo.name}/${file.path ?? '(unknown path)'}: the staged diff could not be read, so its semantic fields were not checked`,
+          details: { reason: file.incomplete },
+        }))
+        continue
+      }
       const changes = semanticChangesInFile(file)
       if (!changes.length) continue
-      // The marker has to travel in the same file's diff as the change it approves —
-      // a marker elsewhere in the commit approves nothing.
-      if (REVIEW_MARKER_RE.test(file.lines.join('\n'))) continue
+      // The marker has to be added in the same file's diff as the change it approves:
+      // a marker elsewhere in the commit, a removed one, or one in a file name approves nothing.
+      if (file.hunks.some((hunk) => hunk.added.some((line) => REVIEW_MARKER_RE.test(line)))) continue
       const label = `${repo.name}/${file.path ?? '(unknown path)'}`
       findings.push(
         finding({
@@ -492,17 +557,17 @@ function semanticDiffFindings({ policy, project, gitExecutable = 'git' }) {
   return findings
 }
 
-function stagedContentFindings({ policy, project, gitExecutable = 'git' }) {
+function stagedContentFindings({ policy, targets, gitExecutable = 'git' }) {
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
   const findings = []
   let totalBytes = 0
-  for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+  for (const [repo, target] of targets) {
+    if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) {
       findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
       continue
     }
-    const result = scanStagedRepository({ repoRoot: repo.path, rules, exceptions, repo: repo.name, gitExecutable })
+    const result = scanStagedRepository({ repoRoot: target.root, rules, exceptions, repo: repo.name, gitExecutable, indexFile: target.indexFile })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
     if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
@@ -665,7 +730,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false, delegations = null, ownerKeys = null, now = Date.now() } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false, delegations = null, ownerKeys = null, now = Date.now(), hookIndex = null } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
@@ -684,10 +749,18 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
   const operation = staged ? 'pre-commit' : 'boundary-check'
   findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors, operation, delegations: delegationList, ownerKeys, now }))
   if (staged) {
-    const stagedPaths = stagedPathsForProject(project, { gitExecutable })
-    findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
-    findings.push(...semanticDiffFindings({ policy, project, gitExecutable }))
-    findings.push(...stagedContentFindings({ policy, project, gitExecutable }))
+    const { targets, unresolved } = stagedTargets(project, hookIndex, gitExecutable)
+    if (unresolved) {
+      findings.push(finding({
+        code: 'pre-commit-repo-unresolved',
+        message: `${unresolved} is not a repo declared in ${project?.configPath ?? 'the project config'}, or several declared repos share its Git directory; the pre-commit guard cannot tell what is being committed`,
+      }))
+    }
+    const listed = stagedPathsResult(targets, { gitExecutable })
+    findings.push(...listed.failures.map(({ repo, reason }) => unscannableRepoFinding(repo, `staged paths could not be listed (${reason})`)))
+    findings.push(...forbiddenPathFindings({ policy, stagedPaths: listed.paths }))
+    findings.push(...semanticDiffFindings({ targets, gitExecutable }))
+    findings.push(...stagedContentFindings({ policy, targets, gitExecutable }))
   }
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')
@@ -715,7 +788,7 @@ export function runBoundaryCheckCommand(argv = process.argv.slice(2)) {
   // Owner keys are read only when a delegations document exists.
   const ownerKeys = sidecar.present && sidecar.document ? ownerKeysForCommand() : null
   let report = loaded.ok
-    ? checkBoundaryPolicy({ project, policy: loaded.policy, staged, stagedOnly, actor: firstString(args.actor), delegations: sidecar.document, ownerKeys })
+    ? checkBoundaryPolicy({ project, policy: loaded.policy, staged, stagedOnly, actor: firstString(args.actor), delegations: sidecar.document, ownerKeys, hookIndex: staged ? hookIndexFromEnvironment() : null })
     : { ok: false, mode: null, schema: BOUNDARY_POLICY_SCHEMA, graphCounts: null, findings: missingFindings, errors: missingFindings, warnings: [] }
   if (sidecarFindings.length) report = { ...report, ok: false, findings: [...sidecarFindings, ...report.findings], errors: [...sidecarFindings, ...report.errors] }
 

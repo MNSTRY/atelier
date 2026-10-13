@@ -10,6 +10,7 @@ import {
   boundaryHookScript,
   checkBoundaryPolicy,
   checkPushContent,
+  hookIndexFromEnvironment,
   installBoundaryHooks,
   readBoundaryPushInput,
   resolveBoundaryAuditSource,
@@ -676,6 +677,160 @@ test('declared-binary text is read in batches, and file by file when a batch can
   result = scan((literal) => literal.length > 1 || literal[0] === ':(literal)f201.cfg')
   assert.deepEqual(result.diagnostics.map((item) => [item.path, item.details.reason, item.details.cause]), [['f201.cfg', 'declared-binary-text-unreadable', 'git-output-limit-exceeded']])
   assert.match(result.diagnostics[0].message, /byte limit/)
+})
+
+const PACKAGE_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
+
+/** Run git as a person would, with installed hooks answered only by this checkout's CLI. */
+function hookedGit(t, cwd) {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-hook-bin-'))
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }))
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'))
+  fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'))
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
+  // The person at the terminal names themselves with the supported local selector, so a
+  // platform login in the environment (GITHUB_ACTOR on CI) is not mistaken for them.
+  Object.assign(env, { PATH: [bin, '/usr/bin', '/bin'].join(':'), MNSTRY_ATELIER_PACKAGE_ROOT: PACKAGE_ROOT, MNSTRY_ATELIER_ACTOR: 'author' })
+  return (args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env })
+}
+
+test('the pre-commit hook judges the index Git is committing, in every commit form', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { site, project } = makeWorkspace(t)
+  installBoundaryHooks({ project })
+  const run = hookedGit(t, site)
+  const head = () => git(site, ['rev-parse', 'HEAD'])
+
+  // A clean change commits, so a refusal below is the scan's.
+  fs.appendFileSync(path.join(site, CART), '// clean\n')
+  let result = run(['commit', '--quiet', '-am', 'clean'])
+  assert.equal(result.status, 0, result.stderr)
+
+  for (const form of [['-am', 'with -a'], ['-m', 'named path', '--', CART]]) {
+    const before = head()
+    fs.appendFileSync(path.join(site, CART), `${KEY_MATERIAL}\n`)
+    result = run(['commit', '--quiet', ...form])
+    assert.notEqual(result.status, 0, `${form[1]}: committed a key`)
+    assert.match(result.stderr + result.stdout, /secret-material|content-rule-violation/, form[1])
+    assert.equal(head(), before)
+    git(site, ['checkout', '--', CART])
+  }
+
+  // A linked worktree of the managed repo is judged as that repo.
+  const linked = path.join(path.dirname(site), 'example-site-linked')
+  git(site, ['worktree', 'add', '--quiet', '-b', 'linked', linked])
+  const inLinked = hookedGit(t, linked)
+  fs.appendFileSync(path.join(linked, CART), `${KEY_MATERIAL}\n`)
+  const before = git(linked, ['rev-parse', 'HEAD'])
+  result = inLinked(['commit', '--quiet', '-am', 'linked worktree'])
+  assert.notEqual(result.status, 0, 'a linked worktree committed a key')
+  assert.equal(git(linked, ['rev-parse', 'HEAD']), before)
+})
+
+test('a commit with -a is judged for semantic fields, forbidden paths and declared-binary text', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { site, project } = makeWorkspace(t)
+  fs.mkdirSync(path.join(site, 'docs'))
+  fs.writeFileSync(path.join(site, 'docs', 'note.md'), '---\naudience: "private"\n---\n\nA note.\n')
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  fs.writeFileSync(path.join(site, 'conf.cfg'), 'name = site\n')
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'seed'])
+  installBoundaryHooks({ project })
+  const run = hookedGit(t, site)
+  const refuses = (label, change, code) => {
+    const before = git(site, ['rev-parse', 'HEAD'])
+    change()
+    const result = run(['commit', '--quiet', '-am', label])
+    assert.notEqual(result.status, 0, `${label}: committed`)
+    assert.match(result.stderr + result.stdout, code, label)
+    assert.equal(git(site, ['rev-parse', 'HEAD']), before)
+    git(site, ['reset', '--quiet', '--hard'])
+  }
+  refuses('semantic field', () => fs.writeFileSync(path.join(site, 'docs', 'note.md'), '---\naudience: "team"\n---\n\nA note.\n'), /semantic-field-change-needs-review/)
+  refuses('forbidden path', () => {
+    fs.mkdirSync(path.join(site, '.atelier-local'))
+    fs.writeFileSync(path.join(site, '.atelier-local', 'notes.txt'), 'local\n')
+    git(site, ['add', '-N', '.atelier-local/notes.txt'])
+  }, /forbidden-path-staged/)
+  fs.rmSync(path.join(site, '.atelier-local'), { recursive: true, force: true })
+  refuses('declared-binary text', () => fs.appendFileSync(path.join(site, 'conf.cfg'), `${KEY_MATERIAL}\n`), /secret-material|content-rule-violation/)
+})
+
+test('a pre-commit hook chained from a subdirectory judges the same commit', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { site, project } = makeWorkspace(t)
+  installBoundaryHooks({ project })
+  const hooks = path.join(site, '.git', 'hooks')
+  fs.renameSync(path.join(hooks, 'pre-commit'), path.join(hooks, 'pre-commit-atelier'))
+  fs.writeFileSync(path.join(hooks, 'pre-commit'), '#!/usr/bin/env bash\ncd src && exec ../.git/hooks/pre-commit-atelier\n')
+  fs.chmodSync(path.join(hooks, 'pre-commit'), 0o755)
+  const run = hookedGit(t, site)
+  fs.appendFileSync(path.join(site, CART), '// clean\n')
+  let result = run(['commit', '--quiet', '-am', 'clean'])
+  assert.equal(result.status, 0, result.stderr + result.stdout)
+  fs.appendFileSync(path.join(site, CART), `${KEY_MATERIAL}\n`)
+  result = run(['commit', '--quiet', '-am', 'key'])
+  assert.notEqual(result.status, 0, 'committed a key')
+  assert.match(result.stderr + result.stdout, /secret-material|content-rule-violation/)
+  git(site, ['checkout', '--', CART])
+
+  // Hooks are shared with linked worktrees, where Git exports GIT_DIR without a
+  // work tree; the chained hook there judges the worktree's own commit.
+  fs.writeFileSync(path.join(hooks, 'pre-commit'), `#!/usr/bin/env bash\ncd src && exec '${path.join(hooks, 'pre-commit-atelier')}'\n`)
+  const linked = path.join(path.dirname(site), 'example-site-chained')
+  git(site, ['worktree', 'add', '--quiet', '-b', 'chained', linked])
+  const inLinked = hookedGit(t, linked)
+  fs.appendFileSync(path.join(linked, CART), '// clean in the worktree\n')
+  result = inLinked(['commit', '--quiet', '-am', 'clean in the worktree'])
+  assert.equal(result.status, 0, result.stderr + result.stdout)
+  fs.appendFileSync(path.join(linked, CART), `${KEY_MATERIAL}\n`)
+  result = inLinked(['commit', '--quiet', '-am', 'key in the worktree'])
+  assert.notEqual(result.status, 0, 'a linked worktree committed a key')
+  assert.match(result.stderr + result.stdout, /secret-material|content-rule-violation/)
+})
+
+test('a commit no single declared repo accounts for is refused', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { root, site, project } = makeWorkspace(t)
+  // Two declared repos share one Git directory: the checkout and a linked worktree of it.
+  const declared = path.join(root, 'example-site-declared')
+  git(site, ['worktree', 'add', '--quiet', '-b', 'declared', declared])
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'atelier.project.json'), 'utf8'))
+  config.repos.push({ name: 'example-site-declared', path: 'example-site-declared', readBoundary: 'team' })
+  writeJson(path.join(root, 'atelier.project.json'), config)
+  installBoundaryHooks({ project })
+  // A third worktree, declared nowhere, commits.
+  const third = path.join(root, 'example-site-third')
+  git(site, ['worktree', 'add', '--quiet', '-b', 'third', third])
+  fs.appendFileSync(path.join(third, CART), '// a change\n')
+  const result = hookedGit(t, third)(['commit', '--quiet', '-am', 'from an undeclared worktree'])
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr + result.stdout, /pre-commit-repo-unresolved/)
+})
+
+test('a declared path that differs only in case still names the repo being committed', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { root, site, project } = makeWorkspace(t)
+  if (!fs.existsSync(path.join(root, 'EXAMPLE-SITE'))) return t.skip('case-sensitive file system')
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'atelier.project.json'), 'utf8'))
+  config.repos[0].path = 'EXAMPLE-SITE'
+  writeJson(path.join(root, 'atelier.project.json'), config)
+  installBoundaryHooks({ project })
+  fs.appendFileSync(path.join(site, CART), `${KEY_MATERIAL}\n`)
+  const result = hookedGit(t, site)(['commit', '--quiet', '-am', 'key'])
+  assert.notEqual(result.status, 0, 'committed a key')
+  assert.match(result.stderr + result.stdout, /secret-material|content-rule-violation/)
+  assert.doesNotMatch(result.stderr + result.stdout, /pre-commit-repo-unresolved/)
+})
+
+test('a hook index is resolved against the work tree the hook runs in', (t) => {
+  const { site } = makeWorkspace(t)
+  // The file system's own spelling: on Windows a temp path can carry an 8.3 short name.
+  const real = fs.realpathSync.native(site)
+  assert.equal(hookIndexFromEnvironment({ env: {}, cwd: site }), null)
+  const plain = hookIndexFromEnvironment({ env: { GIT_INDEX_FILE: '.git/index' }, cwd: site })
+  assert.equal(plain.workTree, real)
+  assert.equal(plain.indexFile, path.join(real, '.git', 'index'))
+  assert.equal(plain.commonDir, fs.realpathSync.native(path.join(site, '.git')))
+  // A chained hook that moved into a subdirectory still names the top of the work tree.
+  const nested = hookIndexFromEnvironment({ env: { GIT_INDEX_FILE: '.git/index' }, cwd: path.join(site, 'src') })
+  assert.deepEqual(nested, plain)
 })
 
 test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {

@@ -548,3 +548,93 @@ test('a hand-set platform actor cannot resolve a placeholder login', () => {
   assert.equal(result.actorId, null)
   assert.equal(result.reason, 'unknown-platform-actor')
 })
+
+test('a removed review marker, or one in a file name, approves nothing', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  const marker = '\n<!-- Atelier-Boundary-Review: approved — an earlier change -->\n'
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  fs.appendFileSync(path.join(privateRepo, 'doc.md'), marker)
+  const named = process.platform !== 'win32' ? 'notes/boundary-review: approved.md' : null
+  if (named) writeDoc(privateRepo, named, 'mnstry-private-author:named', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+
+  const doc = path.join(privateRepo, 'doc.md')
+  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8').replace('audience: "private"', 'audience: "team"').replace(marker, '\n'))
+  if (named) {
+    const file = path.join(privateRepo, named)
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('audience: "private"', 'audience: "team"'))
+  }
+  git(privateRepo, ['add', '.'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  const flagged = report.errors.filter((item) => item.code === 'semantic-field-change-needs-review').map((item) => item.path).sort()
+  assert.deepEqual(flagged, named ? ['doc.md', named] : ['doc.md'])
+})
+
+test('a staged forbidden path with a quoted name is still forbidden', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  fs.mkdirSync(path.join(privateRepo, 'transcripts'))
+  // Non-ASCII, so Git quotes the name unless it is listed NUL-separated; legal on every platform.
+  fs.writeFileSync(path.join(privateRepo, 'transcripts', 'café notes.txt'), 'a session\n')
+  git(privateRepo, ['add', '.'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.path === 'transcripts/café notes.txt'), JSON.stringify(report.errors))
+})
+
+test('a semantic field change in a document Git reads as binary is still reviewed', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  fs.writeFileSync(path.join(privateRepo, '.git', 'info', 'attributes'), '*.md -diff\n')
+  const doc = path.join(privateRepo, 'doc.md')
+  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8').replace('audience: "private"', 'audience: "team"'))
+  git(privateRepo, ['add', '.'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'doc.md'), JSON.stringify(report.errors))
+})
+
+test('an unmerged document blocks the semantic review instead of being skipped', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  const base = git(privateRepo, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  git(privateRepo, ['checkout', '-q', '-b', 'side'])
+  const doc = path.join(privateRepo, 'doc.md')
+  fs.appendFileSync(doc, '\nSide text.\n')
+  git(privateRepo, ['commit', '-qam', 'side'])
+  git(privateRepo, ['checkout', '-q', base])
+  fs.appendFileSync(doc, '\nMain text.\n')
+  git(privateRepo, ['commit', '-qam', 'main'])
+  assert.throws(() => git(privateRepo, ['merge', '-q', 'side']))
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-scan-incomplete' && item.path === 'doc.md'), JSON.stringify(report.errors))
+})
+
+test('a forbidden path whose name holds a newline is still forbidden', { skip: process.platform === 'win32' && 'names Windows cannot hold' }, () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  fs.mkdirSync(path.join(privateRepo, 'transcripts'))
+  fs.writeFileSync(path.join(privateRepo, 'transcripts', 'a\nb.txt'), 'a session\n')
+  git(privateRepo, ['add', '.'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.code === 'forbidden-path-staged' && item.path === 'transcripts/a\nb.txt'), JSON.stringify(report.errors))
+})
+
+test('a repo whose staged paths cannot be listed blocks the commit', { skip: process.platform === 'win32' && 'POSIX wrapper script' }, () => {
+  const { root, project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  const wrapper = path.join(root, 'git-without-listing')
+  fs.writeFileSync(wrapper, '#!/bin/sh\nfor arg in "$@"; do [ "$arg" = "--name-only" ] && exit 128; done\nexec git "$@"\n')
+  fs.chmodSync(wrapper, 0o755)
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true, gitExecutable: wrapper })
+  assert.ok(report.errors.some((item) => item.code === 'repo-unscannable' && /staged paths could not be listed/.test(item.message)), JSON.stringify(report.errors))
+})

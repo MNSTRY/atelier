@@ -290,22 +290,27 @@ const INDEX_LINE = /^index ([0-9a-f]{40,64})\.\.([0-9a-f]{40,64})(?: \d+)?$/
  * section whose path or hunks cannot be read is returned with `incomplete` set,
  * so the caller fails closed instead of skipping it. Paths are the exact
  * repository paths Git reports; `newBlob` is the object id of the new content.
+ * With `detail`, each section also keeps its hunks (added and removed text) and
+ * the raw lines after its header.
  */
-export function parseDiffSections(diff) {
+export function parseDiffSections(diff, { detail = false } = {}) {
   const sections = []
   let current = null
   let pendingAdded = 0
   let pendingRemoved = 0
   let lineNumber = 0
   for (const raw of String(diff ?? '').split('\n')) {
+    if (detail && current && !raw.startsWith('diff --git ') && !raw.startsWith('* Unmerged path ')) current.lines.push(raw)
     if (pendingAdded > 0 || pendingRemoved > 0) {
       if (raw.startsWith('+') && pendingAdded > 0) {
         current.addedLines.push({ number: lineNumber, text: raw.slice(1) })
+        if (detail) current.hunks.at(-1).added.push(raw.slice(1))
         lineNumber += 1
         pendingAdded -= 1
         continue
       }
       if (raw.startsWith('-') && pendingRemoved > 0) {
+        if (detail) current.hunks.at(-1).removed.push(raw.slice(1))
         pendingRemoved -= 1
         continue
       }
@@ -333,6 +338,7 @@ export function parseDiffSections(diff) {
         addedLines: [],
         incomplete: null,
         inHeader: true,
+        ...(detail ? { hunks: [], lines: [] } : {}),
       }
       sections.push(current)
       continue
@@ -352,6 +358,7 @@ export function parseDiffSections(diff) {
         addedLines: [],
         incomplete: 'unmerged-path',
         inHeader: false,
+        ...(detail ? { hunks: [], lines: [] } : {}),
       }
       sections.push(current)
       continue
@@ -361,6 +368,7 @@ export function parseDiffSections(diff) {
     const hunk = raw.match(HUNK_HEADER)
     if (hunk) {
       current.inHeader = false
+      if (detail) current.hunks.push({ added: [], removed: [] })
       pendingRemoved = hunk[1] === undefined ? 1 : Number(hunk[1])
       lineNumber = Number(hunk[2])
       pendingAdded = hunk[3] === undefined ? 1 : Number(hunk[3])
@@ -448,12 +456,16 @@ export function parsePushRefInput(text) {
 export function gitOutputResult(repoRoot, args, {
   encoding = 'utf8',
   gitExecutable = 'git',
+  indexFile = null,
   maxBuffer = DIFF_RESULT_MAX_BYTES,
   runner = spawnSync,
 } = {}) {
   let result
+  // A hook names the index being committed (`git commit -a` writes a temporary
+  // one); every other variable from the caller's Git environment is dropped.
+  const env = indexFile ? { ...sanitizedGitEnvironment(), GIT_INDEX_FILE: indexFile } : sanitizedGitEnvironment()
   try {
-    result = runner(gitExecutable, ['-C', repoRoot, ...args], { encoding, maxBuffer, env: sanitizedGitEnvironment() })
+    result = runner(gitExecutable, ['-C', repoRoot, ...args], { encoding, maxBuffer, env })
   } catch (error) {
     return { ok: false, code: 'git-command-failed', error: error instanceof Error ? error.message : String(error), stdout: null }
   }
@@ -482,7 +494,7 @@ export function pushRangeBase(repoRoot, remoteSha) {
   return result.status === 0 ? remoteSha : EMPTY_TREE
 }
 
-const canonicalDiffArgs = (revisions, extra = []) => ['diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
+export const canonicalDiffArgs = (revisions, extra = []) => ['diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
 
 export function diffForPushRange(repoRoot, { localSha, remoteSha }, options = {}) {
   const base = pushRangeBase(repoRoot, remoteSha)
@@ -570,7 +582,7 @@ const DECLARED_TEXT_BATCH_BYTES = DIFF_RESULT_MAX_BYTES / 2
  * rewrite a decomposed name on the command line and match nothing. Returns, per
  * path, `{ addedLines }` or `{ cause }` naming why the text was not read.
  */
-function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, gitRunner }) {
+function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, gitRunner, indexFile = null }) {
   const outcomes = new Map()
   const read = (group) => {
     const paths = [...new Set(group.flatMap(({ section }) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
@@ -579,7 +591,7 @@ function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, 
       ...canonicalDiffArgs(revisions, ['--text']),
       '--',
       ...paths.map((value) => `:(literal)${value}`),
-    ], { gitExecutable, runner: gitRunner })
+    ], { gitExecutable, indexFile, runner: gitRunner })
     const parsed = result.ok ? parseDiffSections(result.stdout) : []
     for (const { section } of group) {
       const matches = parsed.filter((candidate) => candidate.path === section.path && !candidate.deleted)
@@ -612,7 +624,7 @@ function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, 
   return outcomes
 }
 
-function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, repo, gitExecutable, gitRunner }) {
+function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, repo, gitExecutable, gitRunner, indexFile = null }) {
   const findings = []
   const diagnostics = []
   let totalBytes = 0
@@ -670,7 +682,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
     declaredText.push({ section, bytes: result.bytes })
   }
   if (declaredText.length > 0) {
-    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, gitExecutable, gitRunner })
+    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, gitExecutable, gitRunner, indexFile })
     const contentRules = rules.filter((rule) => (rule.kind ?? 'content') === 'content')
     for (const { section } of declaredText) {
       const { addedLines, cause } = outcomes.get(section.path)
@@ -698,8 +710,9 @@ export function scanStagedRepository({
   repo = null,
   gitExecutable = 'git',
   gitRunner = spawnSync,
+  indexFile = null,
 } = {}) {
-  const acquired = stagedDiff(repoRoot, { gitExecutable, runner: gitRunner })
+  const acquired = stagedDiff(repoRoot, { gitExecutable, indexFile, runner: gitRunner })
   if (!acquired.ok) {
     return {
       findings: [],
@@ -708,7 +721,7 @@ export function scanStagedRepository({
     }
   }
   const sections = parseDiffSections(acquired.diff)
-  const binary = readBinaryChanges({ repoRoot, revisions: ['--cached'], sections, rules, exceptions, repo, gitExecutable, gitRunner })
+  const binary = readBinaryChanges({ repoRoot, revisions: ['--cached'], sections, rules, exceptions, repo, gitExecutable, gitRunner, indexFile })
   return {
     findings: [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings],
     diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
