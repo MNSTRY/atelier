@@ -1,7 +1,7 @@
-import { prepareViewCooperatively } from '../../projection/obsidian/materialize/prepare-view.mjs'
+import { createCooperativeBudget, prepareViewCooperatively } from '../../projection/obsidian/materialize/prepare-view.mjs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
+import { buildCanonicalGraph, buildCanonicalGraphSteps, createGraphFileCache } from '../../graph/graph.mjs'
 import { markdownMetadata } from '../../graph/knowledge-graph.mjs'
 import { EMITTER_VERSION, createPreparationCache, prepareView, readMarkdownLens, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { personalWorkspaceGraph } from '../../projection/obsidian/personal-workspace.mjs'
@@ -129,8 +129,42 @@ export function profileFor({ project, workspaceId, audienceAllow }) {
 // `deferPersonalValidation` (the engine), an unconfirmed key refuses `personal-validation-pending` instead of composing
 // on this thread.
 export function buildGraph({ project, eligibility, cache = null, index = null, deferPersonalValidation = false }) {
-  const observedDigest = cache && index ? (repoId, relative) => index.get(sourceKey(repoId, relative))?.digest ?? null : null
+  const observedDigest = observedDigestOf(cache, index)
   const canonical = personalWorkspaceGraph(project, { fileCache: cache, observedDigest, defer: deferPersonalValidation }) ?? buildCanonicalGraph(project, { fileCache: cache, observedDigest })
+  return eligibleGraph(canonical, eligibility)
+}
+
+// The same graph, built with the event loop given a turn between the Markdown sources of the census, under the
+// caller's cooperative budget (`scheduling`: createCooperativeBudget's options, its guard checked at every wait). For
+// the maintenance engine's tick: a first tick reads every source, and a large corpus would hold the service's
+// listener for the whole census. A project bound to a personal workspace is built by its own route, in one stretch,
+// as buildGraph builds it.
+export async function buildGraphCooperatively({ project, eligibility, cache = null, index = null, deferPersonalValidation = false, scheduling = {} }) {
+  const observedDigest = observedDigestOf(cache, index)
+  // The personal route answers for a bound project, and refuses a project that carries the reserved key unbound.
+  const personal = personalWorkspaceGraph(project, { fileCache: cache, observedDigest, defer: deferPersonalValidation })
+  if (personal !== null) return eligibleGraph(personal, eligibility)
+  const budget = createCooperativeBudget(scheduling)
+  budget.check()
+  const steps = buildCanonicalGraphSteps(project, { fileCache: cache, observedDigest })
+  let canonical
+  try {
+    for (;;) {
+      const step = steps.next()
+      if (step.done) { canonical = step.value; break }
+      await budget.checkpoint(step.value)
+    }
+  } catch (error) {
+    steps.return?.()
+    throw error
+  }
+  budget.finish('graph-assembled')
+  return eligibleGraph(canonical, eligibility)
+}
+
+const observedDigestOf = (cache, index) => (cache && index ? (repoId, relative) => index.get(sourceKey(repoId, relative))?.digest ?? null : null)
+
+function eligibleGraph(canonical, eligibility) {
   if (!canonical.ok) refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
   return withEligibility(canonical, eligibility.isEligible, assetEligibilityFor({ graph: canonical, eligibility }))
 }
@@ -193,5 +227,5 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
 // that note and reuses the rest. Both caches are derived, in-memory state: a
 // test may replace either seam with `() => null` to build or prepare in full.
 export function createProductionSeams() {
-  return { buildGraph, captureSnapshot, profileFor, prepareView, prepareViewCooperatively, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
+  return { buildGraph, buildGraphCooperatively, captureSnapshot, profileFor, prepareView, prepareViewCooperatively, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
 }

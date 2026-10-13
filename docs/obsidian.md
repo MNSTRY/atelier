@@ -1167,12 +1167,16 @@ a loader without waiting for it (see "The channel" in
 the publisher yields between complete units, so the service answers health and
 status while notes are emitted, staged and published. The first-tick figures
 in the table are from before that change and have not been taken again on that
-corpus. Parts of a tick still run without yielding: reading the sources and
-building the canonical graph, capturing the source snapshot, the publisher's
-restart recovery, validating a prepared view and planning its units, the
-exchange probe, writing and syncing the journal before the candidates move,
-and the look again at displaced files after the units
-(`recheckDisplacedFiles`). The read-back after a commit waits between
+corpus. Building the canonical graph gives the event loop a turn between the
+Markdown sources it reads, hashes and parses (the census): a first tick reads
+every source, and on a heavily loaded host the build of one view of 10,000
+invented notes held the listener for 8 s in one stretch. Walking the
+directories, resolving the links and assembling the graph still run through.
+So do capturing the source snapshot, the publisher's restart recovery,
+validating a prepared view and planning its units, the exchange probe, writing
+and syncing the journal before the candidates move, and the look again at
+displaced files after the units (`recheckDisplacedFiles`).
+The read-back after a commit waits between
 notes: on a loaded host it took 16.8 s for one view of 10,000 invented notes
 and held the listener for all of it, and now a request is answered between two
 notes. Nothing is checked at those waits, since the generation is committed. A

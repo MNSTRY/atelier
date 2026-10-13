@@ -222,6 +222,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   // A caller that replaced prepareView and left the cooperative preparation as it ships prepares views its own way: its
   // seam is used, synchronously, whether it handed in that one member or the production seams with that member replaced.
   if (seams.prepareView !== production.prepareView && seams.prepareViewCooperatively === production.prepareViewCooperatively) seams.prepareViewCooperatively = null
+  // The same for the graph: a caller that replaced buildGraph and left the cooperative build as it ships builds its own way.
+  if (seams.buildGraph !== production.buildGraph && seams.buildGraphCooperatively === production.buildGraphCooperatively) seams.buildGraphCooperatively = null
   const rules = { ...ENGINE_PRIMITIVES, ...primitives }
   // Optional local qualification telemetry. It has no authority to change a
   // tick's result, and records elapsed boundaries rather than a budget claim.
@@ -739,7 +741,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         // A personal workspace whose validity key is not confirmed yet is composed off the event loop, then built again.
         const build = () => seams.buildGraph({ project, eligibility, cache: graphCache, index, deferPersonalValidation: true })
         let graph
-        try { graph = build() } catch (error) {
+        // Any other project is built with the event loop given a turn between the Markdown sources of the census: a
+        // first tick reads every source. The settings that select the views are checked at each wait, as during a
+        // preparation, and the look again at the sources after the build sees a source that moved during it.
+        if (typeof seams.buildGraphCooperatively === 'function' && personalWorkspaceBindingOf(project) === null) {
+          graph = await seams.buildGraphCooperatively({ project, eligibility, cache: graphCache, index, scheduling: { guard: assertBindings } })
+        } else try { graph = build() } catch (error) {
           if (error?.code !== PERSONAL_VALIDATION_PENDING) throw error
           const verdict = await validatePersonalWorkspace(project)
           if (verdict?.ok !== true) refuse(verdict?.code ?? 'personal-binding-unrecognized', 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })

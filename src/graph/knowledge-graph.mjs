@@ -1387,7 +1387,24 @@ function markdownCensus({ repoName, repoRoot, coverage, file, accessConfig, cach
   return { node: structuredClone(entry.node), scan: structuredClone(entry.scan), reused: entry === cached, read }
 }
 
-export function buildKnowledgeGraph({
+// Runs the steps of a graph build through, with no wait, and answers what the build answers.
+export function runGraphSteps(steps) {
+  for (;;) {
+    const step = steps.next()
+    if (step.done) return step.value
+  }
+}
+
+// The knowledge graph of a workspace, in one stretch. Every caller but the maintenance engine's tick builds it this way.
+export function buildKnowledgeGraph(options) {
+  return runGraphSteps(buildKnowledgeGraphSteps(options))
+}
+
+// The same build as steps: one after each Markdown source of the census (its read, hash and parse, or its reuse from
+// the file cache), named 'graph-census'. A caller that gives the event loop a turn between steps (the maintenance
+// engine) keeps a large census from holding it; walking the directories, resolving links and assembling the graph
+// are not split. The answer is the one buildKnowledgeGraph gives.
+export function* buildKnowledgeGraphSteps({
   workspaceRoot,
   repoAccessConfig,
   repoRoots = null,
@@ -1466,6 +1483,7 @@ export function buildKnowledgeGraph({
         scanned.set(node, entry.scan)
         reuse[entry.reused ? 'reused' : 'derived'] += 1
         if (entry.read) reuse.read += 1
+        yield 'graph-census'
       } else {
         node = nodeForFile(repoName, repoRoot, coverage, file, accessConfig)
       }
