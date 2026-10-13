@@ -29,10 +29,12 @@ import { createFsWatcherFactory, createNullWatcherFactory } from '../../src/runt
 // The longest a run may declare. A first publication of ten thousand notes in six views takes more than an hour on
 // an ordinary machine. The service's own interval is longer still, so the first tick is the only one its loop starts.
 const CEILING_MS = 4 * 60 * 60 * 1000
-// Scenarios that run one more tick after the first publication, with nothing changed, and judge the health requests
-// across it. `next-tick` keeps the watcher a service runs with, so the tick is told of the notes the publication
-// wrote, as the tick after a publication is. `full-reconciliation` makes that tick a full reconciliation, as one is
-// every five minutes. Either way the engine opens and hashes files it need not prepare or publish.
+// Scenarios that ask the service for one more tick after the first publication, with nothing changed, and judge the
+// health requests across it. `next-tick` keeps the watcher a service runs with, so the tick is told of the notes the
+// publication wrote, as the tick after a publication is; it is also a full reconciliation when the first tick began
+// five minutes or more before it, in a service as here, and the result says which it was. `full-reconciliation`
+// makes that tick a full reconciliation whatever the first one took. Either way the engine opens and hashes files it
+// need not prepare or publish.
 export const SECOND_TICK_SCENARIOS = Object.freeze(['next-tick', 'full-reconciliation'])
 const entry = fileURLToPath(import.meta.url)
 const repository = fileURLToPath(new URL('../../', import.meta.url))
@@ -49,20 +51,37 @@ const sendTerminal = message => new Promise((resolve, reject) => {
   if (!process.connected) return reject(new Error('owning IPC controller disconnected'))
   process.send(message, error => error ? reject(error) : resolve())
 })
-// The watcher a service runs with, counted: what it reported, how often it named no file, and which published notes
-// it named (a note is a Markdown file of a vault outside the app's own folder). Every event is passed on unchanged.
-// `inner` is the factory counted, `now` the clock of `lastAtMs`.
-export function countingWatcherFactory({ inner = createFsWatcherFactory(), now = epochMs } = {}) {
-  const seen = { events: 0, unnamed: 0, lastAtMs: null, vaultNotes: new Set() }
+// The watcher a service runs with, counted: what it reported, how often it named no file (and how often that was in
+// a vault, where the engine then reads every note of the view), which published notes it named (a note is a Markdown
+// file of a vault outside the app's own folder; the same path in two vaults is two notes), and how many roots it could
+// not watch. Every event is passed on as it came. `make` builds the factory counted, `now` is the clock of `lastAtMs`.
+export function countingWatcherFactory({ make = createFsWatcherFactory, now = epochMs } = {}) {
+  const seen = { events: 0, unnamed: 0, unnamedInVault: 0, unavailable: 0, lastAtMs: null, vaultNotes: new Set() }
+  const inner = make({ onUnavailable: () => { seen.unavailable += 1 } })
   const factory = ({ roots, onEvent }) => inner({ roots, onEvent(event) {
+    const inVault = String(event.rootId).startsWith('vault:')
     seen.events += 1
     seen.lastAtMs = now()
-    if (typeof event.relative !== 'string') seen.unnamed += 1
-    else if (String(event.rootId).startsWith('vault:') && event.relative.endsWith('.md') && !event.relative.split('/').includes('.obsidian')) seen.vaultNotes.add(`${event.rootId}/${event.relative}`)
+    if (typeof event.relative !== 'string') { seen.unnamed += 1; if (inVault) seen.unnamedInVault += 1 }
+    else if (inVault && event.relative.endsWith('.md') && !event.relative.split('/').includes('.obsidian')) seen.vaultNotes.add(JSON.stringify([event.rootId, event.relative]))
     onEvent(event)
   } })
-  factory.seen = () => ({ events: seen.events, unnamed: seen.unnamed, lastAtMs: seen.lastAtMs, vaultNotesNamed: seen.vaultNotes.size })
+  factory.seen = () => ({ events: seen.events, unnamed: seen.unnamed, unnamedInVault: seen.unnamedInVault, unavailable: seen.unavailable, lastAtMs: seen.lastAtMs, vaultNotesNamed: seen.vaultNotes.size })
   return factory
+}
+
+// The longest delay of the event loop across one operation, and when the operation began and ended. A histogram
+// that was just reset records nothing at its next sample, which only gives it a point to measure from; so it is
+// given a timer turn before the operation, or a stretch the operation begins with would be that sample. It is read a
+// timer turn after the operation, when it has sampled the stretch the operation ended with.
+export async function measureEventLoopDelay(histogram, operation, { pause = sleep } = {}) {
+  histogram.reset()
+  await pause(25)
+  const startedMs = epochMs()
+  const value = await operation()
+  const endedMs = epochMs()
+  await pause(30)
+  return { value, startedMs, endedMs, maxEventLoopDelayMs: histogram.max / 1e6 }
 }
 
 function summaryBursts() {
@@ -97,7 +116,7 @@ async function serviceChild() {
     try { return await operation({ ...input, scheduling: { ...input.scheduling, onBurst: value => bursts.record(value) } }) }
     finally { send({ type: 'phase', phase, scopeId: input.scope?.scopeId ?? input.recoveryStore?.scopeId, startedMs, endedMs: epochMs(), bursts: bursts.result() }) }
   }
-  let tick = 0, service = null, engineRef = null, transitioning = false, stopRequested = false
+  let tick = 0, service = null, engineRef = null, transitioning = false, stopRequested = false, lastTick = null
   const stop = async () => { stopRequested = true; if (service) await service.shutdown('benchmark-owner-stop') }
   process.on('message', async message => {
     if (message?.type === 'stop') void stop()
@@ -106,24 +125,24 @@ async function serviceChild() {
       try { await sendTerminal({ type: 'transition', ...(await driver.run(engineRef)) }) }
       catch (error) { send({ type: 'transition-error', code: error.code ?? error.name, message: String(error.message) }); process.exitCode = 1; await stop() }
     }
-    if (message?.type === 'transition' && secondTick && engineRef && !transitioning) {
+    if (message?.type === 'transition' && secondTick && service && !transitioning) {
       transitioning = true
       try {
         // A watcher reports after the writes it saw. The tick waits until it has reported nothing for half a second,
         // for ten seconds at most, as the tick of a service comes long after the publication before it.
         const askedAtMs = epochMs()
         if (watchers) while (epochMs() - askedAtMs < 10_000 && epochMs() - Math.max(watchers.seen().lastAtMs ?? 0, askedAtMs) < 500) await sleep(50)
-        // The delay of this tick alone: what the first one reached is in its own event.
-        histogram.reset()
-        const startedMs = epochMs()
-        const report = await engineRef.tick()
-        const endedMs = epochMs()
-        // The histogram learns of a stretch when its timer next fires, which is after this continuation.
-        await sleep(30)
+        const before = watchers ? watchers.seen() : null
+        // The service's own tick, through its loop: the record check and the look at the plugin files that a service
+        // makes around the engine's tick are part of the stretch, and no other tick can run beside it.
+        const ticksBefore = tick
+        const measured = await measureEventLoopDelay(histogram, () => service.tickNow())
+        if (tick !== ticksBefore + 1 || lastTick?.number !== tick) throw Object.assign(new Error('the service did not complete exactly one tick when asked'), { code: 'second-tick-not-run' })
         await sendTerminal({
-          type: 'transition', kind: 'second-tick', startedMs, endedMs, state: report.state, full: report.full === true, changes: (report.changes ?? []).length,
-          scopes: (report.scopes ?? []).map(({ scopeId, state, reason, verified }) => ({ scopeId, state, reason, verified })),
-          maxEventLoopDelayMs: histogram.max / 1e6, watcher: watchers ? watchers.seen() : null,
+          type: 'transition', kind: 'second-tick', startedMs: measured.startedMs, endedMs: measured.endedMs, engineTickMs: lastTick.endedMs - lastTick.startedMs,
+          state: lastTick.report.state, full: lastTick.report.full === true, changes: (lastTick.report.changes ?? []).length,
+          scopes: (lastTick.report.scopes ?? []).map(({ scopeId, state, reason, verified }) => ({ scopeId, state, reason, verified })),
+          maxEventLoopDelayMs: measured.maxEventLoopDelayMs, watcher: watchers ? { before, after: watchers.seen() } : null,
         })
       } catch (error) { send({ type: 'transition-error', code: error.code ?? error.name, message: String(error.message) }); process.exitCode = 1; await stop() }
     }
@@ -150,7 +169,8 @@ async function serviceChild() {
           const startedMs = epochMs(), number = ++tick
           try {
             const report = await engine.tick()
-            send({ type: 'tick', number, startedMs, endedMs: epochMs(), report: { state: report.state, reason: report.reason ?? null, scopes: (report.scopes ?? []).map(({ scopeId, state, reason, verified }) => ({ scopeId, state, reason, verified })) }, maxEventLoopDelayMs: histogram.max / 1e6 })
+            lastTick = { number, startedMs, endedMs: epochMs(), report }
+            send({ type: 'tick', number, startedMs, endedMs: lastTick.endedMs, report: { state: report.state, reason: report.reason ?? null, scopes: (report.scopes ?? []).map(({ scopeId, state, reason, verified }) => ({ scopeId, state, reason, verified })) }, maxEventLoopDelayMs: histogram.max / 1e6 })
             return report
           } catch (error) { send({ type: 'tick-error', number, code: error.code ?? 'untyped-error' }); throw error }
         } }
@@ -249,6 +269,28 @@ export function judgeTransitionWindow({ probes, transition, identity, record }) 
   assert.ok(firstLagMs < 250 && lastLagMs < 250)
   return { probes: window.length, maxResponseMs: slowestMs(window), firstLagMs, lastLagMs }
 }
+// A second tick, judged: what the child reported of it, then the health requests across it. Nothing changed between
+// the two ticks, so it must change nothing and leave every view as the first reported it. A full-reconciliation stage
+// must have run one; a next-tick stage must have been told of published notes before the tick, by a watcher that
+// watched every root, or it measured a tick that was told nothing. The tick must not have held the event loop for
+// five seconds, by the child's own measure, whatever the requests show: one sent just after it began waits less than
+// it lasted. A tick shorter than the edge allowance that no request overlapped fell between two requests; it held
+// nothing long enough to judge, and is passed with none recorded.
+export function judgeSecondTick({ probes, second, scenario, scopes, identity, record }) {
+  assert.deepEqual([second.kind, second.state], ['second-tick', 'ticked'], JSON.stringify(second))
+  if (scenario === 'full-reconciliation') assert.equal(second.full, true, 'the second tick of this stage must be a full reconciliation')
+  assert.equal(second.changes, 0, 'nothing changed between the two ticks')
+  assert.equal(second.scopes.length, scopes)
+  for (const scope of second.scopes) assert.deepEqual([scope.state, scope.verified], ['current', true], JSON.stringify(scope))
+  if (scenario === 'next-tick') {
+    assert.equal(second.watcher.before.unavailable, 0, 'the watcher could not watch every root')
+    assert.ok(second.watcher.before.vaultNotesNamed > 0, `the watcher named no published note before the tick: ${JSON.stringify(second.watcher.before)}`)
+  }
+  assert.ok(second.maxEventLoopDelayMs < 5000, `the second tick held the event loop for ${Math.round(second.maxEventLoopDelayMs)} ms`)
+  const overlapping = probes.some(probe => probe.startedMs <= second.endedMs && probe.endedMs >= second.startedMs)
+  if (!overlapping && second.endedMs - second.startedMs < 250) return { probes: 0, maxResponseMs: 0, firstLagMs: null, lastLagMs: null }
+  return judgeTransitionWindow({ probes, transition: second, identity, record })
+}
 function sourcePin() {
   const git = args => childProcess.execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
   const paths = ['src/projection/obsidian/materialize/prepare-view.mjs', 'src/projection/obsidian/proposals/adapter.mjs', 'src/projection/obsidian/proposals/observation.mjs', 'src/projection/obsidian/publication/publisher.mjs', 'src/runtime/obsidian/engine.mjs', 'src/runtime/obsidian/observation.mjs', 'src/runtime/obsidian/pipeline.mjs', 'src/runtime/obsidian/service.mjs', 'src/runtime/obsidian/watchers.mjs', 'test/helpers/obsidian-event-loop-corpus.mjs', 'scripts/obsidian/benchmark-event-loop.mjs', 'package-lock.json']
@@ -317,7 +359,14 @@ async function controller() {
     const identity = { runtimeId: listening.runtimeId, pid: child.pid, workspaceId: corpus.workspaceId }
     const record = readServiceRecord({ workspaceRoot: corpus.workspaceRoot, workspaceId: corpus.workspaceId })
     assert.ok(record)
-    result.health = { identity, ...judgeFirstTickWindow({ probes: result.probes, tick, listeningAtMs: listening.atMs, identity, record }), awaitedProbeInFlightAtEnd: atEnd.waited }
+    // A stage that is there for its second tick still runs and records it when the first tick's requests fail their
+    // judgement, which a large publication on a loaded host can: the run fails for the first tick all the same, below.
+    let firstTickFailure = null
+    try { result.health = { identity, ...judgeFirstTickWindow({ probes: result.probes, tick, listeningAtMs: listening.atMs, identity, record }), awaitedProbeInFlightAtEnd: atEnd.waited } } catch (error) {
+      if (!SECOND_TICK_SCENARIOS.includes(scenario)) throw error
+      firstTickFailure = error
+      result.firstTickFailure = { code: error.code ?? error.name, message: String(error.message) }
+    }
     // Check committed counts and plugin installation from actual durable state.
     result.publications = corpus.manifest.scopes.map(({ scopeId }) => {
       const directory = path.join(corpus.workspaceRoot, 'state', 'manifests', scopeId)
@@ -337,18 +386,14 @@ async function controller() {
       while (!result.events.some(event => event.type === 'transition' || event.type === 'transition-error') && terminal.value === null && epochMs() - startedMs < timeoutMs && !interrupted) await sleep(25)
       const second = result.events.find(event => event.type === 'transition')
       assert.ok(second, JSON.stringify(result.events.find(event => event.type === 'transition-error') ?? { finiteTimeout: true, interrupted, terminal: terminal.value }))
-      // Nothing changed between the two ticks: the second must leave every view as the first reported it, and be the
-      // kind of tick the scenario names. A tick that was told of no published note measured nothing of the kind.
-      assert.deepEqual([second.kind, second.state, second.full], ['second-tick', 'ticked', scenario === 'full-reconciliation'], JSON.stringify(second))
-      assert.equal(second.scopes.length, scopes)
-      for (const scope of second.scopes) assert.deepEqual([scope.state, scope.verified], ['current', true], JSON.stringify(scope))
-      if (scenario === 'next-tick') assert.ok(second.watcher.vaultNotesNamed > 0, `the watcher named no published note: ${JSON.stringify(second.watcher)}`)
+      // Recorded before it is judged: a stage that fails keeps what it measured.
+      result.secondTick = { ...second, tickMs: second.endedMs - second.startedMs, sinceFirstTickBeganMs: second.startedMs - tick.startedMs, notesPublished: notes * scopes }
       await sleep(50)
       // As at the end of the first tick: the request in flight when the second tick ended is part of its window.
       const atSecondEnd = await settleProbeInFlight({ inFlight: () => probeSentAt, untilMs: second.endedMs })
-      result.secondTick = { ...second, tickMs: second.endedMs - second.startedMs, notesPublished: notes * scopes }
       assert.ok(atSecondEnd.settled, 'the request in flight at the end of the second tick must be answered or time out')
-      result.secondTickHealth = { identity, ...judgeTransitionWindow({ probes: result.probes, transition: second, identity, record }), awaitedProbeInFlightAtEnd: atSecondEnd.waited }
+      result.secondTickHealth = { identity, ...judgeSecondTick({ probes: result.probes, second, scenario, scopes, identity, record }), awaitedProbeInFlightAtEnd: atSecondEnd.waited }
+      if (firstTickFailure !== null) throw firstTickFailure
     } else if (scenario !== 'publication') {
       child.send({ type: 'transition' })
       while (!result.events.some(event => event.type === 'transition' || event.type === 'transition-error') && terminal.value === null && epochMs() - startedMs < timeoutMs && !interrupted) await sleep(25)
