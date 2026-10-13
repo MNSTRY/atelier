@@ -661,8 +661,24 @@ function appendLine(file, value) {
 // The full context of one measurement, written once to a new file. The 'wx'
 // flag refuses an existing file, so no capture, measurement or label is ever
 // overwritten. `measurementDigest` is the digest a label gives the same line.
+// Returns the identity of the file written, read from its own descriptor.
 function writeCapture(file, measurement, context) {
-  fs.writeFileSync(file, `${JSON.stringify({ schema: CAPTURE_SCHEMA, measurementDigest: contentDigest(JSON.stringify(measurement)), measurement, ...context }, null, 2)}\n`, { flag: 'wx' })
+  const descriptor = fs.openSync(file, 'wx')
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify({ schema: CAPTURE_SCHEMA, measurementDigest: contentDigest(JSON.stringify(measurement)), measurement, ...context }, null, 2)}\n`)
+    const written = fs.fstatSync(descriptor, { bigint: true })
+    return { dev: written.dev, ino: written.ino }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+}
+
+// Removes the capture only if the name still holds the regular file this run
+// wrote: never a link, and never a file that took its place.
+function removeOwnCapture(file, identity) {
+  let current = null
+  try { current = fs.lstatSync(file, { bigint: true }) } catch { return }
+  if (current.isFile() && current.dev === identity.dev && current.ino === identity.ino) fs.rmSync(file)
 }
 
 function argsOf(argv) {
@@ -702,12 +718,18 @@ export function main(argv = process.argv.slice(2)) {
         try { return path.join(fs.realpathSync(path.dirname(full)), path.basename(full)) } catch { return full }
       }
       if (located(capturePath) === located(out)) throw new Error('the capture file and the measurements file are the same file; name a different capture file')
-      if (fs.existsSync(capturePath)) throw new Error('the capture file already exists; name a new file')
+      // Anything already at the name refuses, a dangling link included: lstat
+      // does not follow it, where existsSync and some platforms' 'wx' would.
+      let occupied = true
+      try { fs.lstatSync(capturePath) } catch (error) { occupied = error.code !== 'ENOENT' }
+      if (occupied) throw new Error('the capture file already exists; name a new file')
       // The measurement line must be appendable before a capture is written, so
       // a capture never stands for a line that was never written.
       if (!args.print) {
+        // The directory as the system resolves it: path.resolve would collapse
+        // a `..` after a symlink as text and name another directory.
         let parent = null
-        try { parent = fs.statSync(path.dirname(path.resolve(out))) } catch { parent = null }
+        try { parent = fs.statSync(path.dirname(out)) } catch { parent = null }
         if (!parent?.isDirectory()) throw new Error('the measurements file\'s directory does not exist; nothing was measured or written')
         if (fs.existsSync(out) && fs.statSync(out).isDirectory()) throw new Error('the measurements file is a directory; nothing was measured or written')
       }
@@ -716,18 +738,21 @@ export function main(argv = process.argv.slice(2)) {
     let context = null
     const value = measure({ repo: typeof args.repo === 'string' ? args.repo : process.cwd(), pr: args.pr, base: args.base, head: args.head, mode: args.mode ?? 'live',
       capture: capturePath === null ? null : (full) => { context = full } })
+    let written = null
     if (capturePath !== null) {
-      writeCapture(capturePath, value, context)
+      written = writeCapture(capturePath, value, context)
       // The names can still be one file where no path check sees it (another
       // spelling on a case-insensitive volume, a `..` after a symlink): compare
       // the files themselves. A measurements file that did not exist before was
       // created by this capture, so it is removed again; an existing one cannot
       // be the capture, because writing it would have been refused.
       if (fs.existsSync(out)) {
-        const [captured, target] = [fs.statSync(capturePath), fs.statSync(out)]
-        if (captured.ino !== 0 && captured.dev === target.dev && captured.ino === target.ino) {
-          if (!outExisted) fs.rmSync(capturePath)
-          throw new Error('the capture file and the measurements file are the same file; nothing was kept and no measurement line was appended')
+        const target = fs.statSync(out, { bigint: true })
+        if (written.ino !== 0n && written.dev === target.dev && written.ino === target.ino) {
+          if (!outExisted) removeOwnCapture(capturePath, written)
+          throw new Error(outExisted
+            ? 'the capture file and the measurements file are the same file; no measurement line was appended'
+            : 'the capture file and the measurements file are the same file; nothing was kept and no measurement line was appended')
         }
       }
     }
@@ -737,7 +762,7 @@ export function main(argv = process.argv.slice(2)) {
         appendLine(out, value)
       } catch (error) {
         // A capture without its line would name a measurement that does not exist.
-        if (capturePath !== null) fs.rmSync(capturePath, { force: true })
+        if (written) removeOwnCapture(capturePath, written)
         throw error
       }
       console.log(JSON.stringify(value.summary))

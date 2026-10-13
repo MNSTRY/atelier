@@ -810,11 +810,23 @@ test('a capture refused when it is written appends nothing, and one that turns o
   // link target is not created and no line is appended.
   const target = path.join(outside, 'never-created.json')
   const dangling = path.join(outside, 'dangling.json')
-  fs.symlinkSync(target, dangling)
-  let result = run('--out', out, '--capture', dangling)
-  assert.equal(result.status, 2)
-  assert.equal(fs.existsSync(target), false)
-  assert.equal(fs.existsSync(out), false)
+  let linked = true
+  try {
+    fs.symlinkSync(target, dangling, 'file')
+  } catch (error) {
+    if (error.code !== 'EPERM') throw error
+    t.diagnostic('file symlinks need a privilege this host lacks')
+    linked = false
+  }
+  let result
+  if (linked) {
+    result = run('--out', out, '--capture', dangling)
+    assert.equal(result.status, 2, result.stderr)
+    assert.match(result.stderr, /the capture file already exists; name a new file/, 'refused before measuring, not left to the write')
+    assert.equal(fs.existsSync(target), false)
+    assert.equal(fs.existsSync(out), false)
+    assert.equal(fs.lstatSync(dangling).isSymbolicLink(), true, 'the link is left as it was')
+  }
 
   // A capture whose directory does not exist is refused at write time; nothing appended.
   result = run('--out', out, '--capture', path.join(outside, 'missing', 'capture.json'))
@@ -832,6 +844,31 @@ test('a capture refused when it is written appends nothing, and one that turns o
   assert.equal(result.status, 2)
   assert.match(result.stderr, /is a directory/)
   assert.equal(fs.existsSync(orphan), false)
+
+  // A measurements directory reached through a symlinked directory and `..` is
+  // the one the system resolves, not the text: the capture is accepted.
+  const structure = path.join(outside, 'tree')
+  fs.mkdirSync(path.join(structure, 'a', 'b'), { recursive: true })
+  fs.mkdirSync(path.join(structure, 'a', 'x'))
+  fs.symlinkSync(path.join(structure, 'a', 'b'), path.join(structure, 'ln'), process.platform === 'win32' ? 'junction' : 'dir')
+  const throughLink = [structure, 'ln', '..', 'x', 'measurements.jsonl'].join(path.sep)
+  result = run('--out', throughLink, '--capture', path.join(outside, 'through-link-capture.json'))
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(fs.readFileSync(path.join(structure, 'a', 'x', 'measurements.jsonl'), 'utf8').trim().split('\n').length, 1)
+
+  // A measurements file that refuses the append (read-only): the capture this
+  // run wrote is removed, and the measurements file is left as it was.
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+    const locked = path.join(outside, 'locked.jsonl')
+    fs.writeFileSync(locked, '')
+    fs.chmodSync(locked, 0o444)
+    const lockedCapture = path.join(outside, 'locked-capture.json')
+    result = run('--out', locked, '--capture', lockedCapture)
+    assert.equal(result.status, 2, result.stderr)
+    assert.equal(fs.existsSync(lockedCapture), false, 'no capture is left for a line that was never written')
+    assert.equal(fs.readFileSync(locked, 'utf8'), '')
+    fs.chmodSync(locked, 0o644)
+  }
 
   // Another spelling of a measurements file that does not exist yet: on a
   // case-insensitive volume the two names are one file, which the capture would
