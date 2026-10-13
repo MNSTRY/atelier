@@ -2259,6 +2259,36 @@ test('an engine whose lock could not be given back at the end of a tick gives it
   assert.deepEqual([stuck.second.state, stuck.second.reason, stuck.second.lock?.reason], ['busy', 'engine-lock-held', 'held-by-this-process'], 'the oracle can fail: the engine waits for its own ticket')
 })
 
+test('a lock release owed and then given back is owed no more: a later refusal is recorded under the lock its tick holds, taken once', { ...needsExchange, skip: needsExchange.skip ?? (modeRefusesWrites ? false : 'a directory mode refuses no write here') }, async (t) => {
+  const world = makeWorld(t)
+  // The first two releases are refused: the one at the end of the first tick, and the owed one at the start of the
+  // second. The second tick's own release at its end then succeeds.
+  let refusals = 2
+  let acquisitions = 0
+  const acquireEngineLock = async (input) => {
+    acquisitions += 1
+    const lock = await acquirePrivateGenerationLock(input)
+    if (!lock.acquired) return lock
+    return { ...lock, release() {
+      if (refusals === 0) return lock.release()
+      refusals -= 1
+      return unwritableWhile(input.directory, () => lock.release())
+    } }
+  }
+  const engine = world.engine({ primitives: { ...ENGINE_PRIMITIVES, acquireEngineLock } })
+  await assert.rejects(engine.tick(), (error) => error.code === 'EACCES')
+  await assert.rejects(engine.tick(), (error) => error.code === 'EACCES', 'the owed release is refused again')
+  assert.equal(refusals, 0)
+  assert.equal((await engine.tick()).state, 'ticked')
+  // A tick that refuses with a typed reason records the refusal through the lock it already holds.
+  fs.writeFileSync(world.stateFile('pending-edits.json'), '{ "not": "pending edits" }\n')
+  acquisitions = 0
+  const refused = await engine.tick()
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  assert.equal(acquisitions, 1, 'the lock is taken once in that tick, not given back in its middle and taken again')
+  assert.equal(world.state('freshness.json').scopes[0].state, 'stale', 'and the refusal is recorded')
+})
+
 test('the engine lock: one holder, released and pruned, and taken from a dead holder only', async (t) => {
   const lock = lockWorld(t)
   const first = await lock.acquire()

@@ -296,7 +296,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   }
 
   // Gives the lock back at the end of a tick. One that cannot be given back (its released ticket could not be written)
-  // stays held, and the failure is the tick's: the next tick gives it back before anything else.
+  // stays held, and the failure is the tick's: the next tick gives it back before anything else. One given back owes
+  // nothing more, whether this tick took it or an earlier one could not give it back.
   function dropLock() {
     const lock = heldLock
     if (lock === null) return
@@ -305,6 +306,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       throw error
     }
     heldLock = null
+    releaseOwed = false
   }
 
   function onWatcherEvent(roots, { rootId, relative }) {
