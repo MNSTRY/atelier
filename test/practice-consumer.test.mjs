@@ -846,15 +846,19 @@ test('a capture refused when it is written appends nothing, and one that turns o
   assert.equal(fs.existsSync(orphan), false)
 
   // A measurements directory reached through a symlinked directory and `..` is
-  // the one the system resolves, not the text: the capture is accepted.
+  // the one the system resolves: POSIX follows `ln` before `..`, while Windows
+  // removes `ln\..` from the text first. The capture is accepted either way.
   const structure = path.join(outside, 'tree')
   fs.mkdirSync(path.join(structure, 'a', 'b'), { recursive: true })
   fs.mkdirSync(path.join(structure, 'a', 'x'))
+  fs.mkdirSync(path.join(structure, 'x'))
   fs.symlinkSync(path.join(structure, 'a', 'b'), path.join(structure, 'ln'), process.platform === 'win32' ? 'junction' : 'dir')
   const throughLink = [structure, 'ln', '..', 'x', 'measurements.jsonl'].join(path.sep)
   result = run('--out', throughLink, '--capture', path.join(outside, 'through-link-capture.json'))
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(fs.readFileSync(path.join(structure, 'a', 'x', 'measurements.jsonl'), 'utf8').trim().split('\n').length, 1)
+  const [resolved, textual] = process.platform === 'win32' ? [['x'], ['a', 'x']] : [['a', 'x'], ['x']]
+  assert.equal(fs.readFileSync(path.join(structure, ...resolved, 'measurements.jsonl'), 'utf8').trim().split('\n').length, 1)
+  assert.equal(fs.existsSync(path.join(structure, ...textual, 'measurements.jsonl')), false)
 
   // A measurements file that refuses the append (read-only): the capture this
   // run wrote is removed, and the measurements file is left as it was.
