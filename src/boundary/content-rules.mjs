@@ -583,21 +583,23 @@ const DECLARED_TEXT_BATCH_BYTES = DIFF_RESULT_MAX_BYTES / 2
  * rewrite a decomposed name on the command line and match nothing. Returns, per
  * path, `{ addedLines }` or `{ cause }` naming why the text was not read.
  */
-function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, gitRunner, indexFile = null }) {
+function declaredBinaryTextLines({ repoRoot, revisions, entries, changedPaths = [], gitExecutable, gitRunner, indexFile = null }) {
   const outcomes = new Map()
   const read = (group) => {
     const paths = [...new Set(group.flatMap(({ section }) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
     // A literal pathspec also matches a directory of that name, so a file that
-    // replaced a directory would bring the directory's files in as rename
-    // candidates and as output. Their contents are excluded unless another path
-    // read here lies inside.
-    const subtrees = paths.filter((value) => !paths.some((other) => other.startsWith(`${value}/`)))
+    // replaced a directory would bring the directory's changed files in as
+    // rename candidates and as output. Only changed entries can appear in a
+    // diff, so exactly those under a path read here, and not read themselves,
+    // are excluded; usually there are none.
+    const reading = new Set(paths)
+    const excluded = changedPaths.filter((value) => !reading.has(value) && paths.some((read) => value.startsWith(`${read}/`)))
     const result = gitOutputResult(repoRoot, [
       '-c', 'core.precomposeUnicode=false',
       ...canonicalDiffArgs(revisions, ['--text']),
       '--',
       ...paths.map((value) => `:(literal)${value}`),
-      ...subtrees.map((value) => `:(exclude,literal)${value}/`),
+      ...excluded.map((value) => `:(exclude,literal)${value}`),
     ], { gitExecutable, indexFile, runner: gitRunner })
     const parsed = result.ok ? parseDiffSections(result.stdout) : []
     for (const { section } of group) {
@@ -689,7 +691,8 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
     declaredText.push({ section, bytes: result.bytes })
   }
   if (declaredText.length > 0) {
-    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, gitExecutable, gitRunner, indexFile })
+    const changedPaths = [...new Set(sections.flatMap((section) => [section.path, section.oldPath]).filter((value) => value && value !== ''))]
+    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, changedPaths, gitExecutable, gitRunner, indexFile })
     const contentRules = rules.filter((rule) => (rule.kind ?? 'content') === 'content')
     for (const { section } of declaredText) {
       const { addedLines, cause } = outcomes.get(section.path)
