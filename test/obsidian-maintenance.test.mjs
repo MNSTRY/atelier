@@ -358,6 +358,110 @@ test('a note changed in the vault while the read-back waits is seen: by the read
   assert.deepEqual([behind.next.state, behind.pending], ['held-for-your-edit', 1], JSON.stringify(behind.next))
 })
 
+// A world with 70 more notes, published by a first tick, for the walks at the start of a later tick. The engine looks
+// at files through its `lstat` seam; from the second tick on, each look is handed to `onLook`.
+async function publishedWorldOfBuoys(t, { onLook = () => {} } = {}) {
+  const world = makeWorld(t)
+  for (let number = 0; number < 70; number += 1) fs.writeFileSync(world.source(`east-wing/notes/buoy-${String(number).padStart(2, '0')}.md`), note({ id: `east-wing:buoy-${number}`, title: `Buoy ${number}`, body: `Buoy ${number} marks the channel.` }))
+  let counting = false
+  const lstat = (file, ...rest) => { if (counting) onLook(String(file)); return fs.lstatSync(file, ...rest) }
+  const engine = world.engine({ lstat })
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  counting = true
+  const vault = world.vault()
+  const sourceRoots = REPOSITORIES.map((name) => world.source(name) + path.sep)
+  return {
+    world, engine,
+    notes: world.manifest().notes.map((item) => path.join(vault, ...item.path.split('/'))),
+    isNote: (file) => file.startsWith(vault + path.sep),
+    isSource: (file) => sourceRoots.some((root) => file.startsWith(root)),
+  }
+}
+
+test('at the start of a tick the walks over the vault and over the sources give the event loop a turn between files, and look at each file once: after a publication the watcher named, and at a full reconciliation', needsExchange, async (t) => {
+  // The turns of the event loop: an immediate that queues itself again. No clock is read.
+  let turns = 0
+  let spinning = true
+  const spin = () => { if (!spinning) return; turns += 1; setImmediate(spin) }
+  setImmediate(spin)
+  t.after(() => { spinning = false })
+  let looks = []
+  const { world, engine, notes, isNote, isSource } = await publishedWorldOfBuoys(t, { onLook: (file) => looks.push({ file, turn: turns }) })
+  const walked = (keep) => {
+    const mine = looks.filter((look) => keep(look.file))
+    return { files: mine.map((look) => look.file), stretches: new Set(mine.map((look) => look.turn)).size }
+  }
+  const checkTick = (report, full) => {
+    assert.deepEqual([report.state, report.full, report.changes.length, world.scope(report).state], ['ticked', full, 0, 'current'], JSON.stringify(report.changes))
+    const vault = walked(isNote)
+    assert.deepEqual([...vault.files].sort(), [...notes].sort(), 'each note of the view is looked at once')
+    assert.ok(vault.stretches >= 3, `the walk over ${vault.files.length} notes ran in ${vault.stretches} stretch(es)`)
+    const sources = walked(isSource)
+    assert.ok(sources.files.length >= 70 && new Set(sources.files).size === sources.files.length, `each source is looked at once: ${sources.files.length} looks`)
+    assert.ok(sources.stretches >= 3, `the walk over ${sources.files.length} sources ran in ${sources.stretches} stretch(es)`)
+  }
+  // The tick after a publication: the watcher has named every note the publication wrote.
+  for (const item of world.manifest().notes) world.emit(`vault:${FULL_SCOPE.scopeId}`, item.path)
+  looks = []
+  checkTick(await engine.tick(), false)
+  // A full reconciliation: every note and every source is hashed.
+  world.advance(FULL_INTERVAL)
+  looks = []
+  checkTick(await engine.tick(), true)
+  spinning = false
+})
+
+test('a vault note or a source changed at a wait of the walks at the start of a tick is seen: by that tick when its turn has not come, by the next tick when it has', needsExchange, async (t) => {
+  // A file edited from a turn of the event loop that a walk gives up, asked for at the twentieth look of that walk on
+  // the second tick: the edit runs between two looks. `pick` names the file to edit, `edit` writes it, and `read`
+  // reads what each tick left behind.
+  const editedAtAWait = async ({ walk, pick, edit, read = () => null }) => {
+    let keep = () => false
+    const order = []
+    let asked = null
+    let madeAfterLooks = null
+    const fixture = await publishedWorldOfBuoys(t, {
+      onLook: (file) => {
+        if (!keep(file)) return
+        order.push(file)
+        if (order.length === 20) asked = setImmediate(() => { edit(pick(fixture)); madeAfterLooks = order.length })
+      },
+    })
+    keep = walk === 'vault' ? fixture.isNote : fixture.isSource
+    let second
+    try { second = await fixture.engine.tick() } finally { clearImmediate(asked) }
+    assert.ok(madeAfterLooks !== null && madeAfterLooks >= 20 && madeAfterLooks < 60, `the edit was made at a wait of the ${walk} walk: after ${madeAfterLooks} looks`)
+    // Where the edited file stood in that walk.
+    const at = order.indexOf(pick(fixture))
+    const afterSecond = read(fixture)
+    const third = await fixture.engine.tick()
+    return { fixture, second, third, ahead: at >= madeAfterLooks, afterSecond, afterThird: read(fixture) }
+  }
+  // A published note edited by the person.
+  const noteEdit = (file) => fs.writeFileSync(file, `${fs.readFileSync(file, 'utf8')}\nWritten while the vault was walked.\n`)
+  const noteAhead = await editedAtAWait({ walk: 'vault', pick: (fixture) => fixture.notes[60], edit: noteEdit })
+  assert.equal(noteAhead.ahead, true)
+  assert.deepEqual([noteAhead.second.pendingEdits.length, noteAhead.fixture.world.scope(noteAhead.second).state], [1, 'held-for-your-edit'], 'read as edited by the walk that had not reached it')
+  const noteBehind = await editedAtAWait({ walk: 'vault', pick: (fixture) => fixture.notes[5], edit: noteEdit })
+  assert.equal(noteBehind.ahead, false)
+  assert.deepEqual([noteBehind.second.pendingEdits.length, noteBehind.fixture.world.scope(noteBehind.second).state], [0, 'current'], 'not seen by the walk that had passed it')
+  assert.deepEqual([noteBehind.third.pendingEdits.length, noteBehind.fixture.world.scope(noteBehind.third).state], [1, 'held-for-your-edit'], 'seen by the next tick')
+  // A source changed by its author: published with the change by the tick that read it changed.
+  const buoy = (number) => (fixture) => fixture.world.source(`east-wing/notes/buoy-${String(number).padStart(2, '0')}.md`)
+  const sourceEdit = (file) => fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('marks the channel.', 'marks the channel, moved in the night.'))
+  const publishedBuoy = (fixture, number) => fs.readFileSync(fixture.world.noteFile(`east-wing:buoy-${number}`), 'utf8')
+  const sourceAhead = await editedAtAWait({ walk: 'source', pick: buoy(64), edit: sourceEdit, read: (fixture) => publishedBuoy(fixture, 64) })
+  assert.equal(sourceAhead.ahead, true)
+  assert.deepEqual([sourceAhead.second.changes.length > 0, sourceAhead.fixture.world.scope(sourceAhead.second).state], [true, 'current'])
+  assert.match(sourceAhead.afterSecond, /moved in the night/, 'published by the tick that read it changed')
+  const sourceBehind = await editedAtAWait({ walk: 'source', pick: buoy(3), edit: sourceEdit, read: (fixture) => publishedBuoy(fixture, 3) })
+  assert.equal(sourceBehind.ahead, false)
+  assert.deepEqual([sourceBehind.second.changes.length, sourceBehind.fixture.world.scope(sourceBehind.second).state], [0, 'current'], 'not seen by the walk that had passed it')
+  assert.doesNotMatch(sourceBehind.afterSecond, /moved in the night/)
+  assert.equal(sourceBehind.fixture.world.scope(sourceBehind.third).state, 'current')
+  assert.match(sourceBehind.afterThird, /moved in the night/, 'published by the next tick')
+})
+
 test('an engine handed the production seams with prepareView replaced prepares through that replacement', needsExchange, async (t) => {
   const world = makeWorld(t)
   let replaced = 0

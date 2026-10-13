@@ -487,16 +487,32 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // 3. Vault notes: preserve, then queue. Compared with the bytes each note
     // was generated with, not with the previous look.
-    const pending = stateStore.readPendingEdits()
-    let edits = pending.edits
+    //
+    // Every view's notes are looked at first, and the walk waits between notes, so a large vault does not hold the
+    // listener for its whole length (at a full reconciliation every note is hashed, and after a publication the
+    // watcher has named each note it wrote). Nothing is checked at those waits and nothing is written: only this
+    // engine commits a manifest or writes the pending edits, under the lock this tick holds, so the manifest read
+    // before the walk is the one after it. A note changed after its turn is the next tick's to see, by its stat hint
+    // or the watcher, as one changed just after a walk that ran through is. The pending edits are then read,
+    // compared and written in one stretch, as before; the bytes an edit keeps are read there, not at the walk.
     const basesOf = new Map()
     const earlierLayout = new Set()
-    for (const { scope, store } of scopes) {
-      const { manifest, bases } = trustedNoteBases(store)
-      basesOf.set(scope.scopeId, bases)
-      if (!manifest) continue
-      if (manifestLayoutVersion(manifest) === 1) earlierLayout.add(scope.scopeId)
-      const vault = reconcile({ index, files: listVaultNotes({ scopeId: scope.scopeId, vaultRoot: store.vaultRoot, manifest }), prefix: vaultKey(scope.scopeId, ''), full, hinted, lstat })
+    const looked = []
+    const vaultStartedMs = phaseTime()
+    try {
+      const budget = createCooperativeBudget()
+      for (const { scope, store } of scopes) {
+        const { manifest, bases } = trustedNoteBases(store)
+        basesOf.set(scope.scopeId, bases)
+        if (!manifest) continue
+        if (manifestLayoutVersion(manifest) === 1) earlierLayout.add(scope.scopeId)
+        const vault = await reconcileCooperatively({ index, files: listVaultNotes({ scopeId: scope.scopeId, vaultRoot: store.vaultRoot, manifest }), prefix: vaultKey(scope.scopeId, ''), full, hinted, lstat }, budget)
+        looked.push({ scope, store, manifest, bases, vault })
+      }
+    } finally { reportPhase('vault-observation', vaultStartedMs) }
+    const pending = stateStore.readPendingEdits()
+    let edits = pending.edits
+    for (const { scope, store, manifest, bases, vault } of looked) {
       const digestOf = (notePath) => index.get(vaultKey(scope.scopeId, notePath))?.digest ?? null
       const observed = observeVaultEdits({ store, workspaceId, scopeId: scope.scopeId, manifest, bases, digestOf, edits, now, preserve: rules.preserve })
       edits = observed.edits
@@ -543,6 +559,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const lateWriters = []
     const lateDocument = stateStore.readLateWriters()
     const knownFindings = new Set(lateDocument.findings.map((item) => `${item.scopeId}\u0000${item.journalId}\u0000${item.unit}\u0000${item.observedDigest}`))
+    const lateStartedMs = phaseTime()
     for (const { scope, store } of scopes) {
       const journalIds = journalsToRecheck(store, { nowMs, full, windowMs: lateWriterWindowMs })
       if (journalIds.length === 0) continue
@@ -554,13 +571,20 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         lateWriters.push({ scopeId: scope.scopeId, journalId: finding.journalId, unit: finding.unit, notePath: finding.notePath ?? null, digestAtMove: finding.digestAtMove ?? null, observedDigest: finding.observedDigest, objectRef: finding.objectRef, detectedAt: now })
       }
     }
+    reportPhase('late-writer-recheck', lateStartedMs)
     if (lateWriters.length > 0) {
       const findings = [...lateDocument.findings, ...lateWriters].sort((left, right) => compareText(left.detectedAt, right.detectedAt) || compareText(left.journalId, right.journalId) || left.unit - right.unit || compareText(left.observedDigest, right.observedDigest))
       stateStore.writeLateWriters({ schema: LATE_WRITERS_SCHEMA, workspaceId, findings })
     }
 
-    // 6. Sources, settings, scopes, eligibility.
-    const sources = measured('source-observation', () => reconcile({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat }))
+    // 6. Sources, settings, scopes, eligibility. The walk over the sources waits between files, as the walk over the
+    // vault does; at a full reconciliation it hashes every one. A source changed after its turn is the next tick's to
+    // see, by its stat hint or the watcher. When this tick builds the graph, the look again at the sources after the
+    // build (`graph-source-recheck`) refuses such a change as `mixed-read`, as it does one made during the waits that
+    // already come between this walk and that look.
+    const sourcesStartedMs = phaseTime()
+    let sources
+    try { sources = await reconcileCooperatively({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat }, createCooperativeBudget()) } finally { reportPhase('source-observation', sourcesStartedMs) }
     for (const change of sources.changes) changes.push({ changeClass: change.changeClass })
     const { scopes: _declared, ...settingsWithoutScopes } = enablement.settings
     // What the configuration says apart from this integration's own member: a change to the member alone is an

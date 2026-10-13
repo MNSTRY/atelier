@@ -1462,9 +1462,12 @@ try {
     try {
       // An operation that holds the event loop from its first instruction, as a tick that walks a vault does.
       const hold = (ms) => async () => { const until = performance.now() + ms; while (performance.now() < until) { /* held */ } return 'done' }
-      // An earlier stretch, longer than the one measured: it is not part of the measure.
+      // An earlier stretch, longer than the one measured, sampled by the histogram (given a timer turn first, so it has
+      // a point to measure from): the reset leaves it out of the measure.
+      await new Promise((resolve) => { setTimeout(resolve, 30) })
       await hold(400)()
       await new Promise((resolve) => { setTimeout(resolve, 30) })
+      assert.ok(histogram.max / 1e6 >= 300, `the earlier stretch is in the histogram before the reset: ${histogram.max / 1e6} ms`)
       const measured = await measureEventLoopDelay(histogram, hold(150))
       assert.equal(measured.value, 'done')
       assert.ok(measured.endedMs - measured.startedMs >= 150)
@@ -1490,10 +1493,12 @@ try {
     assert.equal(judge(tick({ full: true, watcher: null }), { scenario: 'full-reconciliation' }).probes, 1)
     assert.throws(() => judge(tick({ full: false, watcher: null }), { scenario: 'full-reconciliation' }), /must be a full reconciliation/)
     // What the tick did.
+    assert.throws(() => judge(tick({ kind: 'transition' })), assert.AssertionError)
     assert.throws(() => judge(tick({ state: 'busy' })), assert.AssertionError)
     assert.throws(() => judge(tick({ changes: 1 })), /nothing changed between the two ticks/)
     assert.throws(() => judge(tick({ scopes: [] })), assert.AssertionError)
     assert.throws(() => judge(tick({ scopes: [{ scopeId: 'scope-1', state: 'stale', reason: 'invalidated', verified: false }] })), assert.AssertionError)
+    assert.throws(() => judge(tick({ scopes: [{ scopeId: 'scope-1', state: 'current', reason: 'published-and-verified', verified: false }] })), assert.AssertionError)
     // What it was told: by a watcher that watched every root, of at least one published note, before it began.
     assert.throws(() => judge(tick({ watcher: { ...watcher, before: { ...watcher.before, vaultNotesNamed: 0 } } })), /named no published note before the tick/)
     assert.throws(() => judge(tick({ watcher: { ...watcher, before: { ...watcher.before, unavailable: 1 } } })), /could not watch every root/)
@@ -1508,6 +1513,26 @@ try {
     assert.deepEqual(judge(tick({ startedMs: 1000, endedMs: 1020, maxEventLoopDelayMs: 18 }), { requests: [health(900, 960), health(1040, 1050)] }), { probes: 0, maxResponseMs: 0, firstLagMs: null, lastLagMs: null })
     // One as long as the allowance that no request overlapped was not sampled, and fails.
     assert.throws(() => judge(tick({ startedMs: 1000, endedMs: 1250, maxEventLoopDelayMs: 240 }), { requests: [health(900, 960), health(1300, 1310)] }), assert.AssertionError)
+  })
+
+  test('outside an owned run: a second-tick stage passes only when neither tick failed, and keeps the judgement of the second when the first failed', async () => {
+    const { concludeSecondTick } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
+    const conclude = ({ judge, firstTickFailure = null }) => {
+      const recorded = []
+      let thrown = null
+      try { concludeSecondTick({ judge, record: (health) => recorded.push(health), firstTickFailure }) } catch (error) { thrown = error }
+      return { recorded, thrown }
+    }
+    const health = { probes: 1, maxResponseMs: 420 }
+    const firstFailed = new assert.AssertionError({ message: 'health sampling must cover both edges of the first tick within 250ms' })
+    const secondFailed = new assert.AssertionError({ message: 'the second tick held the event loop for 5503 ms' })
+    // Both ticks passed: recorded, and the stage passes.
+    assert.deepEqual(conclude({ judge: () => health }), { recorded: [health], thrown: null })
+    // The first tick failed and the second passed: the second is recorded, and the stage fails with the first.
+    assert.deepEqual(conclude({ judge: () => health, firstTickFailure: firstFailed }), { recorded: [health], thrown: firstFailed })
+    // The second failed: the stage fails with it, whatever the first did, and no judgement is recorded.
+    assert.deepEqual(conclude({ judge: () => { throw secondFailed } }), { recorded: [], thrown: secondFailed })
+    assert.deepEqual(conclude({ judge: () => { throw secondFailed }, firstTickFailure: firstFailed }), { recorded: [], thrown: secondFailed })
   })
 
   test('outside an owned run: the event-loop benchmark judges a window by every request in it, the one answered after the end included, however many there are', async () => {
