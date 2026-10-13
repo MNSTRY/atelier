@@ -1168,11 +1168,11 @@ the publisher yields between complete units, so the service answers health and
 status while notes are emitted, staged and published. The first-tick figures
 in the table are from before that change and have not been taken again on that
 corpus. Parts of a tick still run without yielding: reading the sources and
-building the canonical graph, capturing the source snapshot, observing source
-and vault files, the publisher's restart recovery, validating a prepared view
-and planning its units, the exchange probe, writing and syncing the journal
-before the candidates move, and the look again at displaced files after the
-units (`recheckDisplacedFiles`). The read-back after a commit waits between
+building the canonical graph, capturing the source snapshot, the publisher's
+restart recovery, validating a prepared view and planning its units, the
+exchange probe, writing and syncing the journal before the candidates move,
+and the look again at displaced files after the units
+(`recheckDisplacedFiles`). The read-back after a commit waits between
 notes: on a loaded host it took 16.8 s for one view of 10,000 invented notes
 and held the listener for all of it, and now a request is answered between two
 notes. Nothing is checked at those waits, since the generation is committed. A
@@ -1181,12 +1181,19 @@ when the walk has not reached it, and is seen by the next tick when it has, as
 an edit made just after a read-back is. A stop whose grace runs out while a
 read-back waits ends the process after the commit and before the view is
 recorded as current, as a crash there does: the next start's first tick reads
-the committed generation back. The same walk over the vault at the start of a
-tick still runs through, and it comes round sooner than a full
-reconciliation (every source file, and every vault note of every view): a
-service that watches its vaults is told of the notes a publication wrote (a
-watcher may miss some), so the tick after a publication opens and hashes
-each note it was told of in one stretch.
+the committed generation back. Before a view is prepared, a tick looks at
+every view's notes and then at the sources, and both walks wait between files.
+They matter after a publication, when the watcher has named the notes it
+wrote, and at every full reconciliation, when every note and every source is
+hashed: on one view of 10,000 invented notes on a loaded host such a tick held
+the listener for 5.5 s when the walks ran through. Nothing is checked at their
+waits and nothing is written. Only the engine commits a manifest or writes the
+pending edits, under the lock the tick holds, so the pending edits are read,
+compared and written in one stretch after the walk over the vault, and the
+bytes an edit keeps are read there. A file changed after its turn in a walk is
+seen by the next tick, by its stat hint or the watcher, as one changed just
+after a walk that ran through is; when the tick builds the graph, the look
+again at the sources after the build refuses such a change as `mixed-read`.
 The comparison of kept notes with their candidates reads asynchronously,
 sixteen at a time, and does not hold the listener. Observing pending edits
 and routing proposals wait between two edits and between two operations, so

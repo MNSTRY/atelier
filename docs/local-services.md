@@ -206,10 +206,10 @@ its process handle, and reports the private operational log,
 Stretches of a tick are synchronous (reading sources and building the
 canonical graph, capturing the source snapshot, the publisher's restart
 recovery, its exchange probe, writing the journal, the look again at
-displaced files, observing the source and vault files before a view is
-prepared), so a healthy service in a long one may not answer health within
-the deadline; preparing and publishing a view, and reading it back after a
-commit, yield between notes and between publication units, and health is
+displaced files), so a healthy service in a long one may not answer health
+within the deadline; observing the vault and source files before a view is
+prepared, preparing and publishing a view, and reading it back after a
+commit yield between files and between publication units, and health is
 answered meanwhile. A service that does not answer in time is `busy`, not
 `occupied`: it is
 never adopted, never stopped and never started over, and a `start` whose own

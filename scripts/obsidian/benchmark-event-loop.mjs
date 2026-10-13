@@ -27,7 +27,8 @@ import { createFsWatcherFactory, createNullWatcherFactory } from '../../src/runt
 // with little else on it. Every run builds, reads and removes its own invented
 // corpus; nothing here can be pointed at a real one.
 // The longest a run may declare. A first publication of ten thousand notes in six views takes more than an hour on
-// an ordinary machine. The service's own interval is longer still, so the first tick is the only one its loop starts.
+// an ordinary machine. The service's own interval is longer still, so its loop starts no tick of its own after the
+// first; a second-tick stage asks it for one.
 const CEILING_MS = 4 * 60 * 60 * 1000
 // Scenarios that ask the service for one more tick after the first publication, with nothing changed, and judge the
 // health requests across it. `next-tick` keeps the watcher a service runs with, so the tick is told of the notes the
@@ -269,6 +270,14 @@ export function judgeTransitionWindow({ probes, transition, identity, record }) 
   assert.ok(firstLagMs < 250 && lastLagMs < 250)
   return { probes: window.length, maxResponseMs: slowestMs(window), firstLagMs, lastLagMs }
 }
+// What a second-tick stage ends with once its second tick is recorded: that tick is judged and its judgement recorded,
+// then the first tick's failure, if the first tick failed its own judgement, is what the stage fails with. A stage
+// passes only when neither tick failed. A judgement that throws is the failure, and records nothing.
+export function concludeSecondTick({ judge, record, firstTickFailure }) {
+  record(judge())
+  if (firstTickFailure !== null) throw firstTickFailure
+}
+
 // A second tick, judged: what the child reported of it, then the health requests across it. Nothing changed between
 // the two ticks, so it must change nothing and leave every view as the first reported it. A full-reconciliation stage
 // must have run one; a next-tick stage must have been told of published notes before the tick, by a watcher that
@@ -392,8 +401,11 @@ async function controller() {
       // As at the end of the first tick: the request in flight when the second tick ended is part of its window.
       const atSecondEnd = await settleProbeInFlight({ inFlight: () => probeSentAt, untilMs: second.endedMs })
       assert.ok(atSecondEnd.settled, 'the request in flight at the end of the second tick must be answered or time out')
-      result.secondTickHealth = { identity, ...judgeSecondTick({ probes: result.probes, second, scenario, scopes, identity, record }), awaitedProbeInFlightAtEnd: atSecondEnd.waited }
-      if (firstTickFailure !== null) throw firstTickFailure
+      concludeSecondTick({
+        judge: () => judgeSecondTick({ probes: result.probes, second, scenario, scopes, identity, record }),
+        record: (health) => { result.secondTickHealth = { identity, ...health, awaitedProbeInFlightAtEnd: atSecondEnd.waited } },
+        firstTickFailure,
+      })
     } else if (scenario !== 'publication') {
       child.send({ type: 'transition' })
       while (!result.events.some(event => event.type === 'transition' || event.type === 'transition-error') && terminal.value === null && epochMs() - startedMs < timeoutMs && !interrupted) await sleep(25)
