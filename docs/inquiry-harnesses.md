@@ -1,8 +1,7 @@
 # Discovery Harness and Research Harness
 
-Status: implemented locally for the next release. The published alpha.7 package
-does not expose `inquiry`. Use `node bin/atelier.mjs inquiry help` from this
-source checkout, or `atelier inquiry help` from a package built from it.
+Status: shipped since 0.2.0-alpha.13. Run `atelier inquiry help` for the
+commands.
 
 Discovery frames questions, compares explanations and prepares decisions.
 Research gathers and checks evidence and returns a portable bundle. People set

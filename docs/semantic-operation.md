@@ -1,9 +1,10 @@
 # Semantic operation: internal vanilla profile
 
 `src/knowledge/semantic-operation.mjs` connects a host's extraction to the
-existing intake and knowledge owners. It is an internal library. There is no
-public export, registered schema or CLI command yet. The proposed consumer is
-an agent operating the experimental Atelier CLI after Foundation registers it.
+existing intake and knowledge owners. It is an internal library with no public
+export or registered schema. Since 0.2.0-alpha.13 the experimental CLI reaches
+it as `atelier knowledge semantic OPERATION`; an agent operating that command
+is its intended consumer.
 
 Atelier never invokes a model. The host supplies its raw output, its normalized
 candidate envelope, configuration pins and usage report. A deterministic or

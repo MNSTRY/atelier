@@ -10,7 +10,7 @@ attempts and distinct verification gates. Its coordination proposal can be read
 by Fabric or another adapter. The shared harness contract connects these workflows
 to Discovery, Research and Skill Steward without replacing their domain records.
 
-These are local, provider-neutral source capabilities for the next release.
+These are local, provider-neutral capabilities, shipped since 0.2.0-alpha.13.
 Handoffs preserve exact pins, and explicit source snapshots reveal corrections
 that require downstream reconsideration. Graph outputs remain draft proposals.
 Recorded acceptance is not authenticated authority, and local checks do not prove

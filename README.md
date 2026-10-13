@@ -324,7 +324,7 @@ Installation, host discovery and successful exercise are separate evidence.
 Content-free observations can guide improvement, and draft graph records keep
 provenance connected to adoption and outcomes. Publisher authentication, live
 host evaluation and human acceptance require their own evidence. This source
-capability is intended for the next release; alpha.7 does not expose its command.
+capability has shipped as the `capability` command since 0.2.0-alpha.13.
 <!-- atelier:block:capability-stewardship:end -->
 
 See [capability stewardship](docs/capability-stewardship.md) for the operating guide.
@@ -595,7 +595,7 @@ attempts and distinct verification gates. Its coordination proposal can be read
 by Fabric or another adapter. The shared harness contract connects these workflows
 to Discovery, Research and Skill Steward without replacing their domain records.
 
-These are local, provider-neutral source capabilities for the next release.
+These are local, provider-neutral capabilities, shipped since 0.2.0-alpha.13.
 Handoffs preserve exact pins, and explicit source snapshots reveal corrections
 that require downstream reconsideration. Graph outputs remain draft proposals.
 Recorded acceptance is not authenticated authority, and local checks do not prove

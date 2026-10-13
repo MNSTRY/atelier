@@ -1,9 +1,7 @@
 # Capability stewardship
 
-Status: source implementation for the next release. The published alpha.7
-package does not include the `capability` command. From this checkout, use
-`node bin/atelier.mjs capability ...`; the examples below use the installed
-command spelling for a package built from this source.
+Status: shipped since 0.2.0-alpha.13 as the `capability` command. The examples
+below use the installed command spelling.
 
 Atelier can package a useful workflow, introduce it alongside a person's
 existing skills, and keep each repository's adoption explainable over time.

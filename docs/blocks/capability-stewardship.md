@@ -14,4 +14,4 @@ Installation, host discovery and successful exercise are separate evidence.
 Content-free observations can guide improvement, and draft graph records keep
 provenance connected to adoption and outcomes. Publisher authentication, live
 host evaluation and human acceptance require their own evidence. This source
-capability is intended for the next release; alpha.7 does not expose its command.
+capability has shipped as the `capability` command since 0.2.0-alpha.13.
