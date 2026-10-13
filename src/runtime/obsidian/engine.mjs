@@ -137,6 +137,17 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   // (no permission, an I/O error, no descriptor left), recognised as one is where a vault is placed. Anything else is a
   // fault of the engine and stops the tick.
   guardReadFailed: (error) => typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code),
+  // Whether an error that stopped the graph build is a source, or a folder of sources, removed after the build listed
+  // it and before it read it: no such file (or a parent that is no longer a folder) at a path inside one of the
+  // project's repositories. The look again at the sources after the build refuses that change as `mixed-read`; a
+  // build that could not read the file refuses the same, and the next tick reads everything again. Any other error
+  // stops the tick, as before.
+  sourceRemovedDuringBuild: (error, project) => (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') && typeof error.path === 'string'
+    && (project?.repos ?? []).some((repo) => {
+      if (typeof repo?.path !== 'string') return false
+      const relative = path.relative(path.resolve(repo.path), path.resolve(error.path))
+      return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+    }),
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
@@ -741,19 +752,24 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         // A personal workspace whose validity key is not confirmed yet is composed off the event loop, then built again.
         const build = () => seams.buildGraph({ project, eligibility, cache: graphCache, index, deferPersonalValidation: true })
         let graph
-        // Any other project is built with the event loop given a turn between the Markdown sources of the census: a
-        // first tick reads every source. The settings that select the views are checked at each wait, as during a
-        // preparation, and the look again at the sources after the build sees a source that moved during it.
-        if (typeof seams.buildGraphCooperatively === 'function' && personalWorkspaceBindingOf(project) === null) {
-          graph = await seams.buildGraphCooperatively({ project, eligibility, cache: graphCache, index, scheduling: { guard: assertBindings } })
-        } else try { graph = build() } catch (error) {
-          if (error?.code !== PERSONAL_VALIDATION_PENDING) throw error
-          const verdict = await validatePersonalWorkspace(project)
-          if (verdict?.ok !== true) refuse(verdict?.code ?? 'personal-binding-unrecognized', 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })
-          try { graph = build() } catch (again) {
-            if (again?.code !== PERSONAL_VALIDATION_PENDING) throw again
-            refuse('personal-graph-unconfirmed', 'the graph built for the personal workspace is not the one its composition built; nothing is prepared from it', { source: 'personal-workspace' })
+        try {
+          // Any other project is built with the event loop given a turn between the Markdown sources of the census: a
+          // first tick reads every source. The settings that select the views are checked at each wait, as during a
+          // preparation, and the look again at the sources after the build sees a source that moved during it.
+          if (typeof seams.buildGraphCooperatively === 'function' && personalWorkspaceBindingOf(project) === null) {
+            graph = await seams.buildGraphCooperatively({ project, eligibility, cache: graphCache, index, scheduling: { guard: assertBindings } })
+          } else try { graph = build() } catch (error) {
+            if (error?.code !== PERSONAL_VALIDATION_PENDING) throw error
+            const verdict = await validatePersonalWorkspace(project)
+            if (verdict?.ok !== true) refuse(verdict?.code ?? 'personal-binding-unrecognized', 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })
+            try { graph = build() } catch (again) {
+              if (again?.code !== PERSONAL_VALIDATION_PENDING) throw again
+              refuse('personal-graph-unconfirmed', 'the graph built for the personal workspace is not the one its composition built; nothing is prepared from it', { source: 'personal-workspace' })
+            }
           }
+        } catch (error) {
+          if (!isTypedRefusal(error) && rules.sourceRemovedDuringBuild(error, project)) refuse('mixed-read', 'a source was removed while the canonical graph was being built', { cause: error.code })
+          throw error
         }
         // The assets this graph lets a view copy are observed from now on, and hashed now so the snapshot pins
         // what observation saw. A withheld asset is not observed: its bytes can change no view.

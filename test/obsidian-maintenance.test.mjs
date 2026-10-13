@@ -228,6 +228,66 @@ test('cooperative engine refuses changed scope and machine settings across a pre
   })
 })
 
+test('a source removed after the graph build listed it and before it read it refuses the view as mixed-read, and the next tick publishes without it; mutation control: without the rule the tick fails without a typed reason', needsExchange, async (t) => {
+  const removedDuringBuild = async (primitives) => {
+    const world = makeWorld(t)
+    // A note nothing links to, last of the east wing's sources: at the census's first wait its repository has been
+    // walked and it has not been read. (A source removed before its repository is walked is never listed.)
+    const whistle = world.source('east-wing/notes/whistle.md')
+    fs.writeFileSync(whistle, note({ id: 'east-wing:whistle', title: 'Fog whistle', body: 'Two blasts a minute in fog.' }))
+    let removed = false
+    const engine = world.engine({ primitives, seams: { buildGraphCooperatively: (input) => DEFAULT.buildGraphCooperatively({
+      ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (removed || phase !== 'graph-census') return
+        removed = true
+        fs.rmSync(whistle)
+      } },
+    }) } })
+    return { world, engine, removed: () => removed }
+  }
+  const { world, engine, removed } = await removedDuringBuild(ENGINE_PRIMITIVES)
+  const report = await engine.tick()
+  assert.equal(removed(), true)
+  assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.deepEqual([world.calls.prepareView, world.calls.publishView.length], [0, 0], 'nothing is prepared or published from the build')
+  const next = await engine.tick()
+  assert.equal(world.scope(next).state, 'current')
+  assert.equal(fs.existsSync(world.noteFile('east-wing:lantern')), true)
+  const published = world.manifest(FULL_SCOPE.scopeId).notes.map((item) => item.nodeId)
+  assert.ok(published.includes('east-wing:compass') && !published.includes('east-wing:whistle'), `the next tick publishes the view without the removed source: ${published}`)
+  // Mutation control: without the rule the build's ENOENT stops the tick.
+  const blind = await removedDuringBuild({ ...ENGINE_PRIMITIVES, sourceRemovedDuringBuild: () => false })
+  await assert.rejects(blind.engine.tick(), (error) => error.code === 'ENOENT')
+  assert.equal(blind.removed(), true)
+})
+
+test('a build error that is no removed source still stops the tick: no such file outside the repositories, or a source that cannot be read', needsExchange, async (t) => {
+  for (const [name, fault] of Object.entries({
+    'no such file outside the repositories': (world) => Object.assign(new Error('gone'), { code: 'ENOENT', path: path.join(world.dir, 'elsewhere', 'note.md') }),
+    'a source that cannot be read': (world) => Object.assign(new Error('permission denied'), { code: 'EACCES', path: world.source('west-wing/logs/tide.md') }),
+  })) await t.test(name, async (t) => {
+    const world = makeWorld(t)
+    const error = fault(world)
+    const engine = world.engine({ seams: { buildGraphCooperatively: async () => { throw error } } })
+    await assert.rejects(engine.tick(), (thrown) => thrown === error)
+  })
+})
+
+test('the rule that names a removed source: no such file, or a parent that is no longer a folder, strictly inside a repository of the project', () => {
+  const root = path.resolve('/workspace/east-wing')
+  const project = { repos: [{ name: 'east-wing', path: root }, { name: 'unplaced' }] }
+  const rule = (code, at) => ENGINE_PRIMITIVES.sourceRemovedDuringBuild(Object.assign(new Error(code), { code, ...(at === undefined ? {} : { path: at }) }), project)
+  assert.equal(rule('ENOENT', path.join(root, 'notes', 'compass.md')), true)
+  assert.equal(rule('ENOTDIR', path.join(root, 'notes', 'compass.md')), true)
+  assert.equal(rule('EACCES', path.join(root, 'notes', 'compass.md')), false, 'a source that cannot be read is no removed source')
+  assert.equal(rule('ENOENT', path.resolve('/workspace/east-wing-notes/compass.md')), false, 'a sibling that shares the prefix is outside')
+  assert.equal(rule('ENOENT', path.resolve('/workspace/west-wing/tide.md')), false, 'outside every repository')
+  assert.equal(rule('ENOENT', root), false, 'the repository itself missing is no removed source')
+  assert.equal(rule('ENOENT'), false, 'an error without a path')
+  assert.equal(ENGINE_PRIMITIVES.sourceRemovedDuringBuild(null, project), false)
+  assert.equal(ENGINE_PRIMITIVES.sourceRemovedDuringBuild(Object.assign(new Error('gone'), { code: 'ENOENT', path: path.join(root, 'a.md') }), null), false)
+})
+
 test('the graph is built with the event loop given a turn between the Markdown sources of the census, and is the graph the build in one stretch gives', async (t) => {
   const world = makeWorld(t)
   for (let number = 0; number < 70; number += 1) fs.writeFileSync(world.source(`east-wing/notes/buoy-${String(number).padStart(2, '0')}.md`), note({ id: `east-wing:buoy-${number}`, title: `Buoy ${number}`, body: `Buoy ${number} marks the channel.` }))
