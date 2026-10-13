@@ -128,6 +128,9 @@ export function resolveContentRules(policy) {
 }
 
 export function findException({ exceptions = [], rule, repo, path: filePath }) {
+  // Exception paths are slash-normalised patterns, so they cannot name a file whose
+  // own name holds a backslash; such a file never inherits a sibling's exception.
+  if (String(filePath ?? '').includes('\\')) return null
   const rel = normalizeRelPath(filePath)
   return (
     exceptions.find(
@@ -141,6 +144,8 @@ export function findException({ exceptions = [], rule, repo, path: filePath }) {
 
 function rulePathMatches(rule, filePath) {
   if (!Array.isArray(rule.paths) || !rule.paths.length) return true
+  // Path scopes are slash-normalised too; a backslash name is treated as in scope.
+  if (String(filePath ?? '').includes('\\')) return true
   return rule.paths.some((pattern) => matchesPathPattern(pattern, filePath))
 }
 
@@ -154,13 +159,15 @@ function rulePathMatches(rule, filePath) {
 export function scanAddedContent({ files, rules = DEFAULT_CONTENT_RULES, exceptions = [], repo = null }) {
   const findings = []
   for (const file of files) {
-    const filePath = normalizeRelPath(file.path)
+    // Paths from Git are exact repository paths and are reported as they are.
+    const filePath = String(file.path ?? '')
     for (const rule of rules) {
       const kind = rule.kind ?? 'content'
       const severity = rule.severity ?? 'error'
       const exception = findException({ exceptions, rule: rule.id, repo, path: filePath })
       if (kind === 'path') {
-        if (!file.added || !new RegExp(rule.pattern, 'i').test(filePath)) continue
+        const pathRule = new RegExp(rule.pattern, 'i')
+        if (!file.added || !(pathRule.test(filePath) || pathRule.test(normalizeRelPath(filePath)))) continue
         if (exception) continue
         findings.push({ severity, code: 'content-rule-violation', rule: rule.id, repo, path: filePath, line: null, message: `${repo ?? ''}/${filePath}: ${rule.description ?? rule.id}`.replace(/^\//, '') })
         continue
@@ -185,38 +192,223 @@ export function scanAddedContent({ files, rules = DEFAULT_CONTENT_RULES, excepti
   return findings
 }
 
-/** Parse `git diff` output into added files and added lines with line numbers. */
-export function parseAddedContent(diff) {
-  const files = []
+// The diff commands below pin their own output format, so repository or user
+// configuration (prefixes, colour, external diff drivers, textconv, relative
+// paths, fused hunks, submodule summaries) cannot change what the parser reads.
+// Anything it still cannot read is reported and blocks, so a key not pinned here
+// can stop a commit but cannot hide content.
+export const CANONICAL_DIFF_FLAGS = Object.freeze([
+  '--no-ext-diff',
+  '--no-textconv',
+  '--no-color',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+  '--no-relative',
+  '--inter-hunk-context=0',
+  '--submodule=short',
+  '--full-index',
+])
+
+const OCTAL_ESCAPE = /^[0-7]{3}$/
+const SIMPLE_ESCAPES = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 }
+
+/**
+ * Read one C-quoted path token as Git writes it (core.quotePath), starting at the
+ * opening quote. Returns the decoded path and the index after the closing quote,
+ * or null when the token is malformed.
+ */
+function readQuotedToken(text, start) {
+  if (text[start] !== '"') return null
+  const bytes = []
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = String.fromCodePoint(text.codePointAt(index))
+    if (char === '"') return { value: Buffer.from(bytes).toString('utf8'), end: index + 1 }
+    if (char !== '\\') {
+      bytes.push(...Buffer.from(char, 'utf8'))
+      index += char.length - 1
+      continue
+    }
+    const next = text[index + 1]
+    if (next === undefined) return null
+    const octal = text.slice(index + 1, index + 4)
+    if (OCTAL_ESCAPE.test(octal)) {
+      const byte = Number.parseInt(octal, 8)
+      if (byte > 255) return null
+      bytes.push(byte)
+      index += 3
+    } else if (Object.hasOwn(SIMPLE_ESCAPES, next)) {
+      bytes.push(SIMPLE_ESCAPES[next])
+      index += 1
+    } else {
+      return null
+    }
+  }
+  return null
+}
+
+/** A path as it appears after a fixed prefix in a header line, quoted or bare. */
+function prefixedPath(token, prefix) {
+  if (token.startsWith('"')) {
+    const quoted = readQuotedToken(token, 0)
+    if (!quoted || quoted.end !== token.length || !quoted.value.startsWith(prefix)) return null
+    return quoted.value.slice(prefix.length)
+  }
+  return token.startsWith(prefix) ? token.slice(prefix.length) : null
+}
+
+/**
+ * The destination path of a `diff --git` header. A bare header is ambiguous when
+ * a path contains " b/", so it is resolved only when both sides name the same
+ * path, which is every case except a rename or copy; those are resolved from the
+ * `rename to` / `copy to` lines that follow.
+ */
+export function diffHeaderPath(line) {
+  if (!line.startsWith('diff --git ')) return null
+  const rest = line.slice('diff --git '.length)
+  if (rest.startsWith('"')) {
+    const first = readQuotedToken(rest, 0)
+    if (!first || rest[first.end] !== ' ') return null
+    return prefixedPath(rest.slice(first.end + 1), 'b/')
+  }
+  if (rest.endsWith('"')) {
+    const open = rest.lastIndexOf(' "')
+    return open < 0 ? null : prefixedPath(rest.slice(open + 1), 'b/')
+  }
+  if (rest.length < 5 || (rest.length - 5) % 2 !== 0) return null
+  const half = (rest.length - 5) / 2
+  const candidate = rest.slice(2, 2 + half)
+  return half > 0 && rest === `a/${candidate} b/${candidate}` ? candidate : null
+}
+
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+const INDEX_LINE = /^index ([0-9a-f]{40,64})\.\.([0-9a-f]{40,64})(?: \d+)?$/
+
+/**
+ * Split `git diff --unified=0` output into file sections. Lines are read as
+ * content only inside a hunk, for exactly as many lines as its header counts, so
+ * content can never be read as a header and a header can never hide content. A
+ * section whose path or hunks cannot be read is returned with `incomplete` set,
+ * so the caller fails closed instead of skipping it. Paths are the exact
+ * repository paths Git reports; `newBlob` is the object id of the new content.
+ */
+export function parseDiffSections(diff) {
+  const sections = []
   let current = null
+  let pendingAdded = 0
+  let pendingRemoved = 0
   let lineNumber = 0
   for (const raw of String(diff ?? '').split('\n')) {
+    if (pendingAdded > 0 || pendingRemoved > 0) {
+      if (raw.startsWith('+') && pendingAdded > 0) {
+        current.addedLines.push({ number: lineNumber, text: raw.slice(1) })
+        lineNumber += 1
+        pendingAdded -= 1
+        continue
+      }
+      if (raw.startsWith('-') && pendingRemoved > 0) {
+        pendingRemoved -= 1
+        continue
+      }
+      if (raw.startsWith(' ') && pendingAdded > 0 && pendingRemoved > 0) {
+        // A context line counts on both sides; none is expected, but one is harmless.
+        lineNumber += 1
+        pendingAdded -= 1
+        pendingRemoved -= 1
+        continue
+      }
+      if (raw.startsWith('\\')) continue // "\ No newline at end of file"
+      current.incomplete = 'hunk-shorter-than-its-header'
+      pendingAdded = 0
+      pendingRemoved = 0
+    }
     if (raw.startsWith('diff --git ')) {
-      const header = raw.match(/^diff --git a\/(.*) b\/(.*)$/)
-      current = { path: header ? normalizeRelPath(header[2]) : null, added: false, addedLines: [] }
-      files.push(current)
+      const headerPath = diffHeaderPath(raw)
+      current = {
+        path: headerPath === null || headerPath === '' ? null : headerPath,
+        added: false,
+        deleted: false,
+        binary: false,
+        newBlob: null,
+        oldPath: null,
+        addedLines: [],
+        incomplete: null,
+        inHeader: true,
+      }
+      sections.push(current)
+      continue
+    }
+    if (raw.startsWith('* Unmerged path ')) {
+      // An unmerged entry has no patch to read; it stands as its own unreadable
+      // section instead of being taken for a line of the file before it. Git
+      // prints this name as it is, never quoted.
+      const listed = raw.slice('* Unmerged path '.length)
+      current = {
+        path: listed !== '' ? listed : null,
+        added: false,
+        deleted: false,
+        binary: false,
+        newBlob: null,
+        oldPath: null,
+        addedLines: [],
+        incomplete: 'unmerged-path',
+        inHeader: false,
+      }
+      sections.push(current)
       continue
     }
     if (!current) continue
-    if (raw.startsWith('new file mode ')) {
-      current.added = true
-      continue
-    }
-    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+    if (raw.startsWith('\\')) continue
+    const hunk = raw.match(HUNK_HEADER)
     if (hunk) {
-      lineNumber = Number(hunk[1])
+      current.inHeader = false
+      pendingRemoved = hunk[1] === undefined ? 1 : Number(hunk[1])
+      lineNumber = Number(hunk[2])
+      pendingAdded = hunk[3] === undefined ? 1 : Number(hunk[3])
       continue
     }
-    if (/^\+(?!\+)/.test(raw)) {
-      current.addedLines.push({ number: lineNumber, text: raw.slice(1) })
-      lineNumber += 1
-    } else if (/^-(?!-)/.test(raw)) {
-      // removed lines do not advance the new-file line counter
-    } else if (raw.startsWith(' ')) {
-      lineNumber += 1
+    if (raw.startsWith('Binary files ') && raw.endsWith(' differ')) {
+      current.inHeader = false
+      current.binary = true
+      continue
+    }
+    if (!current.inHeader) {
+      if (raw !== '') current.incomplete ??= 'unexpected-line-outside-a-hunk'
+      continue
+    }
+    const index = raw.match(INDEX_LINE)
+    if (index) {
+      current.newBlob = ZERO_SHA_RE.test(index[2]) ? null : index[2]
+    } else if (raw.startsWith('new file mode ')) current.added = true
+    else if (raw.startsWith('deleted file mode ')) current.deleted = true
+    else if (raw.startsWith('rename from ') || raw.startsWith('copy from ')) {
+      const source = raw.slice(raw.indexOf(' from ') + 6)
+      const named = source.startsWith('"') ? readQuotedToken(source, 0) : { value: source, end: source.length }
+      if (named && named.end === source.length && named.value !== '') current.oldPath = named.value
+      else current.incomplete ??= 'unreadable-rename-source'
+    } else if (raw.startsWith('rename to ') || raw.startsWith('copy to ')) {
+      const target = raw.slice(raw.indexOf(' to ') + 4)
+      const named = target.startsWith('"') ? readQuotedToken(target, 0) : { value: target, end: target.length }
+      if (named && named.end === target.length && named.value !== '') current.path = named.value
+      else current.incomplete ??= 'unreadable-rename-target'
+    } else if (raw.startsWith('+++ ')) {
+      const target = raw.slice(4)
+      if (target !== '/dev/null' && current.path === null) {
+        const named = prefixedPath(target, 'b/')
+        if (named !== null && named !== '') current.path = named
+      }
     }
   }
-  return files.filter((file) => file.path)
+  if (pendingAdded > 0 || pendingRemoved > 0) current.incomplete = 'hunk-shorter-than-its-header'
+  for (const section of sections) {
+    delete section.inHeader
+    if (section.path === null) section.incomplete ??= 'unreadable-file-path'
+  }
+  return sections
+}
+
+/** Parse `git diff` output into added files and added lines with line numbers. */
+export function parseAddedContent(diff) {
+  return addedFilesFrom(parseDiffSections(diff))
 }
 
 /** Ref updates arrive on the pre-push hook's stdin as `<localRef> <localSha> <remoteRef> <remoteSha>`. */
@@ -290,14 +482,16 @@ export function pushRangeBase(repoRoot, remoteSha) {
   return result.status === 0 ? remoteSha : EMPTY_TREE
 }
 
+const canonicalDiffArgs = (revisions, extra = []) => ['diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
+
 export function diffForPushRange(repoRoot, { localSha, remoteSha }, options = {}) {
   const base = pushRangeBase(repoRoot, remoteSha)
-  const result = gitOutputResult(repoRoot, ['diff', '--unified=0', base, localSha], options)
+  const result = gitOutputResult(repoRoot, canonicalDiffArgs([base, localSha]), options)
   return result.ok ? { ...result, base, diff: result.stdout } : { ...result, base, diff: null }
 }
 
 export function stagedDiff(repoRoot, options = {}) {
-  const result = gitOutputResult(repoRoot, ['diff', '--cached', '--unified=0'], options)
+  const result = gitOutputResult(repoRoot, canonicalDiffArgs(['--cached']), options)
   return result.ok ? { ...result, diff: result.stdout } : { ...result, diff: null }
 }
 
@@ -313,37 +507,20 @@ function incompleteDiagnostic({ repo, path: filePath = null, message, details = 
   }
 }
 
-function binaryPathsFromDiff(diff) {
-  const paths = new Set()
-  let current = null
-  // A deleted path is absent from the revision being scanned, so there is nothing
-  // to read: the blob it had is already in history and is not being introduced.
-  // Only the extended header can say so; a content line always starts with a
-  // prefix, so it cannot forge the header.
-  let inHeader = false
-  let deleted = false
-  for (const line of String(diff ?? '').split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      const header = line.match(/^diff --git a\/(.*) b\/(.*)$/)
-      current = header ? normalizeRelPath(header[2]) : null
-      inHeader = true
-      deleted = false
-      continue
-    }
-    if (!current) continue
-    if (inHeader && line.startsWith('deleted file mode ')) {
-      deleted = true
-      continue
-    }
-    if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
-      inHeader = false
-      if (!deleted) paths.add(current)
-      continue
-    }
-    if (line.startsWith('@@') || line.startsWith('--- ')) inHeader = false
-  }
-  return [...paths]
+function unreadableSectionDiagnostics(sections, repo) {
+  return sections
+    .filter((section) => section.incomplete)
+    .map((section) => incompleteDiagnostic({
+      repo,
+      path: section.path,
+      message: 'a changed file could not be read from the diff, so its content was not scanned',
+      details: { reason: section.incomplete },
+    }))
 }
+
+const addedFilesFrom = (sections) => sections
+  .filter((section) => section.path !== null)
+  .map(({ path: filePath, added, addedLines }) => ({ path: filePath, added, addedLines }))
 
 function isBinaryBuffer(buffer) {
   if (buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0)) return true
@@ -356,7 +533,6 @@ function isBinaryBuffer(buffer) {
 }
 
 function scanBinaryBuffer({ buffer, filePath, rules, exceptions, repo }) {
-  if (!isBinaryBuffer(buffer)) return []
   const text = buffer.toString('latin1')
   const findings = []
   for (const rule of rules) {
@@ -377,13 +553,83 @@ function scanBinaryBuffer({ buffer, filePath, rules, exceptions, repo }) {
   return findings
 }
 
-function readBinaryChanges({ repoRoot, revision, diff, rules, exceptions, repo, gitExecutable, gitRunner }) {
+const DECLARED_TEXT_BATCH = 200
+// A new file's diff can be twice its size (a "+" before every short line), so a
+// batch holds at most half the diff limit in blob bytes.
+const DECLARED_TEXT_BATCH_BYTES = DIFF_RESULT_MAX_BYTES / 2
+
+/**
+ * Git reports a file as binary when its attributes say so, whatever it holds
+ * (for example `*.cfg binary` in .gitattributes, which can arrive with the tree).
+ * Such text is judged like any other text: by its added lines, taken from a
+ * `--text` diff of just those paths and their rename sources. Narrowing the
+ * paths can change how Git pairs renames and copies, so a file's lines are used
+ * only when it is paired exactly as in the main diff; otherwise, or when a batch
+ * cannot be read, the file is read again on its own. Pathspecs are taken
+ * literally: core.precomposeUnicode is off for this call, because it would
+ * rewrite a decomposed name on the command line and match nothing. Returns, per
+ * path, `{ addedLines }` or `{ cause }` naming why the text was not read.
+ */
+function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, gitRunner }) {
+  const outcomes = new Map()
+  const read = (group) => {
+    const paths = [...new Set(group.flatMap(({ section }) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
+    const result = gitOutputResult(repoRoot, [
+      '-c', 'core.precomposeUnicode=false',
+      ...canonicalDiffArgs(revisions, ['--text']),
+      '--',
+      ...paths.map((value) => `:(literal)${value}`),
+    ], { gitExecutable, runner: gitRunner })
+    const parsed = result.ok ? parseDiffSections(result.stdout) : []
+    for (const { section } of group) {
+      const matches = parsed.filter((candidate) => candidate.path === section.path && !candidate.deleted)
+      let cause = null
+      if (!result.ok) cause = result.code
+      else if (matches.length === 0) cause = 'missing-from-text-diff'
+      else if (matches.some((candidate) => candidate.oldPath !== section.oldPath)) cause = 'paired-differently-from-main-diff'
+      else cause = matches.find((candidate) => candidate.incomplete)?.incomplete ?? (matches.some((candidate) => candidate.binary) ? 'binary-in-text-diff' : null)
+      outcomes.set(section.path, cause ? { cause } : { addedLines: matches.flatMap((candidate) => candidate.addedLines) })
+    }
+  }
+  const groups = []
+  let group = []
+  let bytes = 0
+  for (const entry of entries) {
+    if (group.length > 0 && (group.length >= DECLARED_TEXT_BATCH || bytes + entry.bytes > DECLARED_TEXT_BATCH_BYTES)) {
+      groups.push(group)
+      group = []
+      bytes = 0
+    }
+    group.push(entry)
+    bytes += entry.bytes
+  }
+  if (group.length > 0) groups.push(group)
+  for (const batch of groups) {
+    read(batch)
+    if (batch.length === 1) continue
+    for (const entry of batch) if (outcomes.get(entry.section.path).cause) read([entry])
+  }
+  return outcomes
+}
+
+function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, repo, gitExecutable, gitRunner }) {
   const findings = []
   const diagnostics = []
   let totalBytes = 0
-  for (const filePath of binaryPathsFromDiff(diff)) {
-    const spec = revision === ':' ? `:${filePath}` : `${revision}:${filePath}`
-    const result = gitOutputResult(repoRoot, ['show', spec], {
+  const seen = new Set()
+  const declaredText = []
+  // A deleted path is absent from the revision being scanned, so there is nothing
+  // to read: the blob it had is already in history and is not being introduced.
+  for (const section of sections) {
+    if (!section.binary || section.deleted || section.path === null || seen.has(section.path)) continue
+    seen.add(section.path)
+    const filePath = section.path
+    if (!section.newBlob) {
+      diagnostics.push(incompleteDiagnostic({ repo, path: filePath, message: 'binary content could not be identified in the diff', details: { reason: 'missing-blob-id' } }))
+      continue
+    }
+    // Read by object id: a path can be misread (":0:name" names an index stage).
+    const result = gitOutputResult(repoRoot, ['cat-file', 'blob', section.newBlob], {
       encoding: 'buffer',
       gitExecutable,
       maxBuffer: BINARY_FILE_MAX_BYTES + 1,
@@ -417,7 +663,30 @@ function readBinaryChanges({ repoRoot, revision, diff, rules, exceptions, repo, 
       }))
       break
     }
-    findings.push(...scanBinaryBuffer({ buffer: result.stdout, filePath, rules, exceptions, repo }))
+    if (isBinaryBuffer(result.stdout)) {
+      findings.push(...scanBinaryBuffer({ buffer: result.stdout, filePath, rules, exceptions, repo }))
+      continue
+    }
+    declaredText.push({ section, bytes: result.bytes })
+  }
+  if (declaredText.length > 0) {
+    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, gitExecutable, gitRunner })
+    const contentRules = rules.filter((rule) => (rule.kind ?? 'content') === 'content')
+    for (const { section } of declaredText) {
+      const { addedLines, cause } = outcomes.get(section.path)
+      if (cause) {
+        diagnostics.push(incompleteDiagnostic({
+          repo,
+          path: section.path,
+          message: cause === 'git-output-limit-exceeded'
+            ? `text declared binary has a diff over the ${DIFF_RESULT_MAX_BYTES}-byte limit, so its content was not scanned`
+            : 'text declared binary could not be read as text, so its content was not scanned',
+          details: { reason: 'declared-binary-text-unreadable', cause },
+        }))
+        continue
+      }
+      findings.push(...scanAddedContent({ files: [{ path: section.path, added: false, addedLines }], rules: contentRules, exceptions, repo }))
+    }
   }
   return { findings, diagnostics, bytes: totalBytes }
 }
@@ -438,11 +707,11 @@ export function scanStagedRepository({
       bytes: 0,
     }
   }
-  const files = parseAddedContent(acquired.diff)
-  const binary = readBinaryChanges({ repoRoot, revision: ':', diff: acquired.diff, rules, exceptions, repo, gitExecutable, gitRunner })
+  const sections = parseDiffSections(acquired.diff)
+  const binary = readBinaryChanges({ repoRoot, revisions: ['--cached'], sections, rules, exceptions, repo, gitExecutable, gitRunner })
   return {
-    findings: [...scanAddedContent({ files, rules, exceptions, repo }), ...binary.findings],
-    diagnostics: binary.diagnostics,
+    findings: [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings],
+    diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
     bytes: acquired.bytes + binary.bytes,
   }
 }
@@ -463,11 +732,11 @@ export function scanPushUpdate({
       bytes: 0,
     }
   }
-  const files = parseAddedContent(acquired.diff)
-  const binary = readBinaryChanges({ repoRoot, revision: update.localSha, diff: acquired.diff, rules, exceptions, repo })
+  const sections = parseDiffSections(acquired.diff)
+  const binary = readBinaryChanges({ repoRoot, revisions: [acquired.base, update.localSha], sections, rules, exceptions, repo, gitRunner })
   return {
-    findings: [...scanAddedContent({ files, rules, exceptions, repo }), ...binary.findings],
-    diagnostics: binary.diagnostics,
+    findings: [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings],
+    diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
     bytes: acquired.bytes + binary.bytes,
   }
 }
