@@ -1,0 +1,306 @@
+{
+  "upstreamCommit": "1cd9a36c0c57a661d2d2234bc3207e887e1ba104",
+  "upstreamVersion": "0.9.72",
+  "operations": {
+    "discover": {
+      "module": "graphify.detect",
+      "function": "detect",
+      "family": "discovery",
+      "source": "Graphify-Labs/graphify/detect.py",
+      "sourceSha256": "0c539db73e11b93b14c9ae2a61d6094a3aae13a9dbd49158e3d5164a28b426a6",
+      "sourceLine": 1833,
+      "sourceEndLine": 2144,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "discover-incremental": {
+      "module": "graphify.detect",
+      "function": "detect_incremental",
+      "family": "incremental",
+      "source": "Graphify-Labs/graphify/detect.py",
+      "sourceSha256": "0c539db73e11b93b14c9ae2a61d6094a3aae13a9dbd49158e3d5164a28b426a6",
+      "sourceLine": 2646,
+      "sourceEndLine": 2793,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "extract-structure": {
+      "module": "graphify.extract",
+      "function": "extract",
+      "family": "extraction",
+      "source": "Graphify-Labs/graphify/extract.py",
+      "sourceSha256": "2facca59e22f735f68abc188bab0fa519427f4dc4deb2a235ed0e7c50ebe9c84",
+      "sourceLine": 7169,
+      "sourceEndLine": 8717,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "extract-semantic": {
+      "module": "graphify.llm",
+      "function": "extract_corpus_parallel",
+      "family": "semantic/media extraction",
+      "source": "Graphify-Labs/graphify/llm.py",
+      "sourceSha256": "51e31802e36fbb1e6b849661cc79e1cb238c4f8caffaf805592ad0dee21f8a90",
+      "sourceLine": 2550,
+      "sourceEndLine": 2850,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "build-native": {
+      "module": "graphify.build",
+      "function": "build",
+      "family": "construction",
+      "source": "Graphify-Labs/graphify/build.py",
+      "sourceSha256": "8f4b17391c60331de1875a47d697191d5ebe50011f36d204341f53e60c210eda",
+      "sourceLine": 1532,
+      "sourceEndLine": 1596,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "build-accepted": {
+      "module": "graphify.build",
+      "function": "build",
+      "family": "accepted projection",
+      "source": "Graphify-Labs/graphify/build.py",
+      "sourceSha256": "8f4b17391c60331de1875a47d697191d5ebe50011f36d204341f53e60c210eda",
+      "sourceLine": 1532,
+      "sourceEndLine": 1596,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "build-incremental": {
+      "module": "graphify.build",
+      "function": "build_merge",
+      "family": "incremental",
+      "source": "Graphify-Labs/graphify/build.py",
+      "sourceSha256": "8f4b17391c60331de1875a47d697191d5ebe50011f36d204341f53e60c210eda",
+      "sourceLine": 1921,
+      "sourceEndLine": 2358,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "merge-raw": {
+      "module": "graphify.build",
+      "function": "merge_raw_extraction",
+      "family": "incremental",
+      "source": "Graphify-Labs/graphify/build.py",
+      "sourceSha256": "8f4b17391c60331de1875a47d697191d5ebe50011f36d204341f53e60c210eda",
+      "sourceLine": 1777,
+      "sourceEndLine": 1918,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "dedup-proposals": {
+      "module": "graphify.dedup",
+      "function": "deduplicate_entities",
+      "family": "identity suggestions",
+      "source": "Graphify-Labs/graphify/dedup.py",
+      "sourceSha256": "7e65caa8ebc393db375e49c89764e6b089a77e88c10b18ff5f37fd440c7d1dfc",
+      "sourceLine": 557,
+      "sourceEndLine": 1039,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "cluster": {
+      "module": "graphify.cluster",
+      "function": "cluster",
+      "family": "communities",
+      "source": "Graphify-Labs/graphify/cluster.py",
+      "sourceSha256": "bfbfeac12c0a59cb7824d081e32a77e7cdcadd5530e9e6d1bf82264b08a1a78f",
+      "sourceLine": 232,
+      "sourceEndLine": 334,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "label-communities": {
+      "module": "graphify.cluster",
+      "function": "label_communities_by_hub",
+      "family": "communities",
+      "source": "Graphify-Labs/graphify/cluster.py",
+      "sourceSha256": "bfbfeac12c0a59cb7824d081e32a77e7cdcadd5530e9e6d1bf82264b08a1a78f",
+      "sourceLine": 184,
+      "sourceEndLine": 208,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "cohesion": {
+      "module": "graphify.cluster",
+      "function": "score_all",
+      "family": "communities",
+      "source": "Graphify-Labs/graphify/cluster.py",
+      "sourceSha256": "bfbfeac12c0a59cb7824d081e32a77e7cdcadd5530e9e6d1bf82264b08a1a78f",
+      "sourceLine": 373,
+      "sourceEndLine": 374,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "important-nodes": {
+      "module": "graphify.analyze",
+      "function": "god_nodes",
+      "family": "analysis",
+      "source": "Graphify-Labs/graphify/analyze.py",
+      "sourceSha256": "e6011dcbb35144134d8ebef12d17ea869e73749e79722caa9527ed30500edd4a",
+      "sourceLine": 112,
+      "sourceEndLine": 148,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "surprising-connections": {
+      "module": "graphify.analyze",
+      "function": "surprising_connections",
+      "family": "analysis",
+      "source": "Graphify-Labs/graphify/analyze.py",
+      "sourceSha256": "e6011dcbb35144134d8ebef12d17ea869e73749e79722caa9527ed30500edd4a",
+      "sourceLine": 151,
+      "sourceEndLine": 180,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "suggest-questions": {
+      "module": "graphify.analyze",
+      "function": "suggest_questions",
+      "family": "analysis",
+      "source": "Graphify-Labs/graphify/analyze.py",
+      "sourceSha256": "e6011dcbb35144134d8ebef12d17ea869e73749e79722caa9527ed30500edd4a",
+      "sourceLine": 446,
+      "sourceEndLine": 571,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "graph-diff": {
+      "module": "graphify.analyze",
+      "function": "graph_diff",
+      "family": "change analysis",
+      "source": "Graphify-Labs/graphify/analyze.py",
+      "sourceSha256": "e6011dcbb35144134d8ebef12d17ea869e73749e79722caa9527ed30500edd4a",
+      "sourceLine": 574,
+      "sourceEndLine": 655,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "import-cycles": {
+      "module": "graphify.analyze",
+      "function": "find_import_cycles",
+      "family": "code diagnostics",
+      "source": "Graphify-Labs/graphify/analyze.py",
+      "sourceSha256": "e6011dcbb35144134d8ebef12d17ea869e73749e79722caa9527ed30500edd4a",
+      "sourceLine": 658,
+      "sourceEndLine": 772,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "impact": {
+      "module": "graphify.affected",
+      "function": "affected_nodes",
+      "family": "code diagnostics",
+      "source": "Graphify-Labs/graphify/affected.py",
+      "sourceSha256": "c679c7e7f8881973e449fd885dd0ccc096dcc074f4c93f43962b1ce957ef77a7",
+      "sourceLine": 190,
+      "sourceEndLine": 255,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "query": {
+      "module": "graphify.serve",
+      "function": "_query_graph_text",
+      "family": "query",
+      "source": "Graphify-Labs/graphify/serve.py",
+      "sourceSha256": "a6df71d1c6efd3281d2938f8c234d987ba61a92270db585490688d194b7f6bec",
+      "sourceLine": 1361,
+      "sourceEndLine": 1420,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "path": {
+      "module": "graphify.serve",
+      "function": "_shortest_path_text",
+      "family": "query",
+      "source": "Graphify-Labs/graphify/serve.py",
+      "sourceSha256": "a6df71d1c6efd3281d2938f8c234d987ba61a92270db585490688d194b7f6bec",
+      "sourceLine": 1664,
+      "sourceEndLine": 1762,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "node": {
+      "module": "graphify.serve",
+      "function": "_resolve_single_node",
+      "family": "query",
+      "source": "Graphify-Labs/graphify/serve.py",
+      "sourceSha256": "a6df71d1c6efd3281d2938f8c234d987ba61a92270db585490688d194b7f6bec",
+      "sourceLine": 1638,
+      "sourceEndLine": 1661,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "neighbors": {
+      "module": "graphify.serve",
+      "function": "_resolve_single_node",
+      "family": "query",
+      "source": "Graphify-Labs/graphify/serve.py",
+      "sourceSha256": "a6df71d1c6efd3281d2938f8c234d987ba61a92270db585490688d194b7f6bec",
+      "sourceLine": 1638,
+      "sourceEndLine": 1661,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "cache-check": {
+      "module": "graphify.cache",
+      "function": "check_semantic_cache",
+      "family": "maintenance",
+      "source": "Graphify-Labs/graphify/cache.py",
+      "sourceSha256": "b630ce0c29cf5c00e2a43a7196492b7531ed905ac48c86f5f42c13e2ce841dbc",
+      "sourceLine": 1233,
+      "sourceEndLine": 1315,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "export-json": {
+      "module": "graphify.export",
+      "function": "to_json",
+      "family": "export",
+      "source": "Graphify-Labs/graphify/export.py",
+      "sourceSha256": "312f4658900e33360e6d23a005ee4ed227a30ae7737bfeba13318f7f16af5576",
+      "sourceLine": 272,
+      "sourceEndLine": 417,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "export-cypher": {
+      "module": "graphify.export",
+      "function": "to_cypher",
+      "family": "export",
+      "source": "Graphify-Labs/graphify/export.py",
+      "sourceSha256": "312f4658900e33360e6d23a005ee4ed227a30ae7737bfeba13318f7f16af5576",
+      "sourceLine": 480,
+      "sourceEndLine": 504,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "export-obsidian": {
+      "module": "graphify.export",
+      "function": "to_obsidian",
+      "family": "export",
+      "source": "Graphify-Labs/graphify/export.py",
+      "sourceSha256": "312f4658900e33360e6d23a005ee4ed227a30ae7737bfeba13318f7f16af5576",
+      "sourceLine": 687,
+      "sourceEndLine": 1037,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "export-canvas": {
+      "module": "graphify.export",
+      "function": "to_canvas",
+      "family": "export",
+      "source": "Graphify-Labs/graphify/export.py",
+      "sourceSha256": "312f4658900e33360e6d23a005ee4ed227a30ae7737bfeba13318f7f16af5576",
+      "sourceLine": 1040,
+      "sourceEndLine": 1215,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "export-graphml": {
+      "module": "graphify.export",
+      "function": "to_graphml",
+      "family": "export",
+      "source": "Graphify-Labs/graphify/export.py",
+      "sourceSha256": "312f4658900e33360e6d23a005ee4ed227a30ae7737bfeba13318f7f16af5576",
+      "sourceLine": 1218,
+      "sourceEndLine": 1292,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "export-svg": {
+      "module": "graphify.export",
+      "function": "to_svg",
+      "family": "export",
+      "source": "Graphify-Labs/graphify/export.py",
+      "sourceSha256": "312f4658900e33360e6d23a005ee4ed227a30ae7737bfeba13318f7f16af5576",
+      "sourceLine": 1295,
+      "sourceEndLine": 1362,
+      "qualification": "source-inspected; installed native execution pending"
+    },
+    "reflect": {
+      "module": "graphify.reflect",
+      "function": "reflect",
+      "family": "work memory",
+      "source": "Graphify-Labs/graphify/reflect.py",
+      "sourceSha256": "53d877f8009344cfc721d400444bbf2c7f7fcdcd3c4f97580a369c4f79b06db0",
+      "sourceLine": 564,
+      "sourceEndLine": 610,
+      "qualification": "source-inspected; installed native execution pending"
+    }
+  }
+}
