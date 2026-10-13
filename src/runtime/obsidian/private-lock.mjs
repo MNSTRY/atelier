@@ -138,18 +138,21 @@ export async function acquirePrivateGenerationLock({ workspaceRoot, directory, w
   for (const name of after.names) {
     if (Number(TICKET_NAME.exec(name)[1]) < generation) try { fs.unlinkSync(path.join(contained, name)) } catch { /* pruned by somebody else */ }
   }
+  // Settled once the lock is given back, or found not to be ours any more. A release that throws (a full disk, an
+  // I/O error while the released ticket is written) settles nothing: the lock is still held, and calling release()
+  // again tries again. Writing the same released ticket a second time is harmless.
   let released = false
   return {
     acquired: true,
     generation,
     release() {
       if (released) return false
-      released = true
       let current
-      try { current = readRegularTextNoFollow(file) } catch (error) { if (error.code === 'ENOENT') return false; throw error }
+      try { current = readRegularTextNoFollow(file) } catch (error) { if (error.code === 'ENOENT') { released = true; return false } throw error }
       // Taken over after a proof of abandonment (this process was thought gone): nothing here is ours to release.
-      if (current !== body) return false
+      if (current !== body) { released = true; return false }
       publishPrivateFile(path.join(contained, ticketName(generation, 'released')), body)
+      released = true
       return true
     },
   }

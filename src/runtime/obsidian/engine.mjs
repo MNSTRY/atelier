@@ -257,6 +257,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   let watching = { signature: null, handle: null }
   let known = null // { stateStore, maintenanceMode } once a workspace has been resolved
   let heldLock = null
+  let releaseOwed = false
   // Views somebody asked to have prepared and published once more, at the next tick.
   const preparationRequests = new Set()
   // The views the project declared at the last tick; null before the first.
@@ -278,6 +279,14 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   }
 
   async function takeLock(workspaceRoot, workspaceId) {
+    // A lock an earlier tick could not give back is still this process's, and its ticket on disk unreleased: a tick
+    // that tried to take it anew would find its own ticket and answer `busy` until the process ends. It is given back
+    // first. A release that fails again fails this tick, and is owed to the next.
+    if (heldLock && releaseOwed) {
+      heldLock.release()
+      heldLock = null
+      releaseOwed = false
+    }
     if (heldLock) return { acquired: true }
     const lock = await rules.acquireEngineLock({
       workspaceRoot, directory: path.join(workspaceRoot, ENGINE_LOCK_DIRECTORY), workspaceId, purpose: 'maintenance-engine', service: lockOwner, clock, proveAbandoned,
@@ -286,10 +295,16 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     return lock
   }
 
+  // Gives the lock back at the end of a tick. One that cannot be given back (its released ticket could not be written)
+  // stays held, and the failure is the tick's: the next tick gives it back before anything else.
   function dropLock() {
     const lock = heldLock
+    if (lock === null) return
+    try { lock.release() } catch (error) {
+      releaseOwed = true
+      throw error
+    }
     heldLock = null
-    lock?.release()
   }
 
   function onWatcherEvent(roots, { rootId, relative }) {
