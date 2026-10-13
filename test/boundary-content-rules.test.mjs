@@ -634,8 +634,32 @@ test('a file that replaces a directory is never judged by a pairing the main dif
   fs.rmSync(path.join(site, 'conf.cfg'), { recursive: true, force: true })
   fs.writeFileSync(path.join(site, 'conf.cfg'), `${contents}extra = 1\n`)
   git(site, ['add', '.'])
+  // The directory's files are not read with it, so the file is judged whole, as the main diff has it.
   const errors = stagedSecretErrors(site, project, policy)
-  assert.ok(errors.some((item) => item.path === 'conf.cfg' && (item.rule === 'secret-material' || item.code === 'content-scan-incomplete')), JSON.stringify(errors))
+  assert.ok(errors.some((item) => item.path === 'conf.cfg' && item.line === 2 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
+})
+
+test('declared-binary text batches are split by size as well as count', (t) => {
+  const { site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  const line = `${'x'.repeat(63)}\n`
+  for (const name of ['a.cfg', 'b.cfg']) fs.writeFileSync(path.join(site, name), `${KEY_MATERIAL}\n${line.repeat(80 * 1024)}`)
+  git(site, ['add', '.'])
+  const textDiffs = []
+  const result = scanStagedRepository({
+    repoRoot: site,
+    repo: 'site',
+    gitRunner: (exe, args, options) => {
+      const literal = args.filter((value) => value.startsWith(':(literal)'))
+      if (literal.length > 0) textDiffs.push(literal.length)
+      return spawnSync(exe, args, options)
+    },
+  })
+  // Each file holds about 5 MiB, so two would pass half the 16 MiB diff limit together.
+  assert.deepEqual(textDiffs, [1, 1])
+  assert.deepEqual(result.findings.filter((item) => item.rule === 'secret-material').map((item) => item.path).sort(), ['a.cfg', 'b.cfg'])
+  assert.deepEqual(result.diagnostics, [])
 })
 
 test('declared-binary text is read in batches, and file by file when a batch cannot be read', (t) => {
