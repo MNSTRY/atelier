@@ -770,6 +770,21 @@ test('a pre-commit hook chained from a subdirectory judges the same commit', { s
   result = run(['commit', '--quiet', '-am', 'key'])
   assert.notEqual(result.status, 0, 'committed a key')
   assert.match(result.stderr + result.stdout, /secret-material|content-rule-violation/)
+  git(site, ['checkout', '--', CART])
+
+  // Hooks are shared with linked worktrees, where Git exports GIT_DIR without a
+  // work tree; the chained hook there judges the worktree's own commit.
+  fs.writeFileSync(path.join(hooks, 'pre-commit'), `#!/usr/bin/env bash\ncd src && exec '${path.join(hooks, 'pre-commit-atelier')}'\n`)
+  const linked = path.join(path.dirname(site), 'example-site-chained')
+  git(site, ['worktree', 'add', '--quiet', '-b', 'chained', linked])
+  const inLinked = hookedGit(t, linked)
+  fs.appendFileSync(path.join(linked, CART), '// clean in the worktree\n')
+  result = inLinked(['commit', '--quiet', '-am', 'clean in the worktree'])
+  assert.equal(result.status, 0, result.stderr + result.stdout)
+  fs.appendFileSync(path.join(linked, CART), `${KEY_MATERIAL}\n`)
+  result = inLinked(['commit', '--quiet', '-am', 'key in the worktree'])
+  assert.notEqual(result.status, 0, 'a linked worktree committed a key')
+  assert.match(result.stderr + result.stdout, /secret-material|content-rule-violation/)
 })
 
 test('a commit no single declared repo accounts for is refused', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {

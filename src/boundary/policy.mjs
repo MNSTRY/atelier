@@ -365,19 +365,18 @@ function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActo
  * The index a pre-commit hook is judging. Git names it in GIT_INDEX_FILE (a
  * temporary index under `git commit -a` or `git commit <paths>`, a linked
  * worktree's own index, or `.git/index` relative to the work tree's top) and
- * runs the hook at that top, though a chained hook may have moved. Git itself
- * says where the work tree is, from the hook's repository variables. Returns
- * null when no index is named.
+ * runs the hook at that top, though a chained hook may have moved. The work
+ * tree is found by Git's own discovery from where the hook runs; the hook's
+ * GIT_DIR is not used, because in a linked worktree Git exports it without a
+ * work tree, which would make any subdirectory look like the top. A work tree
+ * discovery cannot find is unresolved, and blocks. Returns null when no index
+ * is named.
  */
 export function hookIndexFromEnvironment({ env = process.env, cwd = process.cwd(), gitExecutable = 'git' } = {}) {
   const named = typeof env.GIT_INDEX_FILE === 'string' ? env.GIT_INDEX_FILE : ''
   if (!named) return null
-  const hookEnv = sanitizedGitEnvironment()
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR']) {
-    if (typeof env[key] === 'string' && env[key]) hookEnv[key] = env[key]
-  }
-  const workTree = gitPathOutput(cwd, ['rev-parse', '--show-toplevel'], hookEnv, gitExecutable)
-  const commonDir = gitPathOutput(cwd, ['rev-parse', '--git-common-dir'], hookEnv, gitExecutable)
+  const workTree = gitPathOutput(cwd, ['rev-parse', '--show-toplevel'], sanitizedGitEnvironment(), gitExecutable)
+  const commonDir = gitPathOutput(cwd, ['rev-parse', '--git-common-dir'], sanitizedGitEnvironment(), gitExecutable)
   return { workTree, indexFile: path.resolve(workTree ?? cwd, named), commonDir }
 }
 
