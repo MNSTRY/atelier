@@ -421,8 +421,8 @@ Refusals reuse existing codes:
   path is a link or passes through one; the refusal prints the directory's
   `realPath` to pass instead), `argument-unsupported` (an unknown flag, an
   extra argument, a flag with no value, an empty `--package` or
-  `--registry-host`, or a flag given more than once; an empty `--npm-root` is
-  `npm-root-required`), `manifest-missing`, `lockfile-missing`,
+  `--registry-host`, or a flag given more than once; an empty value after
+  `--npm-root=` is `npm-root-required`), `manifest-missing`, `lockfile-missing`,
   `lockfile-invalid` (not a JSON object, or a `packages` entry that is not an
   object), `lockfile-version` (version 1, or no `packages` map), `workspaces`,
   `prefix-mismatch` (a parent directory declares workspaces) and
@@ -455,9 +455,10 @@ Limits:
   Instead it requires `--npm-root` to be the directory's real path and refuses
   any parent directory of it that declares workspaces, whether or not that
   parent's workspaces include the candidate. A path that is a link, or passes
-  through one, is refused with its `realPath`. On macOS, `/tmp` and `$TMPDIR`
-  are links into `/private`, so a candidate staged there needs its real path
-  (for example `pwd -P` from inside it).
+  through one, is refused, with its `realPath` in the JSON result. On macOS,
+  `/tmp` is a link into `/private` and `$TMPDIR` passes through `/var`, another
+  such link, so a candidate staged there needs its real path (for example
+  `pwd -P` from inside it).
 - Containment of links and local files is checked by path, without following
   links. The folder a link points to is not opened: an override for a package
   that a link provides is listed as unchecked, never as checked.

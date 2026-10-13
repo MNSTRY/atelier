@@ -36,7 +36,7 @@ const HINTS = {
   'npm-root-required': 'Pass --npm-root with the absolute path of the staged candidate\'s npm root; this command has no default directory.',
   'npm-root-not-absolute': 'Pass --npm-root as an absolute path, so the plan cannot follow the current directory.',
   'npm-root-not-directory': 'Check the path: --npm-root must name an existing directory.',
-  'npm-root-linked': 'Pass the real path of the npm root, printed here as realPath. npm works from the physical directory, so a path through a link can name a project whose parent directories this plan did not check. On macOS, /tmp and $TMPDIR are links into /private, so a candidate staged there is refused until its real path is given.',
+  'npm-root-linked': 'Pass the real path of the npm root, given as realPath in the JSON result. npm works from the physical directory, so a path through a link can name a project whose parent directories this plan did not check. On macOS, /tmp is a link into /private and $TMPDIR passes through /var, another such link, so a candidate staged there is refused until its real path is given.',
   'argument-unsupported': 'This command plans only and accepts --npm-root, --package and --registry-host, each once and each with a value. It does not fetch, install or prove.',
   'manifest-missing': 'Point --npm-root at the directory that holds the candidate\'s own package.json.',
   'lockfile-missing': 'Install the candidate with npm so it has its own package-lock.json, then plan again.',
