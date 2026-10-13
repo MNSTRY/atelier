@@ -107,6 +107,9 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // A change the guard sees in the middle of a tick is read, where it may be a confirmed selection, while it is there.
   noteSelectionAtGuard: notePersonalSelectionNow,
+  // After a tick that failed without a typed reason, the next one looks at every view again, as the first tick of a
+  // process does: see tick().
+  rechecksEveryViewAfterFailure: true,
   // One engine per workspace at a time, across processes.
   acquireEngineLock: acquirePrivateGenerationLock,
   // The registered proposal adapter observes the open edits on every tick, so a structural edit is recorded as
@@ -490,11 +493,11 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     //
     // Every view's notes are looked at first, and the walk waits between notes, so a large vault does not hold the
     // listener for its whole length (at a full reconciliation every note is hashed, and after a publication the
-    // watcher has named each note it wrote). Nothing is checked at those waits and nothing is written: only this
-    // engine commits a manifest or writes the pending edits, under the lock this tick holds, so the manifest read
-    // before the walk is the one after it. A note changed after its turn is the next tick's to see, by its stat hint
-    // or the watcher, as one changed just after a walk that ran through is. The pending edits are then read,
-    // compared and written in one stretch, as before; the bytes an edit keeps are read there, not at the walk.
+    // watcher has named each note it wrote). Nothing is checked at those waits and nothing is written: within
+    // Atelier only this engine commits a manifest or writes the pending edits, under the lock this tick holds, so the
+    // manifest read before the walk is the one after it. A note changed after its turn is the next tick's to see, by
+    // its stat hint or the watcher, as one changed just after a walk that ran through is. The pending edits are then
+    // read, compared and written in one stretch, as before; the bytes an edit keeps are read there, not at the walk.
     const basesOf = new Map()
     const earlierLayout = new Set()
     const looked = []
@@ -516,7 +519,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       const digestOf = (notePath) => index.get(vaultKey(scope.scopeId, notePath))?.digest ?? null
       const observed = observeVaultEdits({ store, workspaceId, scopeId: scope.scopeId, manifest, bases, digestOf, edits, now, preserve: rules.preserve })
       edits = observed.edits
-      // A note that has gone is restored by the publisher; its disappearance is a change, once.
+      // A note that has gone is a change, once: the view is prepared again and its read-back says the note is missing.
+      // The publisher writes it back when it next publishes a generation of the view.
       if (observed.events.length > 0 || vault.changes.some((change) => change.kind === 'removed')) changes.push({ changeClass: 'vault-note', scopeId: scope.scopeId })
     }
     stateStore.writePendingEdits({ ...pending, edits })
@@ -560,18 +564,19 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const lateDocument = stateStore.readLateWriters()
     const knownFindings = new Set(lateDocument.findings.map((item) => `${item.scopeId}\u0000${item.journalId}\u0000${item.unit}\u0000${item.observedDigest}`))
     const lateStartedMs = phaseTime()
-    for (const { scope, store } of scopes) {
-      const journalIds = journalsToRecheck(store, { nowMs, full, windowMs: lateWriterWindowMs })
-      if (journalIds.length === 0) continue
-      for (const finding of seams.recheckDisplacedFiles({ store, journalIds, clock })) {
-        if (finding.code !== 'late-writer-captured') continue
-        const key = `${scope.scopeId}\u0000${finding.journalId}\u0000${finding.unit}\u0000${finding.observedDigest}`
-        if (knownFindings.has(key)) continue
-        knownFindings.add(key)
-        lateWriters.push({ scopeId: scope.scopeId, journalId: finding.journalId, unit: finding.unit, notePath: finding.notePath ?? null, digestAtMove: finding.digestAtMove ?? null, observedDigest: finding.observedDigest, objectRef: finding.objectRef, detectedAt: now })
+    try {
+      for (const { scope, store } of scopes) {
+        const journalIds = journalsToRecheck(store, { nowMs, full, windowMs: lateWriterWindowMs })
+        if (journalIds.length === 0) continue
+        for (const finding of seams.recheckDisplacedFiles({ store, journalIds, clock })) {
+          if (finding.code !== 'late-writer-captured') continue
+          const key = `${scope.scopeId}\u0000${finding.journalId}\u0000${finding.unit}\u0000${finding.observedDigest}`
+          if (knownFindings.has(key)) continue
+          knownFindings.add(key)
+          lateWriters.push({ scopeId: scope.scopeId, journalId: finding.journalId, unit: finding.unit, notePath: finding.notePath ?? null, digestAtMove: finding.digestAtMove ?? null, observedDigest: finding.observedDigest, objectRef: finding.objectRef, detectedAt: now })
+        }
       }
-    }
-    reportPhase('late-writer-recheck', lateStartedMs)
+    } finally { reportPhase('late-writer-recheck', lateStartedMs) }
     if (lateWriters.length > 0) {
       const findings = [...lateDocument.findings, ...lateWriters].sort((left, right) => compareText(left.detectedAt, right.detectedAt) || compareText(left.journalId, right.journalId) || left.unit - right.unit || compareText(left.observedDigest, right.observedDigest))
       stateStore.writeLateWriters({ schema: LATE_WRITERS_SCHEMA, workspaceId, findings })
@@ -579,9 +584,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // 6. Sources, settings, scopes, eligibility. The walk over the sources waits between files, as the walk over the
     // vault does; at a full reconciliation it hashes every one. A source changed after its turn is the next tick's to
-    // see, by its stat hint or the watcher. When this tick builds the graph, the look again at the sources after the
-    // build (`graph-source-recheck`) refuses such a change as `mixed-read`, as it does one made during the waits that
-    // already come between this walk and that look.
+    // see, by its stat hint or the watcher, or at the latest by the next full reconciliation. When this tick builds the
+    // graph, the look again at the sources after the build (`graph-source-recheck`) refuses such a change as
+    // `mixed-read`.
     const sourcesStartedMs = phaseTime()
     let sources
     try { sources = await reconcileCooperatively({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat }, createCooperativeBudget()) } finally { reportPhase('source-observation', sourcesStartedMs) }
@@ -899,7 +904,19 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       try {
         return await runTick()
       } catch (error) {
-        if (!isTypedRefusal(error)) throw error
+        if (!isTypedRefusal(error)) {
+          // A tick that failed without a typed reason may have looked at files and recorded what it saw in the index
+          // without acting on it: a note gone from a vault, a source that changed, or a configuration file that changed
+          // before the project could be loaded again, is a change once, and the next look would find nothing to change.
+          // The next tick therefore starts as the first tick of a process does: it loads the project again and looks
+          // at every view, so whatever is missing or changed makes its view stale, or is published, not left current.
+          if (rules.rechecksEveryViewAfterFailure) {
+            project = null
+            semantic = null
+            firstTick = true
+          }
+          throw error
+        }
         // Fail closed: nothing is published under a refusal, and every known view says why.
         try { await persistOutcome({ enablement: 'refused', state: 'stale', reason: error.code, now: isoTime(clock) }) } catch { /* the refusal itself is still reported */ }
         project = null

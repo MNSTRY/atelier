@@ -462,6 +462,104 @@ test('a vault note or a source changed at a wait of the walks at the start of a 
   assert.match(sourceBehind.afterThird, /moved in the night/, 'published by the next tick')
 })
 
+// A note removed from a vault, and the same tick failing afterwards without a typed reason. The removal is a change
+// once: the failed tick recorded it in the index and did not act on it. `scopes` are the views, `removeIn` the view a
+// note is removed from, `trouble` what goes wrong in that tick: given the world, it answers an `lstat` that throws for
+// the files it names (or null) and whether preserving an edit fails. Answers the state of the view after the next tick.
+async function removalThenFailure(t, { primitives = ENGINE_PRIMITIVES, scopes = [FULL_SCOPE], removeIn = FULL_SCOPE.scopeId, trouble }) {
+  const world = makeWorld(t, { ext: settingsOf(scopes) })
+  let failing = null
+  let preserveFails = false
+  const lstat = (file, ...rest) => {
+    if (failing !== null && failing(String(file))) throw Object.assign(new Error(`permission denied, lstat '${file}'`), { code: 'EACCES' })
+    return fs.lstatSync(file, ...rest)
+  }
+  const preserve = (store, bytes) => {
+    if (preserveFails) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+    return primitives.preserve(store, bytes)
+  }
+  const engine = world.engine({ lstat, primitives: { ...primitives, preserve } })
+  const first = await engine.tick()
+  for (const { scopeId } of scopes) assert.equal(world.scope(first, scopeId).state, 'current')
+  const removed = world.noteFile('east-wing:compass', removeIn)
+  fs.rmSync(removed)
+  const setUp = trouble(world)
+  failing = setUp.lstatFails ?? null
+  preserveFails = setUp.preserveFails === true
+  await assert.rejects(engine.tick(), (error) => error.code === (preserveFails ? 'ENOSPC' : 'EACCES'))
+  failing = null
+  preserveFails = false
+  const next = await engine.tick()
+  return { view: world.scope(next, removeIn), missing: !fs.existsSync(removed) }
+}
+
+test('a note removed from a vault, a source changed or a view added is not lost to a tick that then fails without a typed reason: the next tick starts as a first tick does, so the view says the note is missing and the change is published; mutation control: without that, the view stays current with the note gone or the old content, and the new view is never published', needsExchange, async (t) => {
+  const unchecked = { ...ENGINE_PRIMITIVES, rechecksEveryViewAfterFailure: false }
+  const cases = {
+    // A source that cannot be looked at in the walk over the sources.
+    'an unreadable source': { trouble: (world) => ({ lstatFails: (file) => file === world.source('west-wing/logs/tide.md') }) },
+    // A note of the same vault that cannot be looked at, later in the walk than the one removed.
+    'an unreadable note later in the same walk': { trouble: (world) => { const last = world.noteFile('west-wing:tide'); return { lstatFails: (file) => file === last } } },
+    // Preserving an edit of one view fails, after the walk over every view has seen the removal in the other.
+    'an edit of the other view that cannot be kept (the removal in the second view)': {
+      scopes: [FULL_SCOPE, EAST_SCOPE], removeIn: EAST_SCOPE.scopeId,
+      trouble: (world) => { const edited = world.noteFile('east-wing:lantern', FULL_SCOPE.scopeId); fs.appendFileSync(edited, '\nEdited in the vault.\n'); return { preserveFails: true } },
+    },
+    'an edit of the other view that cannot be kept (the removal in the first view)': {
+      scopes: [FULL_SCOPE, EAST_SCOPE], removeIn: FULL_SCOPE.scopeId,
+      trouble: (world) => { const edited = world.noteFile('east-wing:lantern', EAST_SCOPE.scopeId); fs.appendFileSync(edited, '\nEdited in the vault.\n'); return { preserveFails: true } },
+    },
+  }
+  for (const [name, input] of Object.entries(cases)) {
+    const after = await removalThenFailure(t, input)
+    assert.deepEqual([after.missing, after.view.state, after.view.reason, after.view.verified], [true, 'stale', 'vault-note-missing', false], `${name}: ${JSON.stringify(after.view)}`)
+    const blind = await removalThenFailure(t, { ...input, primitives: unchecked })
+    assert.deepEqual([blind.missing, blind.view.state], [true, 'current'], `${name}, the oracle can fail: ${JSON.stringify(blind.view)}`)
+  }
+
+  // A source changed and then the walk over the sources failing on a file after it: the change was recorded and not
+  // acted on, and the next tick publishes it.
+  const changedThenFailure = async (primitives) => {
+    const world = makeWorld(t)
+    let failing = false
+    const tide = world.source('west-wing/logs/tide.md')
+    const lstat = (file, ...rest) => { if (failing && String(file) === tide) throw Object.assign(new Error('permission denied'), { code: 'EACCES' }); return fs.lstatSync(file, ...rest) }
+    const engine = world.engine({ lstat, primitives })
+    assert.equal(world.scope(await engine.tick()).state, 'current')
+    fs.writeFileSync(world.source('east-wing/notes/compass.md'), FILES['east-wing/notes/compass.md'].replace('North is painted red.', 'North is painted blue.'))
+    failing = true
+    await assert.rejects(engine.tick(), (error) => error.code === 'EACCES')
+    failing = false
+    const next = await engine.tick()
+    return { state: world.scope(next).state, published: fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8') }
+  }
+  const published = await changedThenFailure(ENGINE_PRIMITIVES)
+  assert.equal(published.state, 'current')
+  assert.match(published.published, /North is painted blue\./)
+  const stale = await changedThenFailure(unchecked)
+  assert.deepEqual([stale.state, /North is painted red\./.test(stale.published)], ['current', true], 'the oracle can fail: the change is lost and the old note is reported current')
+
+  // A view added to the configuration, and the project loader failing once in that tick after the configuration files
+  // were looked at: the next tick loads the project again and publishes the new view.
+  const addedThenLoaderFails = async (primitives) => {
+    const world = makeWorld(t)
+    let loaderFails = false
+    const loadProject = () => {
+      if (loaderFails) { loaderFails = false; throw Object.assign(new Error('input/output error'), { code: 'EIO' }) }
+      return world.loadProject()
+    }
+    const engine = world.engine({ loadProject, primitives })
+    assert.equal(world.scope(await engine.tick()).state, 'current')
+    world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+    loaderFails = true
+    await assert.rejects(engine.tick(), (error) => error.code === 'EIO')
+    const next = await engine.tick()
+    return world.scope(next, EAST_SCOPE.scopeId)?.state ?? null
+  }
+  assert.equal(await addedThenLoaderFails(ENGINE_PRIMITIVES), 'current')
+  assert.equal(await addedThenLoaderFails(unchecked), null, 'the oracle can fail: the new view is never published')
+})
+
 test('an engine handed the production seams with prepareView replaced prepares through that replacement', needsExchange, async (t) => {
   const world = makeWorld(t)
   let replaced = 0
