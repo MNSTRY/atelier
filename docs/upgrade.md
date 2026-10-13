@@ -370,8 +370,9 @@ The command reads these files and no others:
 - `package.json` in each directory above the npm root, up to the filesystem
   root, to refuse a parent that declares workspaces. When the npm root is under
   your home directory, that includes a `package.json` in the home directory;
-- Atelier's own `package.json`, for the default package name, when `--package`
-  is not given.
+- Atelier's own `package.json`. The CLI reads it on every run for its version;
+  this plan also takes the default package name from it when `--package` is
+  not given.
 
 It does not run npm, use the network, read npm configuration or credentials, or
 write anything. The directory need not be an Atelier workspace, and `--npm-root`
@@ -417,9 +418,11 @@ Refusals reuse existing codes:
 
 - `usage`: the input is not supported. Reasons: `npm-root-required`,
   `npm-root-not-absolute`, `npm-root-not-directory`, `npm-root-linked` (the
-  path is a link or passes through one), `argument-unsupported` (an unknown
-  flag, an extra argument, a flag with no value or an empty value, or a flag
-  given more than once), `manifest-missing`, `lockfile-missing`,
+  path is a link or passes through one; the refusal prints the directory's
+  `realPath` to pass instead), `argument-unsupported` (an unknown flag, an
+  extra argument, a flag with no value, an empty `--package` or
+  `--registry-host`, or a flag given more than once; an empty `--npm-root` is
+  `npm-root-required`), `manifest-missing`, `lockfile-missing`,
   `lockfile-invalid` (not a JSON object, or a `packages` entry that is not an
   object), `lockfile-version` (version 1, or no `packages` map), `workspaces`,
   `prefix-mismatch` (a parent directory declares workspaces) and
@@ -450,13 +453,17 @@ Limits:
 
 - The plan cannot run `npm prefix`, so `prefixVerified` is always `false`.
   Instead it requires `--npm-root` to be the directory's real path and refuses
-  any parent directory of it that declares workspaces. A path that is a link,
-  or passes through one, is refused.
+  any parent directory of it that declares workspaces, whether or not that
+  parent's workspaces include the candidate. A path that is a link, or passes
+  through one, is refused with its `realPath`. On macOS, `/tmp` and `$TMPDIR`
+  are links into `/private`, so a candidate staged there needs its real path
+  (for example `pwd -P` from inside it).
 - Containment of links and local files is checked by path, without following
   links. The folder a link points to is not opened: an override for a package
   that a link provides is listed as unchecked, never as checked.
 - Approving a host does not verify the transport. A host is matched by its
-  exact name and port; `http` and `https` are reported and not distinguished.
+  exact name and port, whatever the scheme; `registrySchemes` counts `http`
+  and `https` separately.
 - The manifest binding compares the name and version the installed manifest
   declares. It does not verify the installed files against the lockfile's
   `integrity`.

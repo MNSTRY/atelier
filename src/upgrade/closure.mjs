@@ -36,14 +36,14 @@ const HINTS = {
   'npm-root-required': 'Pass --npm-root with the absolute path of the staged candidate\'s npm root; this command has no default directory.',
   'npm-root-not-absolute': 'Pass --npm-root as an absolute path, so the plan cannot follow the current directory.',
   'npm-root-not-directory': 'Check the path: --npm-root must name an existing directory.',
-  'npm-root-linked': 'Pass the real path of the npm root. npm works from the physical directory, so a path through a link can name a project whose parent directories this plan did not check.',
+  'npm-root-linked': 'Pass the real path of the npm root, printed here as realPath. npm works from the physical directory, so a path through a link can name a project whose parent directories this plan did not check. On macOS, /tmp and $TMPDIR are links into /private, so a candidate staged there is refused until its real path is given.',
   'argument-unsupported': 'This command plans only and accepts --npm-root, --package and --registry-host, each once and each with a value. It does not fetch, install or prove.',
   'manifest-missing': 'Point --npm-root at the directory that holds the candidate\'s own package.json.',
   'lockfile-missing': 'Install the candidate with npm so it has its own package-lock.json, then plan again.',
   'lockfile-invalid': 'Regenerate the candidate\'s package-lock.json with npm; this plan reads it as a JSON object whose packages map holds one object per entry.',
   'lockfile-version': 'Regenerate the lockfile with a current npm (lockfileVersion 2 or 3); version 1 has no packages map to classify.',
   workspaces: 'npm workspaces are not supported by this plan. Check a single npm root project, or record the workspace as unchecked.',
-  'prefix-mismatch': 'A parent directory declares npm workspaces, so npm would treat another directory as this project\'s root. Plan from a root that npm resolves to itself.',
+  'prefix-mismatch': 'A parent directory declares npm workspaces. If its workspaces include this directory, npm treats that parent as the root project; this plan does not resolve workspace membership, so it refuses any such parent. Stage the candidate where no parent directory declares workspaces.',
   'linked-node-modules': 'The candidate needs its own node_modules directory; a link shares an installation with another project.',
   'missing-integrity': 'An offline reinstall needs every registry entry locked with both resolved and integrity; inspect how the candidate resolved these entries.',
   'git-source': 'A git dependency cannot be captured from the registry. Record it as unchecked, or replace it with a published version before proving the closure.',
@@ -56,6 +56,8 @@ const HINTS = {
   'selected-copies-differ': 'The lockfile installs the selected package more than once and the copies do not agree, so no single set of overrides applies. Deduplicate the selected package, or record its overrides as unchecked.',
   'copy-off-pin': 'npm applies overrides only in the root project, so consumers never receive them. Changing a pin or an override in the owner\'s project needs the owner\'s consent.',
 }
+
+const HOSTLESS_REGISTRY_HINT = 'This tarball URL has no readable host, so no --registry-host can approve it. Regenerate the lockfile with npm so the entry records a full registry URL, or record it as unchecked.'
 
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex')
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -413,7 +415,8 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
     realRoot = null
   }
   if (realRoot !== root) {
-    return refuse(USAGE, 'npm-root-linked', '--npm-root is not the real path of the directory: it is a link or passes through one')
+    return refuse(USAGE, 'npm-root-linked', '--npm-root is not the real path of the directory: it is a link or passes through one',
+      realRoot === null ? {} : { realPath: realRoot })
   }
   if (selectedPackage !== null && selectedPackage !== undefined && (typeof selectedPackage !== 'string' || selectedPackage.trim() === '')) {
     return refuse(USAGE, 'argument-unsupported', '--package needs a package name', { argument: '--package' })
@@ -428,7 +431,7 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
   if (!manifest.value) return refuse(USAGE, 'manifest-missing', 'the npm root has no readable package.json')
   if (declaresWorkspaces(manifest.value)) return refuse(USAGE, 'workspaces', 'the npm root declares npm workspaces, which this plan does not support')
   if (workspaceAncestor(root) !== null) {
-    return refuse(USAGE, 'prefix-mismatch', 'a parent directory declares npm workspaces, so npm would not treat this directory as its own root project')
+    return refuse(USAGE, 'prefix-mismatch', 'a parent directory declares npm workspaces, so npm may not treat this directory as its own root project')
   }
   if (nodeModulesIsLinked(root)) {
     return refuse(USAGE, 'linked-node-modules', 'node_modules in the npm root is a link or resolves inside another installation')
@@ -473,7 +476,9 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
   }
   for (const finding of sources.findings) {
     const { reason, ...detail } = finding
-    refuse(CONSUMER_CLOSURE_INCOMPLETE, reason, sourceMessages[reason](finding), detail)
+    // Naming a host cannot approve a URL that has none, so that case gets its own next step.
+    const hint = reason === 'other-host' && finding.host === null ? { hint: HOSTLESS_REGISTRY_HINT } : {}
+    refuse(CONSUMER_CLOSURE_INCOMPLETE, reason, sourceMessages[reason](finding), { ...detail, ...hint })
   }
 
   const { tarballs, missing } = capturedClosure(lock)
@@ -601,10 +606,15 @@ function repeatedFlags(argv) {
 // nothing. `argv` is the raw argument list, used only to refuse a flag given
 // more than once.
 export function runClosurePlanCommand(args, argv = []) {
-  const unsupported = [
+  // The raw arguments are checked too: the shared parser drops some names
+  // (for example --__proto__), which would otherwise pass unnoticed.
+  const rawFlags = (Array.isArray(argv) ? argv : [])
+    .filter((item) => typeof item === 'string' && item.startsWith('--'))
+    .map((item) => item.slice(2).split('=')[0])
+  const unsupported = [...new Set([
     ...Object.keys(args).filter((key) => key !== '_' && !CLOSURE_FLAGS.includes(key)).map((key) => `--${key}`),
-    ...(args._ ?? []).slice(1).map((item) => (item === '' ? '(empty argument)' : item)),
-  ]
+    ...rawFlags.filter((name) => !CLOSURE_FLAGS.includes(name)).map((name) => `--${name}`),
+  ]), ...(args._ ?? []).slice(1).map((item) => (item === '' ? '(empty argument)' : item))]
   const valueless = CLOSURE_FLAGS.filter((flag) => args[flag] === true)
   const repeated = repeatedFlags(Array.isArray(argv) ? argv : [])
   const hosts = typeof args['registry-host'] === 'string'

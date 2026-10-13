@@ -527,11 +527,40 @@ test('two lockfile copies of the selected package at different versions are refu
   const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
     lock.packages[NESTED_PUBLISHER_PATH] = { ...lock.packages[PUBLISHER_PATH], version: '2.0.0' }
   })
-  installManifest(npmRoot, NESTED_PUBLISHER_PATH, { ...fixture('publisher-package.json'), version: '2.0.0', overrides: { 'pinned-dep': '9.9.9' } })
+  // Same overrides as the first copy, so only the version check can refuse.
+  installManifest(npmRoot, NESTED_PUBLISHER_PATH, { ...fixture('publisher-package.json'), version: '2.0.0' })
   const result = plan(npmRoot)
   assert.deepEqual(reasons(result), ['consumer-closure-incomplete/selected-copies-differ'])
   assert.deepEqual(result.refusals[0].copies, [{ path: PUBLISHER_PATH, version: '1.0.0' }, { path: NESTED_PUBLISHER_PATH, version: '2.0.0' }])
   assert.deepEqual(result.selectedPackage.manifests.map((read) => read.path), [`${PUBLISHER_PATH}/package.json`, `${NESTED_PUBLISHER_PATH}/package.json`])
+  assert.deepEqual(result.overrides, NO_OVERRIDES_USED)
+})
+
+test('a selected copy whose lockfile entry and manifest both lack a version is refused, not bound', (t) => {
+  const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    delete lock.packages[PUBLISHER_PATH].version
+  })
+  const { version, ...unversioned } = fixture('publisher-package.json')
+  assert.equal(version, '1.0.0')
+  installManifest(npmRoot, PUBLISHER_PATH, unversioned)
+  const result = plan(npmRoot)
+  assert.deepEqual(reasons(result), ['consumer-closure-incomplete/selected-package-mismatch'])
+  assert.deepEqual(result.refusals[0].locked, { name: SELECTED, version: null })
+  assert.deepEqual(result.refusals[0].manifest, { name: SELECTED, version: null })
+  assert.deepEqual(result.overrides, NO_OVERRIDES_USED)
+})
+
+test('a selected copy whose lockfile path leads outside the npm root is not read', (t) => {
+  const outside = '../outside/node_modules/@example/publisher'
+  const { holder, npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages[outside] = { ...lock.packages[PUBLISHER_PATH] }
+  })
+  // A manifest really exists there, so only the containment check can keep it unread.
+  installManifest(holder, 'outside/node_modules/@example/publisher', fixture('publisher-package.json'))
+  const result = plan(npmRoot)
+  assert.ok(reasons(result).includes('consumer-closure-incomplete/selected-package-unreadable'), JSON.stringify(result.refusals))
+  assert.ok(result.refusals.some((refusal) => refusal.reason === 'selected-package-unreadable' && refusal.path === outside))
+  assert.equal(result.selectedPackage.manifests.some((read) => read.path.startsWith('../')), false)
   assert.deepEqual(result.overrides, NO_OVERRIDES_USED)
 })
 
@@ -637,6 +666,8 @@ test('an npm root given through a link is refused, and the real path of the same
   const result = plan(linked)
   assert.deepEqual(reasons(result), ['usage/npm-root-linked'])
   assert.equal(result.npmRoot, linked)
+  assert.equal(result.refusals[0].realPath, npmRoot, 'the refusal names the path to pass instead')
+  assert.match(result.refusals[0].hint, /realPath/)
   assert.equal(Object.hasOwn(result, 'lock'), false, 'nothing behind the link is classified')
   assert.deepEqual(plan(npmRoot).refusals, [])
   assert.deepEqual(plan(`${npmRoot}${path.sep}`).refusals, [], 'a trailing separator is normalized, not refused')
@@ -728,6 +759,28 @@ test('a registry URL with no readable host is never approved, and schemes are re
   // Naming the sentinel as an approved host approves nothing.
   const approved = lockSourceFindings(lock, { npmRoot, approvedRegistryHosts: ['unparseable', 'registry.example.test'] })
   assert.deepEqual(approved.findings, [{ reason: 'other-host', path: 'node_modules/odd-dep', host: null }])
+})
+
+test('a registry URL with no readable host gets a next step that can clear it', (t) => {
+  const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages['node_modules/odd-dep'] = { version: '1.0.0', resolved: 'https://[not-a-host/odd-dep-1.0.0.tgz', integrity: 'sha512-invented' }
+  })
+  const result = plan(npmRoot, { approvedRegistryHosts: ['registry.example.test'] })
+  const hostless = result.refusals.find((refusal) => refusal.reason === 'other-host' && refusal.host === null)
+  assert.ok(hostless, JSON.stringify(result.refusals))
+  assert.doesNotMatch(hostless.hint, /Name the host with --registry-host/)
+  assert.match(hostless.hint, /no --registry-host can approve it/)
+  const named = plan(npmRoot, { approvedRegistryHosts: ['other.example.test'] }).refusals.filter((refusal) => refusal.reason === 'other-host' && refusal.host !== null)
+  for (const refusal of named) assert.match(refusal.hint, /--registry-host/)
+})
+
+test('a flag the shared parser drops is still refused as unsupported', (t) => {
+  const { npmRoot } = candidate(t, 'clean-lock.json')
+  const result = cli(t, ['--npm-root', npmRoot, '--__proto__', 'x'])
+  assert.equal(result.status, CLOSURE_REFUSAL_EXIT, result.stderr)
+  const printed = JSON.parse(result.stdout)
+  assert.deepEqual(printed.refusals.map((refusal) => refusal.reason), ['argument-unsupported'])
+  assert.deepEqual(printed.refusals[0].arguments, ['--__proto__'])
 })
 
 test('every lockfile entry is counted once: known sources plus unclassified equal the entry count', (t) => {
