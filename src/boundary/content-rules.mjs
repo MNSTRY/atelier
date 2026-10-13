@@ -185,38 +185,173 @@ export function scanAddedContent({ files, rules = DEFAULT_CONTENT_RULES, excepti
   return findings
 }
 
-/** Parse `git diff` output into added files and added lines with line numbers. */
-export function parseAddedContent(diff) {
-  const files = []
+// The diff commands below pin their own output format, so repository or user
+// configuration (prefixes, colour, external diff drivers, textconv) cannot change
+// what the parser reads.
+export const CANONICAL_DIFF_FLAGS = Object.freeze(['--no-ext-diff', '--no-textconv', '--no-color', '--src-prefix=a/', '--dst-prefix=b/'])
+
+const OCTAL_ESCAPE = /^[0-7]{3}$/
+const SIMPLE_ESCAPES = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 }
+
+/**
+ * Read one C-quoted path token as Git writes it (core.quotePath), starting at the
+ * opening quote. Returns the decoded path and the index after the closing quote,
+ * or null when the token is malformed.
+ */
+function readQuotedToken(text, start) {
+  if (text[start] !== '"') return null
+  const bytes = []
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = String.fromCodePoint(text.codePointAt(index))
+    if (char === '"') return { value: Buffer.from(bytes).toString('utf8'), end: index + 1 }
+    if (char !== '\\') {
+      bytes.push(...Buffer.from(char, 'utf8'))
+      index += char.length - 1
+      continue
+    }
+    const next = text[index + 1]
+    if (next === undefined) return null
+    const octal = text.slice(index + 1, index + 4)
+    if (OCTAL_ESCAPE.test(octal)) {
+      bytes.push(Number.parseInt(octal, 8))
+      index += 3
+    } else if (Object.hasOwn(SIMPLE_ESCAPES, next)) {
+      bytes.push(SIMPLE_ESCAPES[next])
+      index += 1
+    } else {
+      return null
+    }
+  }
+  return null
+}
+
+/** A path as it appears after a fixed prefix in a header line, quoted or bare. */
+function prefixedPath(token, prefix) {
+  if (token.startsWith('"')) {
+    const quoted = readQuotedToken(token, 0)
+    if (!quoted || quoted.end !== token.length || !quoted.value.startsWith(prefix)) return null
+    return quoted.value.slice(prefix.length)
+  }
+  return token.startsWith(prefix) ? token.slice(prefix.length) : null
+}
+
+/**
+ * The destination path of a `diff --git` header. A bare header is ambiguous when
+ * a path contains " b/", so it is resolved only when both sides name the same
+ * path, which is every case except a rename or copy; those are resolved from the
+ * `rename to` / `copy to` lines that follow.
+ */
+export function diffHeaderPath(line) {
+  if (!line.startsWith('diff --git ')) return null
+  const rest = line.slice('diff --git '.length)
+  if (rest.startsWith('"')) {
+    const first = readQuotedToken(rest, 0)
+    if (!first || rest[first.end] !== ' ') return null
+    return prefixedPath(rest.slice(first.end + 1), 'b/')
+  }
+  if (rest.endsWith('"')) {
+    const open = rest.lastIndexOf(' "')
+    return open < 0 ? null : prefixedPath(rest.slice(open + 1), 'b/')
+  }
+  if (rest.length < 5 || (rest.length - 5) % 2 !== 0) return null
+  const half = (rest.length - 5) / 2
+  const candidate = rest.slice(2, 2 + half)
+  return rest === `a/${candidate} b/${candidate}` ? candidate : null
+}
+
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+
+/**
+ * Split `git diff --unified=0` output into file sections. Lines are read as
+ * content only inside a hunk, for exactly as many lines as its header counts, so
+ * content can never be read as a header and a header can never hide content. A
+ * section whose path or hunks cannot be read is returned with `incomplete` set,
+ * so the caller fails closed instead of skipping it.
+ */
+export function parseDiffSections(diff) {
+  const sections = []
   let current = null
+  let pendingAdded = 0
+  let pendingRemoved = 0
   let lineNumber = 0
   for (const raw of String(diff ?? '').split('\n')) {
+    if (pendingAdded > 0 || pendingRemoved > 0) {
+      if (raw.startsWith('+') && pendingAdded > 0) {
+        current.addedLines.push({ number: lineNumber, text: raw.slice(1) })
+        lineNumber += 1
+        pendingAdded -= 1
+        continue
+      }
+      if (raw.startsWith('-') && pendingRemoved > 0) {
+        pendingRemoved -= 1
+        continue
+      }
+      if (raw.startsWith('\\')) continue // "\ No newline at end of file"
+      current.incomplete = 'hunk-shorter-than-its-header'
+      pendingAdded = 0
+      pendingRemoved = 0
+    }
     if (raw.startsWith('diff --git ')) {
-      const header = raw.match(/^diff --git a\/(.*) b\/(.*)$/)
-      current = { path: header ? normalizeRelPath(header[2]) : null, added: false, addedLines: [] }
-      files.push(current)
+      const headerPath = diffHeaderPath(raw)
+      current = {
+        path: headerPath === null ? null : normalizeRelPath(headerPath),
+        added: false,
+        deleted: false,
+        binary: false,
+        addedLines: [],
+        incomplete: null,
+        inHeader: true,
+      }
+      sections.push(current)
       continue
     }
     if (!current) continue
-    if (raw.startsWith('new file mode ')) {
-      current.added = true
-      continue
-    }
-    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+    if (raw.startsWith('\\')) continue
+    const hunk = raw.match(HUNK_HEADER)
     if (hunk) {
-      lineNumber = Number(hunk[1])
+      current.inHeader = false
+      pendingRemoved = hunk[1] === undefined ? 1 : Number(hunk[1])
+      lineNumber = Number(hunk[2])
+      pendingAdded = hunk[3] === undefined ? 1 : Number(hunk[3])
       continue
     }
-    if (/^\+(?!\+)/.test(raw)) {
-      current.addedLines.push({ number: lineNumber, text: raw.slice(1) })
-      lineNumber += 1
-    } else if (/^-(?!-)/.test(raw)) {
-      // removed lines do not advance the new-file line counter
-    } else if (raw.startsWith(' ')) {
-      lineNumber += 1
+    if (raw.startsWith('Binary files ') && raw.endsWith(' differ')) {
+      current.inHeader = false
+      current.binary = true
+      continue
+    }
+    if (!current.inHeader) {
+      if (raw !== '') current.incomplete ??= 'unexpected-line-outside-a-hunk'
+      continue
+    }
+    if (raw.startsWith('new file mode ')) current.added = true
+    else if (raw.startsWith('deleted file mode ')) current.deleted = true
+    else if (raw.startsWith('rename to ') || raw.startsWith('copy to ')) {
+      const target = raw.slice(raw.indexOf(' to ') + 4)
+      const named = target.startsWith('"') ? readQuotedToken(target, 0) : { value: target, end: target.length }
+      if (named && named.end === target.length) current.path = normalizeRelPath(named.value)
+      else current.incomplete ??= 'unreadable-rename-target'
+    } else if (raw.startsWith('+++ ')) {
+      const target = raw.slice(4)
+      if (target !== '/dev/null' && current.path === null) {
+        const named = prefixedPath(target, 'b/')
+        if (named !== null) current.path = normalizeRelPath(named)
+      }
     }
   }
-  return files.filter((file) => file.path)
+  if (pendingAdded > 0 || pendingRemoved > 0) current.incomplete = 'hunk-shorter-than-its-header'
+  for (const section of sections) {
+    delete section.inHeader
+    if (section.path === null) section.incomplete ??= 'unreadable-file-path'
+  }
+  return sections
+}
+
+/** Parse `git diff` output into added files and added lines with line numbers. */
+export function parseAddedContent(diff) {
+  return parseDiffSections(diff)
+    .filter((section) => section.path !== null)
+    .map(({ path: filePath, added, addedLines }) => ({ path: filePath, added, addedLines }))
 }
 
 /** Ref updates arrive on the pre-push hook's stdin as `<localRef> <localSha> <remoteRef> <remoteSha>`. */
@@ -292,12 +427,12 @@ export function pushRangeBase(repoRoot, remoteSha) {
 
 export function diffForPushRange(repoRoot, { localSha, remoteSha }, options = {}) {
   const base = pushRangeBase(repoRoot, remoteSha)
-  const result = gitOutputResult(repoRoot, ['diff', '--unified=0', base, localSha], options)
+  const result = gitOutputResult(repoRoot, ['diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', base, localSha], options)
   return result.ok ? { ...result, base, diff: result.stdout } : { ...result, base, diff: null }
 }
 
 export function stagedDiff(repoRoot, options = {}) {
-  const result = gitOutputResult(repoRoot, ['diff', '--cached', '--unified=0'], options)
+  const result = gitOutputResult(repoRoot, ['diff', '--cached', ...CANONICAL_DIFF_FLAGS, '--unified=0'], options)
   return result.ok ? { ...result, diff: result.stdout } : { ...result, diff: null }
 }
 
@@ -313,36 +448,23 @@ function incompleteDiagnostic({ repo, path: filePath = null, message, details = 
   }
 }
 
+function unreadableSectionDiagnostics(diff, repo) {
+  return parseDiffSections(diff)
+    .filter((section) => section.incomplete)
+    .map((section) => incompleteDiagnostic({
+      repo,
+      path: section.path,
+      message: 'a changed file could not be read from the diff, so its content was not scanned',
+      details: { reason: section.incomplete },
+    }))
+}
+
 function binaryPathsFromDiff(diff) {
-  const paths = new Set()
-  let current = null
   // A deleted path is absent from the revision being scanned, so there is nothing
   // to read: the blob it had is already in history and is not being introduced.
-  // Only the extended header can say so; a content line always starts with a
-  // prefix, so it cannot forge the header.
-  let inHeader = false
-  let deleted = false
-  for (const line of String(diff ?? '').split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      const header = line.match(/^diff --git a\/(.*) b\/(.*)$/)
-      current = header ? normalizeRelPath(header[2]) : null
-      inHeader = true
-      deleted = false
-      continue
-    }
-    if (!current) continue
-    if (inHeader && line.startsWith('deleted file mode ')) {
-      deleted = true
-      continue
-    }
-    if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
-      inHeader = false
-      if (!deleted) paths.add(current)
-      continue
-    }
-    if (line.startsWith('@@') || line.startsWith('--- ')) inHeader = false
-  }
-  return [...paths]
+  return [...new Set(parseDiffSections(diff)
+    .filter((section) => section.binary && !section.deleted && section.path !== null)
+    .map((section) => section.path))]
 }
 
 function isBinaryBuffer(buffer) {
@@ -356,7 +478,18 @@ function isBinaryBuffer(buffer) {
 }
 
 function scanBinaryBuffer({ buffer, filePath, rules, exceptions, repo }) {
-  if (!isBinaryBuffer(buffer)) return []
+  // Git reports a file as binary when its attributes say so, whatever it holds.
+  // Text declared binary (for example `*.cfg binary` in .gitattributes, which can
+  // arrive with the tree) is scanned line by line like any added text.
+  if (!isBinaryBuffer(buffer)) {
+    const text = buffer.toString('utf8')
+    return scanAddedContent({
+      files: [{ path: filePath, added: false, addedLines: text.split('\n').map((line, index) => ({ number: index + 1, text: line })) }],
+      rules: rules.filter((rule) => (rule.kind ?? 'content') === 'content'),
+      exceptions,
+      repo,
+    })
+  }
   const text = buffer.toString('latin1')
   const findings = []
   for (const rule of rules) {
@@ -442,7 +575,7 @@ export function scanStagedRepository({
   const binary = readBinaryChanges({ repoRoot, revision: ':', diff: acquired.diff, rules, exceptions, repo, gitExecutable, gitRunner })
   return {
     findings: [...scanAddedContent({ files, rules, exceptions, repo }), ...binary.findings],
-    diagnostics: binary.diagnostics,
+    diagnostics: [...unreadableSectionDiagnostics(acquired.diff, repo), ...binary.diagnostics],
     bytes: acquired.bytes + binary.bytes,
   }
 }
@@ -467,7 +600,7 @@ export function scanPushUpdate({
   const binary = readBinaryChanges({ repoRoot, revision: update.localSha, diff: acquired.diff, rules, exceptions, repo })
   return {
     findings: [...scanAddedContent({ files, rules, exceptions, repo }), ...binary.findings],
-    diagnostics: binary.diagnostics,
+    diagnostics: [...unreadableSectionDiagnostics(acquired.diff, repo), ...binary.diagnostics],
     bytes: acquired.bytes + binary.bytes,
   }
 }

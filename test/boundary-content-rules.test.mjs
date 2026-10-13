@@ -19,7 +19,9 @@ import {
   DEFAULT_CONTENT_RULES,
   BINARY_FILE_MAX_BYTES,
   parsePushRefInput,
+  diffHeaderPath,
   parseAddedContent,
+  parseDiffSections,
   parsePushRefUpdates,
   scanAddedContent,
   scanPushUpdate,
@@ -391,6 +393,123 @@ test('a staged or pushed deletion of a tracked binary has nothing to read and do
   git(site, ['commit', '--quiet', '-m', 'retire binary asset'])
   pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
   assert.equal(pushed.ok, true, JSON.stringify(pushed.errors))
+})
+
+const KEY_MATERIAL = ['-----BEGIN ', 'PRIVATE KEY-----'].join('')
+
+function stagedSecretErrors(site, project, policy) {
+  return checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true }).errors
+}
+
+test('repository diff configuration cannot blind the staged or pushed scan', (t) => {
+  const configs = [
+    ['diff.noprefix', 'true'],
+    ['diff.mnemonicPrefix', 'true'],
+    ['diff.srcPrefix', 'b/'],
+    ['diff.dstPrefix', 'b/sub/'],
+    ['color.ui', 'always'],
+    ['color.diff', 'always'],
+    ['diff.external', 'true'],
+  ]
+  for (const [key, value] of configs) {
+    const { site, policy, project } = makeWorkspace(t)
+    git(site, ['config', key, value])
+    fs.writeFileSync(path.join(site, 'note.txt'), `plain line\n${KEY_MATERIAL}\n`)
+    fs.writeFileSync(path.join(site, 'blob.bin'), Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL)]))
+    git(site, ['add', 'note.txt', 'blob.bin'])
+    const errors = stagedSecretErrors(site, project, policy)
+    assert.ok(errors.some((item) => item.path === 'note.txt' && item.line === 2), `${key}: ${JSON.stringify(errors)}`)
+    assert.ok(errors.some((item) => item.path === 'blob.bin' && item.binary === true), `${key}: ${JSON.stringify(errors)}`)
+    git(site, ['commit', '--quiet', '-m', 'material'])
+    const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+    assert.ok(pushed.errors.some((item) => item.path === 'note.txt'), `${key} push: ${JSON.stringify(pushed.errors)}`)
+  }
+})
+
+test('a textconv driver declared in attributes cannot hide a binary', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  git(site, ['config', 'diff.hide.textconv', 'true'])
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.bin diff=hide\n')
+  fs.writeFileSync(path.join(site, 'blob.bin'), Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL)]))
+  git(site, ['add', '.gitattributes', 'blob.bin'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'blob.bin' && item.binary === true), JSON.stringify(errors))
+})
+
+test('quoted paths and paths containing " b/" are scanned under their own names', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.mkdirSync(path.join(site, 'x b'), { recursive: true })
+  fs.writeFileSync(path.join(site, 'x b', 'y.bin'), Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL)]))
+  fs.writeFileSync(path.join(site, 'y.bin'), Buffer.from([0, 1, 2]))
+  fs.writeFileSync(path.join(site, 'caf\u00e9.txt'), `${KEY_MATERIAL}\n`)
+  fs.writeFileSync(path.join(site, 'tab\tname.txt'), `${KEY_MATERIAL}\n`)
+  git(site, ['add', '.'])
+  const errors = stagedSecretErrors(site, project, policy)
+  for (const expected of ['x b/y.bin', 'caf\u00e9.txt', 'tab\tname.txt']) {
+    assert.ok(errors.some((item) => item.path === expected && item.rule === 'secret-material'), `${expected}: ${JSON.stringify(errors)}`)
+  }
+  assert.ok(!errors.some((item) => item.path === 'y.bin'), JSON.stringify(errors))
+})
+
+test('an added line that itself starts with "+" is scanned', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, 'list.md'), `# Notes\n+ ${KEY_MATERIAL}\n++ more\n`)
+  git(site, ['add', 'list.md'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'list.md' && item.line === 2), JSON.stringify(errors))
+})
+
+test('text declared binary by attributes is still scanned', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg binary\n')
+  fs.writeFileSync(path.join(site, 'app.cfg'), `name = example\n${KEY_MATERIAL}\n`)
+  git(site, ['add', '.gitattributes', 'app.cfg'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'app.cfg' && item.line === 2 && item.rule === 'secret-material'), JSON.stringify(errors))
+})
+
+test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {
+  assert.equal(diffHeaderPath('diff --git a/docs/a.md b/docs/a.md'), 'docs/a.md')
+  assert.equal(diffHeaderPath('diff --git a/x b/y.bin b/x b/y.bin'), 'x b/y.bin')
+  assert.equal(diffHeaderPath('diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"'), 'caf\u00e9.txt')
+  assert.equal(diffHeaderPath('diff --git a/plain.txt "b/tab\\tname.txt"'), 'tab\tname.txt')
+  assert.equal(diffHeaderPath('diff --git a/old.txt b/new.txt'), null)
+
+  const renamed = parseDiffSections([
+    'diff --git a/old.txt b/new.txt',
+    'similarity index 90%',
+    'rename from old.txt',
+    'rename to new.txt',
+    '@@ -1 +1 @@',
+    '-before',
+    '+after',
+  ].join('\n'))
+  assert.equal(renamed[0].path, 'new.txt')
+  assert.equal(renamed[0].incomplete, null)
+
+  // Content that imitates a header inside a hunk stays content.
+  const [inside] = parseDiffSections([
+    'diff --git a/a.txt b/a.txt',
+    '--- a/a.txt',
+    '+++ b/a.txt',
+    '@@ -0,0 +1,3 @@',
+    '++++ b/elsewhere.txt',
+    '+diff --git a/z b/z',
+    '+last',
+  ].join('\n'))
+  assert.deepEqual(inside.addedLines.map((line) => line.text), ['+++ b/elsewhere.txt', 'diff --git a/z b/z', 'last'])
+
+  const result = scanStagedRepository({
+    repoRoot: '.',
+    repo: 'site',
+    gitRunner: (exe, args) => args.includes('diff')
+      ? { status: 0, stdout: ['diff --git a/x b/y', '@@ -0,0 +1 @@', `+${KEY_MATERIAL}`].join('\n') }
+      : { status: 1, stdout: '' },
+  })
+  assert.ok(result.diagnostics.some((item) => item.code === 'content-scan-incomplete' && item.details.reason === 'unreadable-file-path'), JSON.stringify(result))
+
+  const short = parseDiffSections(['diff --git a/a.txt b/a.txt', '@@ -0,0 +1,2 @@', '+only one'].join('\n'))
+  assert.equal(short[0].incomplete, 'hunk-shorter-than-its-header')
 })
 
 test('generated hooks single-quote config paths and reject control characters', () => {
