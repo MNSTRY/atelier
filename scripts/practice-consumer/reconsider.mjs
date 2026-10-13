@@ -8,7 +8,8 @@
 // decision with a deterministic assessment, and appends one measurement line.
 //
 // It calls no provider, appends to no Knowledge store, accepts or activates
-// nothing, and writes only its measurement file. The Knowledge history it builds
+// nothing, and writes only its measurement file, plus a capture file when one is
+// asked for with --capture. The Knowledge history it builds
 // is reconstructed in memory from the base commit: the review and activation
 // records stand for Foundation's adoption of this practice for its own
 // repository, not an independent or human review. The assessment is a declared
@@ -29,6 +30,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const CORPUS = 'docs/integration-contract-decisions.md'
 // v1 adds per-outcome anchors; v0 lines stay valid as recorded.
 export const MEASUREMENT_SCHEMA = 'atelier-practice-consumer-measurement@v1'
+// The optional full context of one measurement, written only on request.
+export const CAPTURE_SCHEMA = 'atelier-practice-consumer-capture@v1'
 const MEASUREMENT_SCHEMAS = Object.freeze(['atelier-practice-consumer-measurement@v0', MEASUREMENT_SCHEMA])
 // v1 labels name the anchor they judge (null for a whole-file citation).
 export const LABEL_SCHEMA = 'atelier-practice-consumer-label@v1'
@@ -445,11 +448,12 @@ export function gitVersion() {
   return text
 }
 
-export function measure({ repo, pr, base, head, mode = 'live' }) {
+export function measure({ repo, pr, base, head, mode = 'live', capture = null }) {
   if (!SHA_RE.test(String(base)) || !SHA_RE.test(String(head))) throw new Error('base and head must be full commit ids')
   if (!PR_RE.test(String(pr))) throw new Error('pr must be a positive integer')
   pr = Number(pr)
   if (!['live', 'retrospective'].includes(mode)) throw new Error('mode must be live or retrospective')
+  if (capture !== null && typeof capture !== 'function') throw new Error('capture must be a function or null')
   const gitText = gitVersion()
   // Every path below is relative to the repository top, whatever directory was given.
   repo = git(repo, ['rev-parse', '--show-toplevel']).trim()
@@ -465,6 +469,9 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
   const at = utc(repo, head)
   const rubric = definition().rubric
   const results = []
+  // Filled only when a capture was asked for: what each evaluation was given
+  // and what it returned, before the outcome is reduced to a measurement line.
+  const evaluations = []
   for (const decision of decisions) {
     const target = history.decisionRecords.get(decision.id)
     const entry = { id: decision.id, title: decision.title, cited: decision.cited, changedCited: [], outcomes: [] }
@@ -568,6 +575,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
         proposal: { type: 'reconsideration', target: harnessRef(target), term: TERM, title: `Reconsider "${decision.title}" after ${anchor ? `${file} ${anchor.value}` : file} changed in pull request #${pr}` },
       }
       const outcome = evaluateDecisionPractice({ records: history.records, definitionRef, instance })
+      if (capture) evaluations.push({ decision: decision.id, file, anchor: anchor ? anchor.value : null, instance, outcome })
       // What the Knowledge harness itself marks once the changed source is recorded.
       let harnessReconsider = null
       if (didChange && headText !== null && Buffer.byteLength(headText) <= MAX_SOURCE_BYTES && headText !== source.data.body) {
@@ -598,7 +606,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       })
     }
   }
-  return {
+  const measurement = {
     schema: MEASUREMENT_SCHEMA, pr: Number(pr), base: requested, mergeBase: base, head, mode, measuredAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     definitionRef, definitionDigest: contentDigest(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8')),
     toolDigest: contentDigest(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')), tool: toolProvenance(), git: gitText, corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
@@ -612,6 +620,22 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       reanchors: results.flatMap((item) => item.outcomes).filter((item) => item.anchor?.reanchor).length,
     },
   }
+  // The full context, handed over before anything is written. The objects are
+  // the ones the evaluator received and returned; nothing is rebuilt. Citations
+  // that were never evaluated, and decisions with no citation, are listed as
+  // such from the measurement itself: no input is invented for them.
+  if (capture) {
+    capture({
+      records: history.records,
+      // A copy: the measurement keeps its own, whatever a caller does with this one.
+      definitionRef: structuredClone(definitionRef),
+      evaluations,
+      notEvaluated: results.flatMap((item) => item.outcomes.filter((entry) => entry.status === 'not-evaluated')
+        .map((entry) => ({ decision: item.id, file: entry.file, anchor: entry.anchor?.value ?? null, fragment: entry.fragment ?? null, reason: entry.reason }))),
+      uncited: results.filter((item) => item.cited.length === 0).map((item) => item.id),
+    })
+  }
+  return measurement
 }
 
 /**
@@ -634,6 +658,29 @@ function appendLine(file, value) {
   fs.appendFileSync(file, `${JSON.stringify(value)}\n`)
 }
 
+// The full context of one measurement, written once to a new file. The 'wx'
+// flag refuses an existing file, so no capture, measurement or label is ever
+// overwritten. `measurementDigest` is the digest a label gives the same line.
+// Returns the identity of the file written, read from its own descriptor.
+function writeCapture(file, measurement, context) {
+  const descriptor = fs.openSync(file, 'wx')
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify({ schema: CAPTURE_SCHEMA, measurementDigest: contentDigest(JSON.stringify(measurement)), measurement, ...context }, null, 2)}\n`)
+    const written = fs.fstatSync(descriptor, { bigint: true })
+    return { dev: written.dev, ino: written.ino }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+}
+
+// Removes the capture only if the name still holds the regular file this run
+// wrote: never a link, and never a file that took its place.
+function removeOwnCapture(file, identity) {
+  let current = null
+  try { current = fs.lstatSync(file, { bigint: true }) } catch { return }
+  if (current.isFile() && current.dev === identity.dev && current.ino === identity.ino) fs.rmSync(file)
+}
+
 function argsOf(argv) {
   const out = { _: [] }
   for (let index = 0; index < argv.length; index += 1) {
@@ -645,26 +692,85 @@ function argsOf(argv) {
 }
 
 const USAGE = `Usage:
-  node scripts/practice-consumer/reconsider.mjs measure --pr N --base SHA --head SHA [--mode live|retrospective] [--repo DIR] [--out FILE | --print]
+  node scripts/practice-consumer/reconsider.mjs measure --pr N --base SHA --head SHA [--mode live|retrospective] [--repo DIR] [--out FILE | --print] [--capture NEWFILE]
   node scripts/practice-consumer/reconsider.mjs label --pr N --decision ID --file PATH [--anchor lines:S-E] --label ${LABELS.join('|')} --minutes M --by NAME [--note TEXT] [--out FILE]`
 
 export function main(argv = process.argv.slice(2)) {
   const args = argsOf(argv)
-  if (args.out === true || args.repo === true) throw new Error(USAGE)
+  if (args.out === true || args.repo === true || args.capture === true) throw new Error(USAGE)
   const out = typeof args.out === 'string' ? args.out : path.join(HERE, 'measurements.jsonl')
   const sha = (value) => typeof value === 'string' && SHA_RE.test(value)
   if (args._[0] === 'measure') {
     if (!PR_RE.test(String(args.pr)) || !sha(args.base) || !sha(args.head)) throw new Error(USAGE)
     if (args.mode !== undefined && !['live', 'retrospective'].includes(args.mode)) throw new Error(USAGE)
-    const value = measure({ repo: typeof args.repo === 'string' ? args.repo : process.cwd(), pr: args.pr, base: args.base, head: args.head, mode: args.mode ?? 'live' })
+    // A capture is written only when asked for, and only to a file that does
+    // not exist yet: checked before measuring and refused again on write. It is
+    // written before the measurement line, so a refused capture appends nothing.
+    const capturePath = typeof args.capture === 'string' ? args.capture : null
+    if (capturePath !== null) {
+      // The capture must not be the measurements file under any name. Where a
+      // destination really is: itself by real path when it exists, otherwise its
+      // name inside the real path of its directory, so that another spelling of
+      // the path or a symlinked parent cannot hide that two names are one file.
+      const located = (file) => {
+        const full = path.resolve(file)
+        try { return fs.realpathSync(full) } catch { /* not there yet */ }
+        try { return path.join(fs.realpathSync(path.dirname(full)), path.basename(full)) } catch { return full }
+      }
+      if (located(capturePath) === located(out)) throw new Error('the capture file and the measurements file are the same file; name a different capture file')
+      // Anything already at the name refuses, a dangling link included: lstat
+      // does not follow it, where existsSync and some platforms' 'wx' would.
+      let occupied = true
+      try { fs.lstatSync(capturePath) } catch (error) { occupied = error.code !== 'ENOENT' }
+      if (occupied) throw new Error('the capture file already exists; name a new file')
+      // The measurement line must be appendable before a capture is written, so
+      // a capture never stands for a line that was never written.
+      if (!args.print) {
+        // The directory as the system resolves it: path.resolve would collapse
+        // a `..` after a symlink as text and name another directory.
+        let parent = null
+        try { parent = fs.statSync(path.dirname(out)) } catch { parent = null }
+        if (!parent?.isDirectory()) throw new Error('the measurements file\'s directory does not exist; nothing was measured or written')
+        if (fs.existsSync(out) && fs.statSync(out).isDirectory()) throw new Error('the measurements file is a directory; nothing was measured or written')
+      }
+    }
+    const outExisted = fs.existsSync(out)
+    let context = null
+    const value = measure({ repo: typeof args.repo === 'string' ? args.repo : process.cwd(), pr: args.pr, base: args.base, head: args.head, mode: args.mode ?? 'live',
+      capture: capturePath === null ? null : (full) => { context = full } })
+    let written = null
+    if (capturePath !== null) {
+      written = writeCapture(capturePath, value, context)
+      // The names can still be one file where no path check sees it (another
+      // spelling on a case-insensitive volume, a `..` after a symlink): compare
+      // the files themselves. A measurements file that did not exist before was
+      // created by this capture, so it is removed again; an existing one cannot
+      // be the capture, because writing it would have been refused.
+      if (fs.existsSync(out)) {
+        const target = fs.statSync(out, { bigint: true })
+        if (written.ino !== 0n && written.dev === target.dev && written.ino === target.ino) {
+          if (!outExisted) removeOwnCapture(capturePath, written)
+          throw new Error(outExisted
+            ? 'the capture file and the measurements file are the same file; no measurement line was appended'
+            : 'the capture file and the measurements file are the same file; nothing was kept and no measurement line was appended')
+        }
+      }
+    }
     if (args.print) console.log(JSON.stringify(value, null, 2))
     else {
-      appendLine(out, value)
+      try {
+        appendLine(out, value)
+      } catch (error) {
+        // A capture without its line would name a measurement that does not exist.
+        if (written) removeOwnCapture(capturePath, written)
+        throw error
+      }
       console.log(JSON.stringify(value.summary))
     }
     return
   }
   if (args._[0] === 'label') {
+    if (args.capture !== undefined) throw new Error(USAGE)
     if (typeof args.minutes !== 'string' || !/^\d+(?:\.\d+)?$/.test(args.minutes)) throw new Error(USAGE)
     // A label refers to the latest measurement of this pull request in the file,
     // and to one outcome in it: the decision, the cited file and, for an anchored
