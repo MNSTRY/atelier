@@ -1187,13 +1187,20 @@ They matter after a publication, when the watcher has named the notes it
 wrote, and at every full reconciliation, when every note and every source is
 hashed: on one view of 10,000 invented notes on a loaded host such a tick held
 the listener for 5.5 s when the walks ran through. Nothing is checked at their
-waits and nothing is written. Only the engine commits a manifest or writes the
-pending edits, under the lock the tick holds, so the pending edits are read,
-compared and written in one stretch after the walk over the vault, and the
-bytes an edit keeps are read there. A file changed after its turn in a walk is
-seen by the next tick, by its stat hint or the watcher, as one changed just
-after a walk that ran through is; when the tick builds the graph, the look
-again at the sources after the build refuses such a change as `mixed-read`.
+waits and nothing is written. Within Atelier only the engine commits a
+manifest or writes the pending edits, under the lock the tick holds, so the
+pending edits are read, compared and written in one stretch after the walk
+over the vault, and the bytes an edit keeps are read there. A file changed
+after its turn in a walk is seen by the next tick, by its stat hint or the
+watcher (one that keeps its size and times and draws no event, at the latest
+by the next full reconciliation), as one changed just after a walk that ran
+through is; when the tick builds the graph, the look again at the sources
+after the build refuses such a change as `mixed-read`. A note gone from a
+vault, or a source that changed, is a change once: a tick that sees it and
+then fails without a typed reason (a file it cannot read, a disk that is full)
+has recorded it without acting on it. The next tick therefore looks at every
+view again, as the first tick of a process does, and a view whose note is
+missing reads `vault-note-missing` instead of staying `current`.
 The comparison of kept notes with their candidates reads asynchronously,
 sixteen at a time, and does not hold the listener. Observing pending edits
 and routing proposals wait between two edits and between two operations, so
@@ -1439,3 +1446,7 @@ The test suite proves each oracle can fail:
 - `createMaintenanceEngineForOracleTests` with an
   `ENGINE_PRIMITIVES.isRetryDue` that never holds: a refused view waits for
   the full reconciliation, and the retry oracle fails.
+- `createMaintenanceEngineForOracleTests` with
+  `ENGINE_PRIMITIVES.rechecksEveryViewAfterFailure` false: a note removed in a
+  tick that then fails without a typed reason is lost, the view stays
+  `current` with the note gone, and the oracle fails.
