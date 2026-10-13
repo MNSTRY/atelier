@@ -373,18 +373,18 @@ const trackingSpawn = (t) => (...args) => followChild(t, childProcess.spawn(...a
 // throws (a temporary folder a live process still holds, on Windows) skips the hooks registered after it.
 const LIVE_DATA_ROOTS = new Set()
 test.beforeEach(() => { LIVE_DATA_ROOTS.clear() })
-// The highest engine-lock ticket that was not given back, with who holds it: a tick in flight names this service's
-// runtime, a ticket left by an earlier service names another. A ticket holds no secret.
-function unreleasedEngineTicket(directory) {
-  const names = fs.readdirSync(directory).sort()
-  const released = new Set(names.filter((name) => name.endsWith('.released')).map((name) => name.slice(0, -'.released'.length)))
-  const held = names.filter((name) => name.endsWith('.json') && !released.has(name) && !released.has(name.slice(0, -'.json'.length)))
-  if (held.length === 0) return 'none unreleased'
-  const name = held.at(-1)
+// The highest engine-lock generation, which alone decides whether the lock is held, and while it is not given back who
+// holds it: a tick in flight names this service's runtime, a ticket left by an earlier service names another. Names
+// other than a generation's ticket or release are not generations. A ticket holds no secret.
+function highestEngineTicket(directory) {
+  const generations = fs.readdirSync(directory).map((name) => /^(\d{12})\.(json|released)$/.exec(name)).filter(Boolean)
+  if (generations.length === 0) return 'no generation'
+  const highest = generations.map((match) => match[1]).sort().at(-1)
+  if (generations.some((match) => match[1] === highest && match[2] === 'released')) return `generation ${highest} released`
   try {
-    const ticket = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'))
-    return `${name} pid ${ticket.pid} purpose ${ticket.purpose} runtime ${ticket.service?.runtimeId ?? null} acquired ${ticket.acquiredAt ?? null}`
-  } catch (error) { return `${name} (${error.code ?? error.name})` }
+    const ticket = JSON.parse(fs.readFileSync(path.join(directory, `${highest}.json`), 'utf8'))
+    return `generation ${highest} held by pid ${ticket.pid} purpose ${ticket.purpose} runtime ${ticket.service?.runtimeId ?? null} acquired ${ticket.acquiredAt ?? null}`
+  } catch (error) { return `generation ${highest} held (${error.code ?? error.name})` }
 }
 function serviceDiagnosis() {
   const lines = [`at ${new Date().toISOString()}`]
@@ -395,14 +395,15 @@ function serviceDiagnosis() {
     const directory = path.join(root, 'state', 'service')
     const tail = (name, count) => { try { return fs.readFileSync(path.join(directory, name), 'utf8').trim().split('\n').slice(-count).join('\n      ') } catch (error) { return `(${error.code ?? error.name})` } }
     let tickets
-    try { tickets = `${fs.readdirSync(path.join(root, ENGINE_LOCK_DIRECTORY)).sort().join(', ') || '(none)'}; ${unreleasedEngineTicket(path.join(root, ENGINE_LOCK_DIRECTORY))}` } catch (error) { tickets = `(${error.code ?? error.name})` }
-    lines.push(`  service log:\n      ${tail('service.log', 12)}`, `  runtime record: ${fs.existsSync(path.join(directory, 'runtime.json')) ? 'present' : 'absent'}`, `  last error: ${tail('last-error.json', 1)}`, `  engine lock: ${tickets}`)
+    try { tickets = `${fs.readdirSync(path.join(root, ENGINE_LOCK_DIRECTORY)).sort().join(', ') || '(none)'}; ${highestEngineTicket(path.join(root, ENGINE_LOCK_DIRECTORY))}` } catch (error) { tickets = `(${error.code ?? error.name})` }
+    lines.push(`  service log:\n      ${tail('service.log', 30)}`, `  runtime record: ${fs.existsSync(path.join(directory, 'runtime.json')) ? 'present' : 'absent'}`, `  last error: ${tail('last-error.json', 1)}`, `  engine lock: ${tickets}`)
   }
   return lines.join('\n  ')
 }
-// What a command or a stop answered, for a message: its exit, its JSON and the end of its stderr.
+// What a command or a stop answered, for a message: its exit, the last 400 characters of its stderr and its JSON, the
+// whole cut at 4,000 characters (a refused stop's answer is about 1,500).
 const describeAnswer = (answer) => JSON.stringify(answer !== null && typeof answer === 'object' && ('exit' in answer || 'stderr' in answer)
-  ? { exit: answer.exit, json: answer.json ?? null, stderr: String(answer.stderr ?? '').slice(-400) } : answer ?? null).slice(0, 900)
+  ? { exit: answer.exit, stderr: String(answer.stderr ?? '').slice(-400), json: answer.json ?? null } : answer ?? null).slice(0, 4000)
 
 async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condition', explain = null } = {}) {
   const until = Date.now() + timeoutMs
