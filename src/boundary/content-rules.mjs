@@ -1,10 +1,14 @@
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { matchesPathPattern, normalizeRelPath } from '../project/path-match.mjs'
 import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 
 export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+const EMPTY_TREES = Object.freeze({ sha1: EMPTY_TREE, sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321' })
+// Commits one push may carry before the per-commit scan refuses rather than run long.
+export const PUSH_COMMIT_SCAN_MAX = 1000
 export const ZERO_SHA_RE = /^0{40,}$/
 
 export const RULE_KINDS = Object.freeze(['content', 'path'])
@@ -483,21 +487,24 @@ export function gitOutputResult(repoRoot, args, {
   return { ok: true, stdout, bytes }
 }
 
-export function pushRangeBase(repoRoot, remoteSha) {
+/** The empty tree in this repository's object format (SHA-1 or SHA-256). */
+export function emptyTreeFor(repoRoot, { runner = spawnSync } = {}) {
+  const result = gitOutputResult(repoRoot, ['rev-parse', '--show-object-format'], { maxBuffer: 1024, runner })
+  return (result.ok && EMPTY_TREES[result.stdout.trim()]) || EMPTY_TREE
+}
+
+export function pushRangeBase(repoRoot, remoteSha, { runner = spawnSync } = {}) {
   // A new branch has no remote counterpart, so everything it carries is new:
   // diff against the empty tree rather than silently scanning nothing.
-  if (!remoteSha || ZERO_SHA_RE.test(remoteSha)) return EMPTY_TREE
-  const result = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${remoteSha}^{commit}`], {
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024,
-  })
-  return result.status === 0 ? remoteSha : EMPTY_TREE
+  if (!remoteSha || ZERO_SHA_RE.test(remoteSha)) return emptyTreeFor(repoRoot, { runner })
+  const result = gitOutputResult(repoRoot, ['rev-parse', '--verify', '--quiet', `${remoteSha}^{commit}`], { maxBuffer: 1024 * 1024, runner })
+  return result.ok ? remoteSha : emptyTreeFor(repoRoot, { runner })
 }
 
 export const canonicalDiffArgs = (revisions, extra = []) => ['diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
 
 export function diffForPushRange(repoRoot, { localSha, remoteSha }, options = {}) {
-  const base = pushRangeBase(repoRoot, remoteSha)
+  const base = pushRangeBase(repoRoot, remoteSha, { runner: options.runner })
   const result = gitOutputResult(repoRoot, canonicalDiffArgs([base, localSha]), options)
   return result.ok ? { ...result, base, diff: result.stdout } : { ...result, base, diff: null }
 }
@@ -746,6 +753,37 @@ export function scanStagedRepository({
   }
 }
 
+function scanRevisionRange({ repoRoot, base, tip, rules, exceptions, repo, gitRunner }) {
+  const acquired = gitOutputResult(repoRoot, canonicalDiffArgs([base, tip]), { runner: gitRunner })
+  if (!acquired.ok) return { acquired, sections: [], findings: [], diagnostics: [], bytes: 0 }
+  const sections = parseDiffSections(acquired.stdout)
+  const binary = readBinaryChanges({ repoRoot, revisions: [base, tip], sections, rules, exceptions, repo, gitRunner })
+  return {
+    acquired,
+    sections,
+    findings: [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings],
+    diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
+    bytes: acquired.bytes + binary.bytes,
+  }
+}
+
+// Identifies what a finding reports, so a key that reaches the pushed tip is
+// reported once, not again for every commit it passed through. The text itself
+// is never kept: only a digest of it.
+function findingKey(finding, sections) {
+  const section = sections.find((candidate) => candidate.path === finding.path)
+  const text = finding.line == null ? 'binary' : section?.addedLines.find((line) => line.number === finding.line)?.text ?? ''
+  return [finding.rule, finding.path, createHash('sha256').update(text).digest('hex')].join('\0')
+}
+
+/**
+ * Judge what one ref update publishes: the change from the remote's commit to
+ * the pushed tip, and every commit the push carries that no remote-tracking
+ * ref already has, each against its first parent. Content added and removed
+ * again within the push is published in history, so it is judged too; such a
+ * finding names its commit. A push carrying more than `maxCommits` new commits
+ * is refused rather than judged only by its endpoints.
+ */
 export function scanPushUpdate({
   repoRoot,
   update,
@@ -753,22 +791,54 @@ export function scanPushUpdate({
   exceptions = [],
   repo = null,
   gitRunner = spawnSync,
+  maxCommits = PUSH_COMMIT_SCAN_MAX,
 } = {}) {
-  const acquired = diffForPushRange(repoRoot, update, { runner: gitRunner })
-  if (!acquired.ok) {
+  const base = pushRangeBase(repoRoot, update.remoteSha, { runner: gitRunner })
+  const net = scanRevisionRange({ repoRoot, base, tip: update.localSha, rules, exceptions, repo, gitRunner })
+  if (!net.acquired.ok) {
     return {
       findings: [],
-      diagnostics: [incompleteDiagnostic({ repo, message: 'push evidence could not be acquired', details: { reason: acquired.code } })],
+      diagnostics: [incompleteDiagnostic({ repo, message: 'push evidence could not be acquired', details: { reason: net.acquired.code } })],
       bytes: 0,
     }
   }
-  const sections = parseDiffSections(acquired.diff)
-  const binary = readBinaryChanges({ repoRoot, revisions: [acquired.base, update.localSha], sections, rules, exceptions, repo, gitRunner })
-  return {
-    findings: [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings],
-    diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
-    bytes: acquired.bytes + binary.bytes,
+  const findings = [...net.findings]
+  const diagnostics = [...net.diagnostics]
+  let bytes = net.bytes
+  const listed = gitOutputResult(repoRoot, ['rev-list', '--reverse', '--parents', update.localSha, '--not', ...(base === update.remoteSha ? [base] : []), '--remotes'], { runner: gitRunner })
+  if (!listed.ok) {
+    diagnostics.push(incompleteDiagnostic({ repo, message: 'the commits in this push could not be listed', details: { reason: listed.code } }))
+    return { findings, diagnostics, bytes }
   }
+  const commits = listed.stdout.split('\n').filter(Boolean).map((line) => line.split(' '))
+  if (commits.length > maxCommits) {
+    diagnostics.push(incompleteDiagnostic({
+      repo,
+      message: `this push carries ${commits.length} commits that no remote has, more than the ${maxCommits} judged one by one; push it in smaller parts`,
+      details: { reason: 'push-range-too-long', commits: commits.length, limit: maxCommits },
+    }))
+    return { findings, diagnostics, bytes }
+  }
+  // One commit straight on the remote's tip is the endpoint change already judged.
+  if (commits.length === 1 && (commits[0][1] ?? null) === base) return { findings, diagnostics, bytes }
+  const reported = new Set(net.findings.map((item) => findingKey(item, net.sections)))
+  const empty = emptyTreeFor(repoRoot, { runner: gitRunner })
+  for (const [commit, parent] of commits) {
+    const step = scanRevisionRange({ repoRoot, base: parent ?? empty, tip: commit, rules, exceptions, repo, gitRunner })
+    if (!step.acquired.ok) {
+      diagnostics.push(incompleteDiagnostic({ repo, message: `commit ${commit} could not be read`, details: { reason: step.acquired.code, commit } }))
+      continue
+    }
+    bytes += step.bytes
+    for (const item of step.findings) {
+      const key = findingKey(item, step.sections)
+      if (reported.has(key)) continue
+      reported.add(key)
+      findings.push({ ...item, commit, message: `${item.message} (in commit ${commit.slice(0, 12)})` })
+    }
+    diagnostics.push(...step.diagnostics.map((item) => ({ ...item, details: { ...item.details, commit } })))
+  }
+  return { findings, diagnostics, bytes }
 }
 
 /**

@@ -260,10 +260,16 @@ That is how a public site's owner-authorized mock cart stranded real work on a
 machine for weeks.
 
 - `pre-commit` runs `atelier boundary check --staged` — added lines in the
-  staged diff.
+  index Git is committing, including the temporary index of `git commit -a`
+  or `git commit <paths>` and a linked worktree's own index.
 - `pre-push` runs `atelier boundary push-check` — git writes the ref updates to
-  the hook's stdin, and only that range is judged. A brand-new branch is diffed
-  against the empty tree, so nothing slips through unscanned.
+  the hook's stdin, and only that range is judged: the change from the
+  remote's commit to the pushed tip, and every commit the push carries that no
+  remote-tracking ref already has, each against its parent, so content added
+  and removed again within the push is still caught (the finding names its
+  commit). A brand-new branch is diffed against the empty tree, in SHA-1 and
+  SHA-256 repositories alike, so nothing slips through unscanned. A push
+  carrying more than 1000 such commits is refused; push it in smaller parts.
 - `atelier boundary audit` scans the current working tree by default and
   **reports without blocking**, listing matches, incomplete-read diagnostics,
   and declared exceptions with their reasons. Use `--head` for a committed

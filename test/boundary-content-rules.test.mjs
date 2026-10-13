@@ -919,6 +919,86 @@ test('a hook index is resolved against the work tree the hook runs in', (t) => {
   assert.deepEqual(nested, plain)
 })
 
+test('content added and removed again within one push is judged in the commit that added it', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing here\n', 'removes it again')
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(report.ok, false)
+  const found = report.errors.filter((item) => item.rule === 'secret-material')
+  assert.deepEqual(found.map((item) => [item.path, item.line, item.commit]), [['notes/key.txt', 1, added]])
+  assert.match(found[0].message, new RegExp(`in commit ${added.slice(0, 12)}`))
+
+  // A binary added and deleted again within the push is read as well.
+  const second = makeWorkspace(t)
+  commit(second.site, 'assets/blob.bin', Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`${KEY_MATERIAL}\n`)]), 'adds a binary')
+  const binaryCommit = git(second.site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(second.site, 'assets', 'blob.bin'))
+  commit(second.site, 'assets/readme.txt', 'nothing here\n', 'removes it again')
+  const binaryReport = checkPushContent({ project: second.project, policy: second.policy, updates: pushUpdate(second.site), cwd: second.site })
+  assert.ok(binaryReport.errors.some((item) => item.path === 'assets/blob.bin' && item.binary === true && item.commit === binaryCommit), JSON.stringify(binaryReport.errors))
+
+  // A key that reaches the pushed tip is reported once, by the endpoint change.
+  const kept = makeWorkspace(t)
+  commit(kept.site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  commit(kept.site, 'notes/other.txt', 'more\n', 'another commit')
+  const keptReport = checkPushContent({ project: kept.project, policy: kept.policy, updates: pushUpdate(kept.site), cwd: kept.site })
+  const keys = keptReport.errors.filter((item) => item.rule === 'secret-material')
+  assert.deepEqual(keys.map((item) => [item.path, item.line, item.commit ?? null]), [['notes/key.txt', 1, null]])
+})
+
+test('a push judges each commit no remote has, once, and refuses one that carries too many', (t) => {
+  const { site } = makeWorkspace(t)
+  const diffs = []
+  const scan = (update, options = {}) => scanPushUpdate({
+    repoRoot: site,
+    update,
+    repo: 'site',
+    gitRunner: (exe, args, opts) => {
+      if (args.includes('diff')) diffs.push(args.slice(-2).join('..'))
+      return spawnSync(exe, args, opts)
+    },
+    ...options,
+  })
+  // One commit on the remote's tip is the endpoint change itself: one diff.
+  commit(site, 'a.txt', 'one\n', 'one')
+  let result = scan(pushUpdate(site)[0])
+  assert.equal(diffs.length, 1)
+  assert.deepEqual(result.diagnostics, [])
+  // Three new commits: the endpoints, then each commit against its parent.
+  commit(site, 'b.txt', 'two\n', 'two')
+  commit(site, 'c.txt', 'three\n', 'three')
+  diffs.length = 0
+  result = scan(pushUpdate(site)[0])
+  assert.equal(diffs.length, 1 + 3)
+  // A new branch from the pushed main carries only its own commit, not main's history.
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  git(site, ['fetch', '--quiet', 'origin'])
+  git(site, ['checkout', '--quiet', '-b', 'feature'])
+  commit(site, 'd.txt', 'four\n', 'four')
+  diffs.length = 0
+  result = scan({ localRef: 'refs/heads/feature', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/feature', remoteSha: '0'.repeat(40) })
+  assert.equal(diffs.length, 1 + 1)
+  // Past the limit the push is refused, not judged only by its endpoints.
+  commit(site, 'e.txt', 'five\n', 'five')
+  result = scan({ localRef: 'refs/heads/feature', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/feature', remoteSha: '0'.repeat(40) }, { maxCommits: 1 })
+  assert.deepEqual(result.diagnostics.map((item) => [item.code, item.details.reason, item.details.commits]), [['content-scan-incomplete', 'push-range-too-long', 2]])
+})
+
+test('a new branch in a SHA-256 repository is scanned from its empty tree', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-sha256-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  git(root, ['init', '--quiet', '--object-format=sha256'])
+  git(root, ['config', 'user.email', 'author@example.invalid'])
+  git(root, ['config', 'user.name', 'Author'])
+  commit(root, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'a key on a new branch')
+  const result = scanPushUpdate({ repoRoot: root, update: { localRef: 'refs/heads/main', localSha: git(root, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: '0'.repeat(64) }, repo: 'site' })
+  assert.deepEqual(result.diagnostics, [])
+  assert.ok(result.findings.some((item) => item.path === 'notes/key.txt' && item.rule === 'secret-material'), JSON.stringify(result.findings))
+})
+
 test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {
   assert.equal(diffHeaderPath('diff --git a/docs/a.md b/docs/a.md'), 'docs/a.md')
   assert.equal(diffHeaderPath('diff --git a/x b/y.bin b/x b/y.bin'), 'x b/y.bin')
