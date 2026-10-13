@@ -425,7 +425,9 @@ const probeOf = (pid) => { try { process.kill(pid, 0); return 'alive' } catch (e
 // none running. A test that stops a service, or starts or replaces it again, right after starting it otherwise races
 // that tick, which blocks the service's event loop for a while, so its health does not answer (seconds in a Windows CI
 // job): the stop is then refused as busy, or, where a busy service cannot be proved this one (Windows reads no command
-// line), as occupied. Later ticks are an idle interval away.
+// line), as occupied. The same holds after `open` or `plugin on` started or replaced the service: they ask the new
+// service for a tick at once, and an ask that loses this race leaves its first tick running. Later ticks are an idle
+// interval away. Not for a stand-in runtime, which answers no status.
 async function waitForFirstTick(world, label = 'the service to end its first tick') {
   const record = readServiceRecord(world.workspace())
   return waitFor(async () => {
@@ -3811,6 +3813,7 @@ test('open restarts the owned service when it runs another entry than the instal
   assert.equal(after.executable.digest, digest(fs.readFileSync(TEST_SERVICE_ENTRY)), 'the installed entry runs now')
   await waitForExit(before.pid, 'the earlier runtime to end')
   assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded, not the one open was given')
+  await waitForFirstTick(world)
   const again = await world.run(openArgs(), { seams: seams(TEST_SERVICE_ENTRY), open: FAST_APP })
   assert.deepEqual([again.json.service?.restarted, again.json.service?.runtimeId], [undefined, after.runtimeId], 'nothing is restarted twice')
   const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
@@ -3872,6 +3875,7 @@ test('`plugin on` with the installed entry to start replaces a service of an ear
   assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded')
   await waitForExit(before.pid, 'the earlier runtime to end')
   if (EXCHANGE_HERE) assert.ok(fs.existsSync(path.join(world.vault(), '.obsidian', 'plugins', 'atelier-projection', 'main.js')), 'the plugin is in the vault')
+  await waitForFirstTick(world)
   const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
   assert.equal(stopped.json?.service?.stopped, true, `${describeAnswer(stopped)}\n  ${serviceDiagnosis()}`)
   await waitForExit(after.pid, 'the stopped service to exit')
@@ -3906,7 +3910,7 @@ async function standInRuntime(t, world, { mode, release = currentRelease(), ext 
 const stopWhateverRuns = async (world, seams) => {
   const record = readServiceRecord(world.workspace())
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
-  assert.equal(stopped.json.service.stopped, true, JSON.stringify(stopped.json).slice(0, 300))
+  assert.equal(stopped.json?.service?.stopped, true, `${describeAnswer(stopped)}\n  ${serviceDiagnosis()}`)
   if (record) await waitForExit(record.pid, 'the stopped service to exit')
 }
 
@@ -3926,6 +3930,7 @@ test('open restarts an owned service of an earlier release that refuses a tick n
   await waitForExit(earlier.child.pid, 'the earlier runtime to end')
   assert.notEqual(readServiceRecord(world.workspace()).runtimeId, earlier.runtimeId)
   assert.deepEqual(readServiceSettings(world.workspace()).consent, earlier.consent, 'under the consent already recorded')
+  await waitForFirstTick(world)
   await stopWhateverRuns(world, seams)
 })
 
@@ -3940,6 +3945,7 @@ test('a service whose entry module is the installed one but whose release is ano
   const record = readServiceRecord(world.workspace())
   assert.deepEqual(record.executable.ext?.release, releaseIdentity(), 'the runtime started in its place records this release')
   // Opened again, it is this release: nothing is replaced.
+  await waitForFirstTick(world)
   const again = await world.run(openArgs(), { seams, open: FAST_APP })
   assert.deepEqual([again.json.service?.restarted, again.json.service?.runtimeId], [undefined, record.runtimeId])
   await stopWhateverRuns(world, seams)
@@ -3996,6 +4002,7 @@ test('a service of a later release than the installed one is neither replaced no
   const again = await world.run(openArgs(), { seams, open: FAST_APP })
   assert.notEqual(again.json.reason, 'service-other-release', JSON.stringify(again.json).slice(0, 500))
   assert.deepEqual(readServiceRecord(world.workspace()).executable.ext?.release, releaseIdentity())
+  await waitForFirstTick(world)
   await stopWhateverRuns(world, seams)
 })
 
@@ -4020,6 +4027,7 @@ test('a service whose record names the installed entry module and no release, as
   assert.equal(opened.json.service?.restarted, 'outdated', JSON.stringify(opened.json).slice(0, 500))
   await waitForExit(earlier.child.pid, 'the earlier runtime to end')
   assert.deepEqual(readServiceRecord(world.workspace()).executable.ext?.release, releaseIdentity())
+  await waitForFirstTick(world)
   await stopWhateverRuns(world, seams)
 })
 
