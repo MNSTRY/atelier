@@ -15,6 +15,7 @@ import { createEditorAdapter, publishView, resolveExchange } from '../src/projec
 import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publication/test-seam.mjs'
 import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src/runtime/obsidian/engine.mjs'
 import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
+import { sourceKey } from '../src/runtime/obsidian/observation.mjs'
 import { withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { prepareViewCooperatively } from '../src/projection/obsidian/materialize/prepare-view.mjs'
 import { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } from '../src/runtime/obsidian/lifecycle.mjs'
@@ -228,19 +229,20 @@ test('cooperative engine refuses changed scope and machine settings across a pre
   })
 })
 
-test('a source removed after the graph build listed it and before it read it refuses the view as mixed-read, and the next tick publishes without it; mutation control: without the rule the tick fails without a typed reason', needsExchange, async (t) => {
+test('a source removed after this tick observed it and before the graph build read it refuses the view as mixed-read, and the next tick publishes without it; mutation control: without the rule the tick fails without a typed reason', needsExchange, async (t) => {
   const removedDuringBuild = async (primitives) => {
     const world = makeWorld(t)
-    // A note nothing links to, last of the east wing's sources: at the census's first wait its repository has been
-    // walked and it has not been read. (A source removed before its repository is walked is never listed.)
-    const whistle = world.source('east-wing/notes/whistle.md')
-    fs.writeFileSync(whistle, note({ id: 'east-wing:whistle', title: 'Fog whistle', body: 'Two blasts a minute in fog.' }))
+    // Two notes nothing links to, both removed at the census's first wait. The repository has been walked by then and
+    // one source read, in the order the folder lists them; at most one of the two is that one, so the other is listed
+    // and unread whatever the order.
+    const removable = ['bell', 'whistle'].map((name) => world.source(`east-wing/notes/${name}.md`))
+    for (const file of removable) fs.writeFileSync(file, note({ id: `east-wing:${path.basename(file, '.md')}`, title: path.basename(file, '.md'), body: 'Sounded in fog.' }))
     let removed = false
     const engine = world.engine({ primitives, seams: { buildGraphCooperatively: (input) => DEFAULT.buildGraphCooperatively({
       ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
         if (removed || phase !== 'graph-census') return
         removed = true
-        fs.rmSync(whistle)
+        for (const file of removable) fs.rmSync(file)
       } },
     }) } })
     return { world, engine, removed: () => removed }
@@ -251,20 +253,37 @@ test('a source removed after the graph build listed it and before it read it ref
   assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
   assert.deepEqual([world.calls.prepareView, world.calls.publishView.length], [0, 0], 'nothing is prepared or published from the build')
   const next = await engine.tick()
-  assert.equal(world.scope(next).state, 'current')
-  assert.equal(fs.existsSync(world.noteFile('east-wing:lantern')), true)
+  assert.deepEqual([next.full, world.scope(next).state], [true, 'current'], 'the next tick reads everything again and publishes')
   const published = world.manifest(FULL_SCOPE.scopeId).notes.map((item) => item.nodeId)
-  assert.ok(published.includes('east-wing:compass') && !published.includes('east-wing:whistle'), `the next tick publishes the view without the removed source: ${published}`)
+  assert.ok(published.includes('east-wing:compass') && !published.includes('east-wing:bell') && !published.includes('east-wing:whistle'), `the view is published without the removed sources: ${published}`)
   // Mutation control: without the rule the build's ENOENT stops the tick.
   const blind = await removedDuringBuild({ ...ENGINE_PRIMITIVES, sourceRemovedDuringBuild: () => false })
   await assert.rejects(blind.engine.tick(), (error) => error.code === 'ENOENT')
   assert.equal(blind.removed(), true)
 })
 
+test('a path the build can never read still stops every tick: a nested repository whose configured path is a file; mutation control: a rule that types every missing path inside a repository loops as mixed-read instead', needsExchange, async (t) => {
+  const ticksOf = async (primitives) => {
+    const world = makeWorld(t)
+    fs.writeFileSync(world.source('east-wing/lighthouse'), 'not a folder\n')
+    writeJson(world.configPath, { ...projectDocument(settingsOf()), repos: [...REPOSITORIES.map((name) => ({ name, path: name, readBoundary: 'team' })), { name: 'lighthouse', path: 'east-wing/lighthouse', readBoundary: 'team' }] })
+    const engine = world.engine({ primitives })
+    const outcomes = []
+    for (let tick = 0; tick < 3; tick += 1) {
+      world.advance(1000)
+      try { const report = await engine.tick(); outcomes.push(`${world.scope(report).state}/${world.scope(report).reason}`) } catch (error) { outcomes.push(error.code) }
+    }
+    return outcomes
+  }
+  assert.deepEqual(await ticksOf(ENGINE_PRIMITIVES), ['ENOTDIR', 'ENOTDIR', 'ENOTDIR'])
+  assert.deepEqual(await ticksOf({ ...ENGINE_PRIMITIVES, sourceRemovedDuringBuild: () => true }), ['stale/mixed-read', 'stale/mixed-read', 'stale/mixed-read'], 'the oracle can fail')
+})
+
 test('a build error that is no removed source still stops the tick: no such file outside the repositories, or a source that cannot be read', needsExchange, async (t) => {
   for (const [name, fault] of Object.entries({
     'no such file outside the repositories': (world) => Object.assign(new Error('gone'), { code: 'ENOENT', path: path.join(world.dir, 'elsewhere', 'note.md') }),
     'a source that cannot be read': (world) => Object.assign(new Error('permission denied'), { code: 'EACCES', path: world.source('west-wing/logs/tide.md') }),
+    'no such file at a source that is still there': (world) => Object.assign(new Error('gone'), { code: 'ENOENT', path: world.source('west-wing/logs/tide.md') }),
   })) await t.test(name, async (t) => {
     const world = makeWorld(t)
     const error = fault(world)
@@ -273,19 +292,34 @@ test('a build error that is no removed source still stops the tick: no such file
   })
 })
 
-test('the rule that names a removed source: no such file, or a parent that is no longer a folder, strictly inside a repository of the project', () => {
-  const root = path.resolve('/workspace/east-wing')
-  const project = { repos: [{ name: 'east-wing', path: root }, { name: 'unplaced' }] }
-  const rule = (code, at) => ENGINE_PRIMITIVES.sourceRemovedDuringBuild(Object.assign(new Error(code), { code, ...(at === undefined ? {} : { path: at }) }), project)
-  assert.equal(rule('ENOENT', path.join(root, 'notes', 'compass.md')), true)
-  assert.equal(rule('ENOTDIR', path.join(root, 'notes', 'compass.md')), true)
-  assert.equal(rule('EACCES', path.join(root, 'notes', 'compass.md')), false, 'a source that cannot be read is no removed source')
-  assert.equal(rule('ENOENT', path.resolve('/workspace/east-wing-notes/compass.md')), false, 'a sibling that shares the prefix is outside')
-  assert.equal(rule('ENOENT', path.resolve('/workspace/west-wing/tide.md')), false, 'outside every repository')
-  assert.equal(rule('ENOENT', root), false, 'the repository itself missing is no removed source')
+test('the rule that names a removed source: no such file, or a parent that is no longer a folder, at a path gone now that the walk over the sources recorded with a digest, or a folder that held one', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-removed-source-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const root = path.join(dir, 'east-wing')
+  fs.mkdirSync(path.join(root, 'notes'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'notes', 'present.md'), 'here\n')
+  const project = { repos: [{ name: 'east-wing', path: root }, { name: 'charts', path: path.join(dir, 'charts'), external: true }, { name: 'unplaced' }] }
+  const index = new Map([
+    [sourceKey('east-wing', 'notes/gone.md'), { digest: 'sha256:aa' }],
+    [sourceKey('east-wing', 'notes/present.md'), { digest: 'sha256:bb' }],
+    [sourceKey('east-wing', 'notes/unreadable.md'), { digest: null }],
+    [sourceKey('east-wing', 'logs/old/tide.md'), { digest: 'sha256:cc' }],
+    [sourceKey('charts', 'gone.md'), { digest: 'sha256:dd' }],
+  ])
+  const rule = (code, at, over = index) => ENGINE_PRIMITIVES.sourceRemovedDuringBuild(Object.assign(new Error(code), { code, ...(at === undefined ? {} : { path: at }) }), { project, index: over })
+  assert.equal(rule('ENOENT', path.join(root, 'notes', 'gone.md')), true, 'an observed source, gone')
+  assert.equal(rule('ENOTDIR', path.join(root, 'notes', 'gone.md')), true, 'an observed source whose folder is no longer one')
+  assert.equal(rule('ENOENT', path.join(root, 'logs', 'old')), true, 'a folder that held an observed source, gone')
+  assert.equal(rule('ENOENT', path.join(root, 'notes', 'present.md')), false, 'a source still there')
+  assert.equal(rule('ENOENT', path.join(root, 'notes', 'unreadable.md')), false, 'a path the walk listed and could not read')
+  assert.equal(rule('ENOENT', path.join(root, 'notes', 'never.md')), false, 'a path the walk never listed')
+  assert.equal(rule('EACCES', path.join(root, 'notes', 'gone.md')), false, 'a source that cannot be read is no removed source')
+  assert.equal(rule('ENOENT', path.join(dir, 'charts', 'gone.md')), false, 'an external repository is not observed')
+  assert.equal(rule('ENOENT', path.join(dir, 'east-wing-notes', 'gone.md')), false, 'a sibling that shares the prefix is outside')
+  assert.equal(rule('ENOENT', path.join(dir, 'missing-root')), false, 'outside every repository')
   assert.equal(rule('ENOENT'), false, 'an error without a path')
-  assert.equal(ENGINE_PRIMITIVES.sourceRemovedDuringBuild(null, project), false)
-  assert.equal(ENGINE_PRIMITIVES.sourceRemovedDuringBuild(Object.assign(new Error('gone'), { code: 'ENOENT', path: path.join(root, 'a.md') }), null), false)
+  assert.equal(rule('ENOENT', path.join(root, 'notes', 'gone.md'), null), false, 'no observation index')
+  assert.equal(ENGINE_PRIMITIVES.sourceRemovedDuringBuild(null, { project, index }), false)
 })
 
 test('the graph is built with the event loop given a turn between the Markdown sources of the census, and is the graph the build in one stretch gives', async (t) => {

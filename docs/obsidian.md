@@ -1202,9 +1202,10 @@ after its turn in a walk is seen by the next tick, by its stat hint or the
 watcher (one that keeps its size and times and draws no event, at the latest
 by the next full reconciliation), as one changed just after a walk that ran
 through is; when the tick builds the graph, the look again at the sources
-after the build refuses such a change as `mixed-read`. A source removed after
-the build listed it and before it read it (or its folder) is refused the same
-way, and the next tick reads everything again. A note gone from a
+after the build refuses such a change as `mixed-read`. A source this tick
+observed, removed before the build read it (or its folder), is refused the
+same way, and the next tick reads everything again; a path that can never be
+read still fails the tick. A note gone from a
 vault, a source that changed, or a configuration file that changed is a change
 once: a tick that sees it and then fails without a typed reason (a file it
 cannot read, a disk that is full, a project loader that fails) has recorded it

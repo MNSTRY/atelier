@@ -137,17 +137,28 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   // (no permission, an I/O error, no descriptor left), recognised as one is where a vault is placed. Anything else is a
   // fault of the engine and stops the tick.
   guardReadFailed: (error) => typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code),
-  // Whether an error that stopped the graph build is a source, or a folder of sources, removed after the build listed
-  // it and before it read it: no such file (or a parent that is no longer a folder) at a path inside one of the
-  // project's repositories. The look again at the sources after the build refuses that change as `mixed-read`; a
-  // build that could not read the file refuses the same, and the next tick reads everything again. Any other error
-  // stops the tick, as before.
-  sourceRemovedDuringBuild: (error, project) => (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') && typeof error.path === 'string'
-    && (project?.repos ?? []).some((repo) => {
-      if (typeof repo?.path !== 'string') return false
-      const relative = path.relative(path.resolve(repo.path), path.resolve(error.path))
-      return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
-    }),
+  // Whether an error that stopped the graph build is a source, or a folder of sources, removed after this tick
+  // observed it and before the build read it: no such file (or a parent that is no longer a folder), at a path that is
+  // gone now and that this tick's walk over the sources recorded with a digest (a source of a repository the project
+  // observes), or a folder that held such a source. The look again at the sources after the build refuses that change
+  // as `mixed-read`; a build that could not read the file refuses the same, and the next tick reads everything again.
+  // Anything else stops the tick, as before: a path still there, a path the walk listed and could not read (it was
+  // recorded without a digest), or one it never listed, so a path that can never be read still fails every tick.
+  sourceRemovedDuringBuild(error, { project, index }) {
+    if ((error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') || typeof error.path !== 'string' || !(index instanceof Map)) return false
+    const missing = path.resolve(error.path)
+    if (fs.existsSync(missing)) return false
+    for (const repo of project?.repos ?? []) {
+      if (repo?.external || typeof repo?.path !== 'string' || typeof repo?.name !== 'string') continue
+      const relative = path.relative(path.resolve(repo.path), missing)
+      if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) continue
+      const posix = relative.split(path.sep).join('/')
+      if (typeof index.get(sourceKey(repo.name, posix))?.digest === 'string') return true
+      const folder = sourceKey(repo.name, `${posix}/`)
+      for (const [key, entry] of index) if (key.startsWith(folder) && typeof entry?.digest === 'string') return true
+    }
+    return false
+  },
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
@@ -768,7 +779,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             }
           }
         } catch (error) {
-          if (!isTypedRefusal(error) && rules.sourceRemovedDuringBuild(error, project)) refuse('mixed-read', 'a source was removed while the canonical graph was being built', { cause: error.code })
+          if (!isTypedRefusal(error) && rules.sourceRemovedDuringBuild(error, { project, index })) refuse('mixed-read', 'a source was removed while the canonical graph was being built', { cause: error.code })
           throw error
         }
         // The assets this graph lets a view copy are observed from now on, and hashed now so the snapshot pins
