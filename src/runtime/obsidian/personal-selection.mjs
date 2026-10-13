@@ -39,11 +39,15 @@ import { refuse } from './errors.mjs'
 // it back could publish what nobody confirmed after the records removed. Every
 // read of the history's end is noted (notePersonalSelectionHead): the first
 // read here, the read once the generation is loaded, the recheck of a project
-// already loaded, and a read the engine asks for when its guard stops a view
-// because an observed file changed. A history that ends earlier than the
-// highest record noted refuses `selection-history-shortened` at each of them,
-// and nothing is loaded or used from it while it is shorter. A record added
-// and removed between two of those reads was never read, and does not count.
+// already loaded, and a read the engine asks for, once a tick, when its guard
+// stops a view because an observed file changed or could not be read. A
+// history that ends earlier than the highest record noted refuses
+// `selection-history-shortened` at a load and at a recheck, and nothing is
+// loaded or used from it while it is shorter; the guard's read only notes, and
+// its view says `mixed-read`. An engine whose project is pinned below the
+// highest record noted loads it again at its next tick
+// (personalSelectionBehind). A record added and removed between two of those
+// reads was never read, and does not count.
 //
 // Only the record number is kept, and only in this process. A record in a
 // place already read, with other content, is read as a confirmation. A process

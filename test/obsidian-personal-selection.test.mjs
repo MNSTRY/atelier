@@ -50,7 +50,7 @@ const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/err
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { createProductionSeams } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
-const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, personalSelectionOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
+const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, notePersonalSelectionNow, personalSelectionOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
 const { SELECTION_PRIMITIVES, loadSelectedProject, loadSelectedProjectOffThread, locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
 const { resolveServiceWorkspace, runMaintenanceService, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
 const { createViewPermission } = await import('../src/runtime/obsidian/view-permission.mjs')
@@ -369,11 +369,13 @@ test('a record first read by the recheck counts, and a project already loaded is
 
   // Two users of the loader in one process, as a service has (its engine, and the status read of its plugin): the other
   // one reads a confirmation that is then removed. No file the engine observes differs from its last look, and the
-  // history ends with the record its project is pinned to.
+  // history ends with the record its project is pinned to. Both engines leave out the in-memory check at every tick
+  // (reloadsBehindSelection, tested on its own below), so the recheck alone is what holds the project here.
   const bo = makePerson(t)
   bo.select()
-  const unheld = bo.engine({ fullReconciliationIntervalMs: 0, rules: unchecked })
-  const held = bo.engine({ fullReconciliationIntervalMs: 0 })
+  const recheckOnly = { reloadsBehindSelection: () => false }
+  const unheld = bo.engine({ fullReconciliationIntervalMs: 0, rules: unchecked, primitives: recheckOnly })
+  const held = bo.engine({ fullReconciliationIntervalMs: 0, primitives: recheckOnly })
   t.after(() => { unheld.stop(); held.stop() })
   assert.ok(everyView(await unheld.tick(), 'current'))
   assert.ok(everyView(await held.tick(), 'current'))
@@ -385,6 +387,48 @@ test('a record first read by the recheck counts, and a project already loaded is
   assert.ok(everyView(after, 'stale', 'selection-history-shortened'), JSON.stringify(after.scopes))
   const next = await held.tick()
   assert.deepEqual([next.state, next.refusal?.code], ['refused', 'selection-history-shortened'], JSON.stringify(next))
+})
+
+test('a project already loaded is loaded again at the next tick when another reader in the process read a later record, so a confirmation removed before the engine looked is refused at once; mutation control: without the check the engine goes on under its record until the next full reconciliation', async (t) => {
+  // Two users of the loader in one process, as a service has: the other one reads a confirmation that is then removed.
+  // No file the engine observes differs from its last look, and the tick after is no full reconciliation.
+  const readElsewhereThenCut = async (primitives) => {
+    const bo = makePerson(t)
+    bo.select()
+    const engine = bo.engine({ ...(primitives === undefined ? {} : { primitives }) })
+    t.after(() => engine.stop())
+    assert.ok(everyView(await engine.tick(), 'current'))
+    bo.select()
+    assert.equal(personalSelectionOf(bo.load()).sequence, 2)
+    fs.rmSync(bo.record(2))
+    const after = await engine.tick()
+    assert.equal(after.full, after.state === 'refused' ? undefined : false, 'the tick after is no full reconciliation')
+    return after
+  }
+  assert.ok(everyView(await readElsewhereThenCut({ reloadsBehindSelection: () => false }), 'current'), 'the oracle can fail: the engine goes on under the record it loaded')
+  const after = await readElsewhereThenCut()
+  assert.ok(after.state === 'refused' ? after.refusal?.code === 'selection-history-shortened' : everyView(after, 'stale', 'selection-history-shortened'), JSON.stringify(after))
+})
+
+test('a change that stops every view of a tick has the selection history read once, not once a view', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  let reads = 0
+  let during = null
+  const production = createProductionSeams()
+  const engine = ari.engine({
+    primitives: { noteSelectionAtGuard: (project) => { reads += 1; return notePersonalSelectionNow(project) } },
+    seams: { publishView: (input) => { if (during !== null) { const act = during; during = null; act() } return production.publishView(input) } },
+  })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  fs.writeFileSync(path.join(ari.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replace('Tide tables', 'Changed tide tables'))
+  during = () => { reviseOverlay(ari); ari.materialize(); ari.select() }
+  const stopped = await engine.tick()
+  assert.equal(during, null, 'the confirmation landed during the tick')
+  const notCurrent = stopped.scopes.filter((scope) => scope.state !== 'current')
+  assert.ok(notCurrent.length >= 2 && notCurrent.some((scope) => scope.reason === 'mixed-read'), JSON.stringify(stopped.scopes))
+  assert.equal(reads, 1, `the history was read ${reads} times in one tick`)
 })
 
 test('a confirmation that stops a view in the middle of a tick is read while it is there, and counts when it is removed before the next tick; mutation control: not read at the guard, a restore nobody confirmed is published', async (t) => {

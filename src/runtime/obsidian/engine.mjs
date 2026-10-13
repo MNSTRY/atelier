@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { createCooperativeBudget } from '../../projection/obsidian/materialize/prepare-view.mjs'
-import { PERSONAL_VALIDATION_PENDING, notePersonalSelectionNow, personalWorkspaceBindingOf, personalWorkspaceInputs, validatePersonalWorkspace } from '../../projection/obsidian/personal-workspace.mjs'
+import { PERSONAL_VALIDATION_PENDING, notePersonalSelectionNow, personalSelectionBehind, personalWorkspaceBindingOf, personalWorkspaceInputs, validatePersonalWorkspace } from '../../projection/obsidian/personal-workspace.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
 import { PublicationRefusal, allocatedFolderState, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
@@ -107,6 +107,10 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // A change the guard sees in the middle of a tick is read, where it may be a confirmed selection, while it is there.
   noteSelectionAtGuard: notePersonalSelectionNow,
+  // A loaded project pinned to a selection record below the highest record this process has read the history ending at
+  // is loaded again at the next tick, whatever the files say: another reader in the process may have read a
+  // confirmation that is gone again before this engine looked (personalSelectionBehind).
+  reloadsBehindSelection: personalSelectionBehind,
   // After a tick that failed without a typed reason, the next one looks at every view again, as the first tick of a
   // process does: see tick().
   rechecksEveryViewAfterFailure: true,
@@ -442,7 +446,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       if (personalWorkspaceBindingOf(project) === null) project = await loadProject()
     } else {
       const config = reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full, hinted, lstat })
-      if (config.changes.length > 0) {
+      if (config.changes.length > 0 || rules.reloadsBehindSelection(project)) {
         project = await loadProject()
         reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full: true, lstat })
       }
@@ -703,6 +707,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       const bindings = configFilesOf(project).map(file => ({ ...file, digest: index.get(file.key)?.digest ?? null }))
       const machineDigest = digestOfJson(machine)
       const eligibilityRevision = String(eligibility.revision())
+      // The history's end is read once a tick at the guard, however many views the change stops.
+      let selectionNoted = false
+      const noteSelectionOnce = () => { if (!selectionNoted) { selectionNoted = true; rules.noteSelectionAtGuard(project) } }
       const assertBindings = () => {
         let changed
         try {
@@ -715,6 +722,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           // means is decided there, by observation and the project loader, as before.
           if (!rules.guardReadFailed(error)) throw error
           forceFull = true
+          // The file may be a selection record being written or removed: the history's end is read for the note.
+          noteSelectionOnce()
           refuse('mixed-read', 'a file that decides source selection could not be read again while a view was being prepared or published', { cause: error.code })
         }
         if (changed) {
@@ -722,7 +731,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           // The change may be a confirmation in a personal home. The guard compares files and reads no history, so the
           // history's end is read here for the note: a record that stopped this view counts from now on, also when it
           // is gone again before the next tick looks.
-          rules.noteSelectionAtGuard(project)
+          noteSelectionOnce()
           refuse('mixed-read', 'source selection or eligibility changed while a view was being prepared or published')
         }
       }
