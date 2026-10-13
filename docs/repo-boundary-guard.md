@@ -268,15 +268,19 @@ machine for weeks.
   remote's tracking refs do not hold, each against its parent, so content added
   and removed again within the push is still caught (the finding names its
   commit). A merge is judged only for what is new against all of its parents,
-  so pulling a collaborator's published work does not refuse your push. The
-  hook passes the remote's name; a hook installed before that judges against
-  every remote's tracking refs, so reinstall it (`atelier boundary
-  install-hooks`) for history that only another remote holds to be judged on
-  its way to a new one. A brand-new branch is diffed against the empty tree, in
-  SHA-1 and SHA-256 repositories alike, so nothing slips through unscanned. A
-  push carrying more than 1000 such commits, or more evidence than the
-  aggregate budget, is refused; push it in smaller parts, an earlier commit
-  first.
+  so a pull merge into the branch you push is not refused for what the remote
+  already holds; merging another branch into a feature branch can still be
+  refused through the change from the remote's commit, as before. The hook
+  passes the remote Git names: a configured remote, or a URL matched to the
+  remote configured with it. Only that remote's tracking refs, stale ones
+  included, exclude commits; a URL no remote is configured with excludes only
+  the remote's commit. A hook installed before this judges against every
+  remote's tracking refs, so reinstall it (`atelier boundary install-hooks`)
+  for history that only another remote holds to be judged on its way to a new
+  one. A brand-new branch is diffed against the empty tree, in SHA-1 and SHA-256
+  repositories alike, so nothing slips through unscanned. A push carrying more
+  than 1000 such commits, or more evidence than the aggregate budget, is
+  refused; push it in smaller parts, an earlier commit first.
 - `atelier boundary audit` scans the current working tree by default and
   **reports without blocking**, listing matches, incomplete-read diagnostics,
   and declared exceptions with their reasons. Use `--head` for a committed

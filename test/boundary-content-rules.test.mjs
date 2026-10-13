@@ -1090,6 +1090,136 @@ test('history only another remote holds is judged on its way to a new one', (t) 
   assert.ok(toPublic.findings.some((item) => item.rule === 'secret-material' && item.commit === added), JSON.stringify(toPublic.findings))
 })
 
+test('a blob judged at one path is judged again at another', (t) => {
+  const { site, policy, project } = makeWorkspace(t, { exceptions: [{ rule: 'secret-material', repo: 'example-site', paths: ['fixtures/**'], reason: 'test fixture' }] })
+  const blob = Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`${KEY_MATERIAL}\n`)])
+  commit(site, 'fixtures/key.bin', blob, 'an excepted fixture')
+  commit(site, 'src/key.bin', blob, 'the same bytes elsewhere')
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.path === 'src/key.bin' && item.rule === 'secret-material'), JSON.stringify(report.errors))
+  assert.ok(!report.errors.some((item) => item.path === 'fixtures/key.bin'), JSON.stringify(report.errors))
+})
+
+test('an evil merge over a type change is still judged', { skip: process.platform === 'win32' && 'symbolic links' }, (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  commit(site, 'notes/f.txt', 'one\n', 'a file')
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  git(site, ['checkout', '--quiet', '-b', 'linked'])
+  fs.rmSync(path.join(site, 'notes', 'f.txt'))
+  fs.symlinkSync('elsewhere', path.join(site, 'notes', 'f.txt'))
+  git(site, ['add', '-A'])
+  git(site, ['commit', '--quiet', '-m', 'now a link'])
+  git(site, ['checkout', '--quiet', '-'])
+  commit(site, 'notes/f.txt', 'two\n', 'edited')
+  assert.throws(() => git(site, ['merge', '--quiet', 'linked']))
+  fs.rmSync(path.join(site, 'notes', 'f.txt'), { force: true })
+  fs.writeFileSync(path.join(site, 'notes', 'f.txt'), `two\n${KEY_MATERIAL}\n`)
+  git(site, ['add', '-A'])
+  git(site, ['commit', '--quiet', '--no-edit'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  commit(site, 'notes/f.txt', 'two\n', 'removes the key')
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.commit === merge), JSON.stringify(report.errors))
+})
+
+test('a pull merge over large upstream binaries passes, but a binary only the merge adds is judged', (t) => {
+  const { root, site, policy, project } = makeWorkspace(t)
+  const collaborator = path.join(root, 'collaborator')
+  execFileSync('git', ['clone', '--quiet', path.join(root, 'example-site.git'), collaborator])
+  git(collaborator, ['config', 'user.email', 'other@example.invalid'])
+  git(collaborator, ['config', 'user.name', 'Other'])
+  // More binary content than one diff may read, all of it already published.
+  for (let index = 0; index < 5; index += 1) {
+    fs.mkdirSync(path.join(collaborator, 'photos'), { recursive: true })
+    fs.writeFileSync(path.join(collaborator, 'photos', `photo-${index}.bin`), Buffer.concat([Buffer.from([0, index]), Buffer.alloc(7 * 1024 * 1024, index + 1)]))
+    git(collaborator, ['add', '.'])
+    git(collaborator, ['commit', '--quiet', '-m', `photo ${index}`])
+    git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  }
+  commit(site, 'README.md', '# Site\n', 'readme')
+  git(site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
+  let report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.deepEqual(report.errors, [], 'published content neither refuses nor spends the budget')
+  const budgeted = scanPushUpdate({ repoRoot: site, update: pushUpdate(site)[0], repo: 'site', maxBytes: 20 * 1024 * 1024 })
+  assert.deepEqual(budgeted.diagnostics, [])
+
+  // The merge alone adds a binary holding a key, removed again afterwards.
+  fs.writeFileSync(path.join(site, 'z-evil.bin'), Buffer.concat([Buffer.from([0, 9]), Buffer.from(`${KEY_MATERIAL}\n`)]))
+  git(site, ['add', 'z-evil.bin'])
+  git(site, ['commit', '--quiet', '--amend', '--no-edit'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'z-evil.bin'))
+  commit(site, 'README.md', '# Site, again\n', 'removes it')
+  report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.path === 'z-evil.bin' && item.binary === true && item.commit === merge), JSON.stringify(report.errors))
+})
+
+test('a merge that cannot be read against any parent refuses the push', (t) => {
+  const { site } = makeWorkspace(t)
+  git(site, ['checkout', '--quiet', '-b', 'side'])
+  commit(site, 'side.txt', 'side\n', 'side')
+  git(site, ['checkout', '--quiet', '-'])
+  commit(site, 'main.txt', 'main\n', 'main')
+  git(site, ['merge', '--quiet', '--no-ff', '--no-edit', 'side'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  const result = scanPushUpdate({
+    repoRoot: site,
+    update: pushUpdate(site)[0],
+    repo: 'site',
+    gitRunner: (exe, args, opts) => (args.includes('diff') && args.at(-1) === merge && args.length > 0 && args.at(-2) !== git(site, ['rev-parse', 'origin/main']) ? { status: 128, stdout: '' } : spawnSync(exe, args, opts)),
+  })
+  assert.ok(result.diagnostics.some((item) => item.details?.commit === merge), JSON.stringify(result.diagnostics))
+})
+
+test('a push to a URL or an unknown remote judges history other remotes hold', (t) => {
+  const { root, site } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  const publicUrl = path.join(root, 'public.git')
+  execFileSync('git', ['init', '--quiet', '--bare', publicUrl])
+  git(site, ['remote', 'add', 'public', publicUrl])
+  const update = { localRef: 'refs/heads/main', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: '0'.repeat(40) }
+  for (const remote of [publicUrl, path.join(root, 'unconfigured.git')]) {
+    const result = scanPushUpdate({ repoRoot: site, update, repo: 'site', remote })
+    assert.ok(result.findings.some((item) => item.rule === 'secret-material' && item.commit === added), `${remote}: ${JSON.stringify(result.findings)}`)
+  }
+})
+
+test('the pre-push hook passes its remote, and only rule violations suggest an exception', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { root, site, project } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  installBoundaryHooks({ project })
+  // Setup commits below bypass the pre-commit hook; the push is what is under test.
+  const setup = (rel, contents, message) => {
+    fs.mkdirSync(path.dirname(path.join(site, rel)), { recursive: true })
+    if (contents === null) fs.rmSync(path.join(site, rel))
+    else fs.writeFileSync(path.join(site, rel), contents)
+    git(site, ['add', '-A'])
+    git(site, ['commit', '--quiet', '--no-verify', '-m', message])
+  }
+  execFileSync('git', ['init', '--quiet', '--bare', path.join(root, 'public.git')])
+  git(site, ['remote', 'add', 'public', path.join(root, 'public.git')])
+  const run = hookedGit(t, site)
+  let result = run(['push', '--quiet', 'public', 'HEAD:refs/heads/main'])
+  assert.notEqual(result.status, 0, 'legacy history reached a new remote unjudged')
+  assert.match(result.stdout + result.stderr, /secret-material/)
+  assert.match(result.stdout + result.stderr, /If this usage is intentional/)
+
+  // Refused only because an intermediate commit cannot be read: no exception hint.
+  setup('assets/big.bin', Buffer.concat([Buffer.from([0]), Buffer.alloc(BINARY_FILE_MAX_BYTES + 1, 1)]), 'a large binary')
+  setup('assets/big.bin', null, 'removes it')
+  result = run(['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  assert.notEqual(result.status, 0)
+  assert.match(result.stdout + result.stderr, /content-scan-incomplete/)
+  assert.doesNotMatch(result.stdout + result.stderr, /If this usage is intentional/)
+})
+
 test('a new branch in a SHA-256 repository is scanned from its empty tree', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-sha256-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

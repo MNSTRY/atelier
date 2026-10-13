@@ -631,6 +631,8 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
     const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, remote, gitRunner, maxBytes: CHECK_AGGREGATE_MAX_BYTES - totalBytes })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
+    // The per-commit scan reports its own budget refusal; say it once.
+    if (result.diagnostics.some((item) => item.details?.reason === 'push-evidence-too-large')) break
     if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
       findings.push(finding({
         severity: 'error',
@@ -909,7 +911,10 @@ export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdi
     console.log(JSON.stringify(report, null, 2))
   } else {
     console.log(`[boundary:push-check] ${report.ok ? 'passed' : 'blocked'} · ${report.repo ?? 'unknown repo'} · ${report.errors.length} errors · ${report.warnings.length} warnings`)
-    for (const item of report.findings.slice(0, 50)) console.log(`${item.severity} ${item.rule ?? item.code}: ${item.message}`)
+    for (const item of report.findings.slice(0, 50)) {
+      const also = item.commits?.length ? ` (also in commits ${item.commits.map((commit) => commit.slice(0, 12)).join(', ')})` : ''
+      console.log(`${item.severity} ${item.rule ?? item.code}: ${item.message}${also}`)
+    }
     if (!report.ok && report.repo && report.errors.some((item) => item.code === 'content-rule-violation')) {
       console.log('')
       console.log('If this usage is intentional, declare it in the boundary policy:')
