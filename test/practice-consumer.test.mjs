@@ -848,10 +848,11 @@ test('a capture refused when it is written appends nothing, and one that turns o
   // A measurements directory reached through a symlinked directory and `..` is
   // the one the system resolves: POSIX follows `ln` before `..`, while Windows
   // removes `ln\..` from the text first. The capture is accepted either way.
+  // Only the resolved directory exists, so a check of the textual one refuses.
   const structure = path.join(outside, 'tree')
   fs.mkdirSync(path.join(structure, 'a', 'b'), { recursive: true })
   fs.mkdirSync(path.join(structure, 'a', 'x'))
-  fs.mkdirSync(path.join(structure, 'x'))
+  if (process.platform === 'win32') fs.mkdirSync(path.join(structure, 'x'))
   fs.symlinkSync(path.join(structure, 'a', 'b'), path.join(structure, 'ln'), process.platform === 'win32' ? 'junction' : 'dir')
   const throughLink = [structure, 'ln', '..', 'x', 'measurements.jsonl'].join(path.sep)
   result = run('--out', throughLink, '--capture', path.join(outside, 'through-link-capture.json'))
