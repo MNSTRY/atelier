@@ -688,7 +688,9 @@ function hookedGit(t, cwd) {
   fs.symlinkSync(process.execPath, path.join(bin, 'node'))
   fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'))
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
-  Object.assign(env, { PATH: [bin, '/usr/bin', '/bin'].join(':'), MNSTRY_ATELIER_PACKAGE_ROOT: PACKAGE_ROOT })
+  // The person at the terminal names themselves with the supported local selector, so a
+  // platform login in the environment (GITHUB_ACTOR on CI) is not mistaken for them.
+  Object.assign(env, { PATH: [bin, '/usr/bin', '/bin'].join(':'), MNSTRY_ATELIER_PACKAGE_ROOT: PACKAGE_ROOT, MNSTRY_ATELIER_ACTOR: 'author' })
   return (args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env })
 }
 

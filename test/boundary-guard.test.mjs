@@ -577,10 +577,11 @@ test('a staged forbidden path with a quoted name is still forbidden', () => {
   git(privateRepo, ['add', '.'])
   git(privateRepo, ['commit', '-m', 'seed'])
   fs.mkdirSync(path.join(privateRepo, 'transcripts'))
-  fs.writeFileSync(path.join(privateRepo, 'transcripts', 'café "notes".txt'), 'a session\n')
+  // Non-ASCII, so Git quotes the name unless it is listed NUL-separated; legal on every platform.
+  fs.writeFileSync(path.join(privateRepo, 'transcripts', 'café notes.txt'), 'a session\n')
   git(privateRepo, ['add', '.'])
   const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
-  assert.ok(report.errors.some((item) => item.path === 'transcripts/café "notes".txt'), JSON.stringify(report.errors))
+  assert.ok(report.errors.some((item) => item.path === 'transcripts/café notes.txt'), JSON.stringify(report.errors))
 })
 
 test('a semantic field change in a document Git reads as binary is still reviewed', () => {
