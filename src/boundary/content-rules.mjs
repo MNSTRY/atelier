@@ -316,13 +316,31 @@ function incompleteDiagnostic({ repo, path: filePath = null, message, details = 
 function binaryPathsFromDiff(diff) {
   const paths = new Set()
   let current = null
+  // A deleted path is absent from the revision being scanned, so there is nothing
+  // to read: the blob it had is already in history and is not being introduced.
+  // Only the extended header can say so; a content line always starts with a
+  // prefix, so it cannot forge the header.
+  let inHeader = false
+  let deleted = false
   for (const line of String(diff ?? '').split('\n')) {
     if (line.startsWith('diff --git ')) {
       const header = line.match(/^diff --git a\/(.*) b\/(.*)$/)
       current = header ? normalizeRelPath(header[2]) : null
+      inHeader = true
+      deleted = false
       continue
     }
-    if (current && (line.startsWith('Binary files ') || line === 'GIT binary patch')) paths.add(current)
+    if (!current) continue
+    if (inHeader && line.startsWith('deleted file mode ')) {
+      deleted = true
+      continue
+    }
+    if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
+      inHeader = false
+      if (!deleted) paths.add(current)
+      continue
+    }
+    if (line.startsWith('@@') || line.startsWith('--- ')) inHeader = false
   }
   return [...paths]
 }

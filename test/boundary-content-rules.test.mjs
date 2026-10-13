@@ -358,6 +358,33 @@ test('staged binary credentials block and oversized binary evidence cannot pass 
   assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.path === 'large.bin'))
 })
 
+test('a staged or pushed deletion of a tracked binary has nothing to read and does not block', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, 'retired.bin'), Buffer.from([0, 1, 2, 3]))
+  git(site, ['add', 'retired.bin'])
+  git(site, ['commit', '--quiet', '-m', 'binary asset'])
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+
+  // The deletion is staged beside a binary that is added in the same change, so
+  // skipping deleted paths cannot skip what the change introduces.
+  git(site, ['rm', '--quiet', 'retired.bin'])
+  const signature = Buffer.from(['-----BEGIN ', 'PRIVATE KEY-----'].join(''))
+  fs.writeFileSync(path.join(site, 'opaque.bin'), Buffer.concat([Buffer.from([0]), signature]))
+  git(site, ['add', 'opaque.bin'])
+  let report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(!report.errors.some((item) => item.path === 'retired.bin'), JSON.stringify(report.errors))
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'opaque.bin' && item.binary === true))
+
+  git(site, ['reset', '--quiet', 'opaque.bin'])
+  fs.rmSync(path.join(site, 'opaque.bin'))
+  report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(!report.errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(report.errors))
+
+  git(site, ['commit', '--quiet', '-m', 'retire binary asset'])
+  const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(pushed.ok, true, JSON.stringify(pushed.errors))
+})
+
 test('generated hooks single-quote config paths and reject control characters', () => {
   const config = '/tmp/project $(touch marker).json'
   const script = boundaryHookScript(config, 'pre-push', '/tmp/elsewhere')
