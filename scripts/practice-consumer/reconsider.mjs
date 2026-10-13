@@ -8,7 +8,8 @@
 // decision with a deterministic assessment, and appends one measurement line.
 //
 // It calls no provider, appends to no Knowledge store, accepts or activates
-// nothing, and writes only its measurement file. The Knowledge history it builds
+// nothing, and writes only its measurement file, plus a capture file when one is
+// asked for with --capture. The Knowledge history it builds
 // is reconstructed in memory from the base commit: the review and activation
 // records stand for Foundation's adoption of this practice for its own
 // repository, not an independent or human review. The assessment is a declared
@@ -626,7 +627,8 @@ export function measure({ repo, pr, base, head, mode = 'live', capture = null })
   if (capture) {
     capture({
       records: history.records,
-      definitionRef,
+      // A copy: the measurement keeps its own, whatever a caller does with this one.
+      definitionRef: structuredClone(definitionRef),
       evaluations,
       notEvaluated: results.flatMap((item) => item.outcomes.filter((entry) => entry.status === 'not-evaluated')
         .map((entry) => ({ decision: item.id, file: entry.file, anchor: entry.anchor?.value ?? null, fragment: entry.fragment ?? null, reason: entry.reason }))),
@@ -701,20 +703,43 @@ export function main(argv = process.argv.slice(2)) {
       }
       if (located(capturePath) === located(out)) throw new Error('the capture file and the measurements file are the same file; name a different capture file')
       if (fs.existsSync(capturePath)) throw new Error('the capture file already exists; name a new file')
+      // The measurement line must be appendable before a capture is written, so
+      // a capture never stands for a line that was never written.
+      if (!args.print) {
+        let parent = null
+        try { parent = fs.statSync(path.dirname(path.resolve(out))) } catch { parent = null }
+        if (!parent?.isDirectory()) throw new Error('the measurements file\'s directory does not exist; nothing was measured or written')
+        if (fs.existsSync(out) && fs.statSync(out).isDirectory()) throw new Error('the measurements file is a directory; nothing was measured or written')
+      }
     }
+    const outExisted = fs.existsSync(out)
     let context = null
     const value = measure({ repo: typeof args.repo === 'string' ? args.repo : process.cwd(), pr: args.pr, base: args.base, head: args.head, mode: args.mode ?? 'live',
       capture: capturePath === null ? null : (full) => { context = full } })
-    if (capturePath !== null) writeCapture(capturePath, value, context)
+    if (capturePath !== null) {
+      writeCapture(capturePath, value, context)
+      // The names can still be one file where no path check sees it (another
+      // spelling on a case-insensitive volume, a `..` after a symlink): compare
+      // the files themselves. A measurements file that did not exist before was
+      // created by this capture, so it is removed again; an existing one cannot
+      // be the capture, because writing it would have been refused.
+      if (fs.existsSync(out)) {
+        const [captured, target] = [fs.statSync(capturePath), fs.statSync(out)]
+        if (captured.ino !== 0 && captured.dev === target.dev && captured.ino === target.ino) {
+          if (!outExisted) fs.rmSync(capturePath)
+          throw new Error('the capture file and the measurements file are the same file; nothing was kept and no measurement line was appended')
+        }
+      }
+    }
     if (args.print) console.log(JSON.stringify(value, null, 2))
     else {
-      // Last check before appending: the capture just written is not the file
-      // this line goes to (two spellings on a case-insensitive volume, say).
-      if (capturePath !== null && fs.existsSync(out)) {
-        const [captured, target] = [fs.statSync(capturePath), fs.statSync(out)]
-        if (captured.ino !== 0 && captured.dev === target.dev && captured.ino === target.ino) throw new Error('the capture file and the measurements file are the same file; the capture was written and no measurement line was appended')
+      try {
+        appendLine(out, value)
+      } catch (error) {
+        // A capture without its line would name a measurement that does not exist.
+        if (capturePath !== null) fs.rmSync(capturePath, { force: true })
+        throw error
       }
-      appendLine(out, value)
       console.log(JSON.stringify(value.summary))
     }
     return

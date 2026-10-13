@@ -82,7 +82,8 @@ Renames are not followed. A moved file is absent at the head, so its anchors esc
 
 ## What it does not do
 
-- It calls no provider and appends to no Knowledge store. It accepts or activates nothing, and it writes only its measurement file.
+- It calls no provider and appends to no Knowledge store. It accepts or activates nothing, and it writes only its measurement file, plus a capture file when `--capture NEWFILE` asks for one.
+- A capture holds the full text of the cited sources and decisions at the measured commits, so keep it out of commits: write it under `tmp/`, which is ignored.
 - The review and activation records in the rebuilt history stand for Foundation's adoption of this practice for its own repository. They are not an independent or human review.
 - The probabilities are declared values (1 for the chosen criterion, 0 otherwise), and the confidence is a fixed, uncalibrated 0.5.
 - For a removed or binary source, the source evidence is a placeholder text that says so, bound to the head commit.

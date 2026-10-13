@@ -797,3 +797,67 @@ test('the CLI refuses a capture that names the measurements file, by any path, b
   assert.equal(lines.length, 2)
   assert.equal(JSON.parse(fs.readFileSync(second, 'utf8')).measurementDigest, sha(lines[1]))
 })
+
+test('a capture refused when it is written appends nothing, and one that turns out to be the measurements file is not kept', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one', 'Changed one')))
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-consumer-write-')))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  const run = (...extra) => spawnSync(process.execPath, [SCRIPT, 'measure', '--pr', '65', '--base', r.base, '--head', head, '--repo', r.dir, ...extra], { encoding: 'utf8' })
+  const out = path.join(outside, 'measurements.jsonl')
+
+  // A dangling symlink at the capture path: the exclusive write refuses it, the
+  // link target is not created and no line is appended.
+  const target = path.join(outside, 'never-created.json')
+  const dangling = path.join(outside, 'dangling.json')
+  fs.symlinkSync(target, dangling)
+  let result = run('--out', out, '--capture', dangling)
+  assert.equal(result.status, 2)
+  assert.equal(fs.existsSync(target), false)
+  assert.equal(fs.existsSync(out), false)
+
+  // A capture whose directory does not exist is refused at write time; nothing appended.
+  result = run('--out', out, '--capture', path.join(outside, 'missing', 'capture.json'))
+  assert.equal(result.status, 2)
+  assert.equal(fs.existsSync(out), false)
+
+  // A measurements file that cannot be appended to is refused before anything is
+  // measured, so no capture is left standing for a line that was never written.
+  const orphan = path.join(outside, 'orphan.json')
+  result = run('--out', path.join(outside, 'no-such-dir', 'measurements.jsonl'), '--capture', orphan)
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /directory does not exist/)
+  assert.equal(fs.existsSync(orphan), false)
+  result = run('--out', outside, '--capture', orphan)
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /is a directory/)
+  assert.equal(fs.existsSync(orphan), false)
+
+  // Another spelling of a measurements file that does not exist yet: on a
+  // case-insensitive volume the two names are one file, which the capture would
+  // have created; it is removed and nothing is appended. Elsewhere they are two files.
+  const probe = path.join(outside, 'Probe-Case')
+  fs.writeFileSync(probe, '')
+  const caseInsensitive = fs.existsSync(path.join(outside, 'probe-case'))
+  fs.rmSync(probe)
+  const alias = path.join(outside, 'MEASUREMENTS.jsonl')
+  for (const mode of [[], ['--print']]) {
+    result = run('--out', out, '--capture', alias, ...mode)
+    if (caseInsensitive) {
+      assert.equal(result.status, 2, `${mode} ${result.stderr}`)
+      assert.match(result.stderr, /same file/)
+      assert.equal(fs.existsSync(out), false, 'no capture is left at the measurements path')
+    } else {
+      assert.equal(result.status, 0, result.stderr)
+      fs.rmSync(alias)
+      fs.rmSync(out, { force: true })
+    }
+  }
+})
+
+test('a capture callback cannot change the measurement through the definition reference', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
+  const measured = measure({ repo: r.dir, pr: 66, base: r.base, head, capture: (context) => { context.definitionRef.digest = `sha256:${'0'.repeat(64)}` } })
+  assert.notEqual(measured.definitionRef.digest, `sha256:${'0'.repeat(64)}`)
+})
