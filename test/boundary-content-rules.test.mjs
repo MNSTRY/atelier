@@ -396,6 +396,7 @@ test('a staged or pushed deletion of a tracked binary has nothing to read and do
 })
 
 const KEY_MATERIAL = ['-----BEGIN ', 'PRIVATE KEY-----'].join('')
+const POSIX_NAMES = process.platform !== 'win32'
 
 function stagedSecretErrors(site, project, policy) {
   return checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true }).errors
@@ -442,10 +443,17 @@ test('quoted paths and paths containing " b/" are scanned under their own names'
   fs.writeFileSync(path.join(site, 'x b', 'y.bin'), Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL)]))
   fs.writeFileSync(path.join(site, 'y.bin'), Buffer.from([0, 1, 2]))
   fs.writeFileSync(path.join(site, 'caf\u00e9.txt'), `${KEY_MATERIAL}\n`)
-  fs.writeFileSync(path.join(site, 'tab\tname.txt'), `${KEY_MATERIAL}\n`)
+  const expectedPaths = ['x b/y.bin', 'caf\u00e9.txt']
+  if (POSIX_NAMES) {
+    // Names Windows cannot hold: a tab, a double quote.
+    for (const name of ['tab\tname.txt', 'say "hi".txt']) {
+      fs.writeFileSync(path.join(site, name), `${KEY_MATERIAL}\n`)
+      expectedPaths.push(name)
+    }
+  }
   git(site, ['add', '.'])
   const errors = stagedSecretErrors(site, project, policy)
-  for (const expected of ['x b/y.bin', 'caf\u00e9.txt', 'tab\tname.txt']) {
+  for (const expected of expectedPaths) {
     assert.ok(errors.some((item) => item.path === expected && item.rule === 'secret-material'), `${expected}: ${JSON.stringify(errors)}`)
   }
   assert.ok(!errors.some((item) => item.path === 'y.bin'), JSON.stringify(errors))
@@ -468,12 +476,103 @@ test('text declared binary by attributes is still scanned', (t) => {
   assert.ok(errors.some((item) => item.path === 'app.cfg' && item.line === 2 && item.rule === 'secret-material'), JSON.stringify(errors))
 })
 
+test('fused hunks and submodule summaries from Git configuration do not block clean work', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  commit(site, 'notes.txt', 'one\ntwo\nthree\nfour\nfive\n', 'notes')
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  git(site, ['config', 'diff.interHunkContext', '3'])
+  fs.writeFileSync(path.join(site, 'notes.txt'), 'one\nTWO\nthree\nFOUR\nfive\n')
+  git(site, ['add', 'notes.txt'])
+  assert.deepEqual(stagedSecretErrors(site, project, policy), [])
+
+  // The same edit with material on the second changed line is still found there.
+  fs.writeFileSync(path.join(site, 'notes.txt'), `one\nTWO\nthree\n${KEY_MATERIAL}\nfive\n`)
+  git(site, ['add', 'notes.txt'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'notes.txt' && item.line === 4), JSON.stringify(errors))
+  git(site, ['reset', '--quiet', '--hard', 'HEAD'])
+
+  // A submodule pointer bump beside another change, with summaries configured.
+  const library = path.join(path.dirname(site), 'library')
+  fs.mkdirSync(library)
+  git(library, ['init', '--quiet'])
+  git(library, ['config', 'user.email', 'author@example.invalid'])
+  git(library, ['config', 'user.name', 'Author'])
+  commit(library, 'lib.txt', 'first\n', 'library first')
+  git(site, ['-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', library, 'vendor-lib'])
+  git(site, ['commit', '--quiet', '-m', 'add library'])
+  commit(library, 'lib.txt', 'second\n', 'library second')
+  git(path.join(site, 'vendor-lib'), ['-c', 'protocol.file.allow=always', 'pull', '--quiet', 'origin', 'HEAD'])
+  git(site, ['config', 'diff.submodule', 'log'])
+  fs.writeFileSync(path.join(site, 'notes.txt'), 'one\nTWO\nthree\nfour\nfive\n')
+  git(site, ['add', 'notes.txt', 'vendor-lib'])
+  assert.deepEqual(stagedSecretErrors(site, project, policy), [])
+})
+
+test('names holding a backslash or shaped like an index stage are read as themselves', { skip: !POSIX_NAMES && 'names Windows cannot hold' }, (t) => {
+  const exceptions = [{ rule: 'secret-material', repo: 'example-site', paths: ['x/z.txt'], reason: 'invented sibling exception for the test', approvedBy: 'author' }]
+  const { site, policy, project } = makeWorkspace(t, { exceptions })
+  fs.mkdirSync(path.join(site, 'x'))
+  const secretBinary = Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL)])
+  fs.writeFileSync(path.join(site, 'x', 'y.bin'), Buffer.from([0, 1, 2]))
+  fs.writeFileSync(path.join(site, 'x\\y.bin'), secretBinary)
+  fs.writeFileSync(path.join(site, 'x', 'z.txt'), 'harmless\n')
+  fs.writeFileSync(path.join(site, 'x\\z.txt'), `${KEY_MATERIAL}\n`)
+  fs.writeFileSync(path.join(site, 'evil.bin'), Buffer.from([0, 9]))
+  fs.writeFileSync(path.join(site, '0:evil.bin'), secretBinary)
+  git(site, ['add', '.'])
+  const errors = stagedSecretErrors(site, project, policy)
+  for (const expected of ['x\\y.bin', 'x\\z.txt', '0:evil.bin']) {
+    assert.ok(errors.some((item) => item.path === expected && item.rule === 'secret-material'), `${expected}: ${JSON.stringify(errors)}`)
+  }
+  for (const benign of ['x/y.bin', 'x/z.txt', 'evil.bin']) {
+    assert.ok(!errors.some((item) => item.path === benign), `${benign}: ${JSON.stringify(errors)}`)
+  }
+})
+
+test('text declared binary is judged by its added lines, not its whole content', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.min.js -diff\n')
+  fs.writeFileSync(path.join(site, 'app.min.js'), 'const a = 1\nlocalStorage.setItem("k", "v")\nconst c = 3\n')
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'accepted usage already in history'])
+
+  fs.writeFileSync(path.join(site, 'app.min.js'), 'const a = 1\nlocalStorage.setItem("k", "v")\nconst c = 4\n')
+  git(site, ['add', 'app.min.js'])
+  assert.deepEqual(stagedSecretErrors(site, project, policy), [])
+
+  fs.writeFileSync(path.join(site, 'app.min.js'), `const a = 1\nlocalStorage.setItem("k", "v")\nconst c = 4\n${KEY_MATERIAL}\n`)
+  git(site, ['add', 'app.min.js'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'app.min.js' && item.line === 4 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.line === 2), JSON.stringify(errors))
+})
+
 test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {
   assert.equal(diffHeaderPath('diff --git a/docs/a.md b/docs/a.md'), 'docs/a.md')
   assert.equal(diffHeaderPath('diff --git a/x b/y.bin b/x b/y.bin'), 'x b/y.bin')
   assert.equal(diffHeaderPath('diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"'), 'caf\u00e9.txt')
   assert.equal(diffHeaderPath('diff --git a/plain.txt "b/tab\\tname.txt"'), 'tab\tname.txt')
   assert.equal(diffHeaderPath('diff --git a/old.txt b/new.txt'), null)
+  assert.equal(diffHeaderPath('diff --git a/ b/'), null)
+  assert.equal(diffHeaderPath('diff --git "a/bad\\400.txt" "b/bad\\400.txt"'), null)
+
+  // A context line inside a hunk counts on both sides and does not end the hunk.
+  const [fused] = parseDiffSections([
+    'diff --git a/n.txt b/n.txt',
+    `index ${'1'.repeat(40)}..${'2'.repeat(40)} 100644`,
+    '--- a/n.txt',
+    '+++ b/n.txt',
+    '@@ -2,3 +2,3 @@',
+    '-two',
+    '+TWO',
+    ' three',
+    '-four',
+    '+FOUR',
+  ].join('\n'))
+  assert.equal(fused.incomplete, null)
+  assert.equal(fused.newBlob, '2'.repeat(40))
+  assert.deepEqual(fused.addedLines, [{ number: 2, text: 'TWO' }, { number: 4, text: 'FOUR' }])
 
   const renamed = parseDiffSections([
     'diff --git a/old.txt b/new.txt',
