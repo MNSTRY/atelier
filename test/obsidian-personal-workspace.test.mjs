@@ -768,6 +768,38 @@ test('the cached route: one load, a composition only when the validity key chang
   assert.equal(composed, 4, 'only the new engine\'s first full reconciliation asked; no caller composed')
 })
 
+test('a source of a bound project removed after the tick observed it and before the build read it refuses the views as mixed-read, and the next tick publishes without it', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  // Two notes nothing links to, both removed at the build's first read of a Markdown source of the repository, before
+  // that read: one of the two is still to be read, whatever the order the folder lists them in.
+  const removable = ['bell', 'whistle'].map((name) => path.join(world.a, 'notes', `${name}.md`))
+  for (const file of removable) fs.writeFileSync(file, noteText({ id: `a:${path.basename(file, '.md')}`, title: path.basename(file, '.md'), body: 'Sounded in fog.' }))
+  const production = createProductionSeams()
+  const original = fs.readFileSync
+  let building = false
+  let removed = false
+  fs.readFileSync = function (file, ...rest) {
+    if (building && !removed && typeof file === 'string' && path.dirname(file) === path.join(world.a, 'notes') && file.endsWith('.md')) {
+      removed = true
+      for (const each of removable) fs.rmSync(each)
+    }
+    return original.call(this, file, ...rest)
+  }
+  t.after(() => { fs.readFileSync = original })
+  const seams = { buildGraph: (args) => { building = true; try { return production.buildGraph(args) } finally { building = false } } }
+  const engine = ari.engine({ seams })
+  t.after(() => engine.stop())
+  const first = await engine.tick()
+  assert.equal(removed, true)
+  assert.ok(first.scopes.length > 0 && first.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'mixed-read'), JSON.stringify(first.scopes))
+  fs.readFileSync = original
+  const next = await engine.tick()
+  assert.ok(next.scopes.every((scope) => scope.state === 'current'), JSON.stringify(next.scopes))
+  const published = ari.manifestOf(EVERYTHING_SCOPE_ID).notes.map((item) => item.nodeId)
+  assert.ok(published.includes('a:harbor') && !published.includes('a:bell') && !published.includes('a:whistle'), `published without the removed sources: ${published}`)
+})
+
 test('the engine builds a bound project by its own route, with the composition off the event loop, not by the build that waits between sources', async (t) => {
   const world = makeWorld(t, { people: ['ari'] })
   const { ari } = world
