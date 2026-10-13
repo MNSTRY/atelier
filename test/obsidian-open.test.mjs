@@ -423,9 +423,9 @@ async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condit
 const probeOf = (pid) => { try { process.kill(pid, 0); return 'alive' } catch (error) { return error.code } }
 // Waits until the service a world just started has ended its first tick: its status answers with a tick counted and
 // none running. A test that stops a service, or starts or replaces it again, right after starting it otherwise races
-// that tick, which holds the listener for a while on a slow disk (Windows in CI): the stop is then refused as busy, or,
-// where a busy service cannot be proved this one (Windows reads no command line), as occupied. Later ticks are an idle
-// interval away.
+// that tick, which blocks the service's event loop for a while, so its health does not answer (seconds in a Windows CI
+// job): the stop is then refused as busy, or, where a busy service cannot be proved this one (Windows reads no command
+// line), as occupied. Later ticks are an idle interval away.
 async function waitForFirstTick(world, label = 'the service to end its first tick') {
   const record = readServiceRecord(world.workspace())
   return waitFor(async () => {
@@ -3116,6 +3116,7 @@ test('a consent derived at a terminal never replaces one recorded meanwhile: the
   assert.equal(first.state, 'healthy')
   const { grantedAt: _at, ...consent } = readServiceSettings(fresh.workspace()).consent
   assert.deepEqual(consent, { actor: 'someone', coverage: 'service' })
+  await waitForFirstTick(fresh)
   const { pid } = readServiceRecord(fresh.workspace())
   const freshStopped = await stopService(freshLifecycle)
   await waitForExit(pid, 'the fresh service to exit', freshStopped)
@@ -4126,6 +4127,7 @@ test('the real service entry starts and serves: loading the shipped contribution
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath, entryArgs: ['--adapter=obsidian-cli'], intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
   const started = await world.run(['service', 'start', '--json', '--consent-actor', CONSENT.actor], { seams, startTimeoutMs: 20000, env })
   assert.deepEqual([started.exit, started.json.service.state, started.json.service.started], [EXIT.ok, 'healthy', true], JSON.stringify(started.json).slice(0, 600))
+  await waitForFirstTick(world)
   const status = await world.run(['service', 'status', '--json'], { seams, env })
   assert.equal(status.json.service.state, 'healthy')
   const stop = await world.run(['service', 'stop', '--json'], { seams, env })
