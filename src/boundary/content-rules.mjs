@@ -590,16 +590,23 @@ function declaredBinaryTextLines({ repoRoot, revisions, entries, changedPaths = 
     // A literal pathspec also matches a directory of that name, so a file that
     // replaced a directory would bring the directory's changed files in as
     // rename candidates and as output. Only changed entries can appear in a
-    // diff, so exactly those under a path read here, and not read themselves,
-    // are excluded; usually there are none.
+    // diff. Under a read path with nothing else read inside, one subtree
+    // exclusion covers them all; under one that holds another read path, the
+    // changed entries not read are excluded one by one. Usually there are none.
     const reading = new Set(paths)
-    const excluded = changedPaths.filter((value) => !reading.has(value) && paths.some((read) => value.startsWith(`${read}/`)))
+    const excluded = new Set()
+    for (const read of paths) {
+      const under = changedPaths.filter((value) => value.startsWith(`${read}/`))
+      if (under.length === 0) continue
+      if (!paths.some((other) => other.startsWith(`${read}/`))) excluded.add(`${read}/`)
+      else for (const value of under) if (!reading.has(value)) excluded.add(value)
+    }
     const result = gitOutputResult(repoRoot, [
       '-c', 'core.precomposeUnicode=false',
       ...canonicalDiffArgs(revisions, ['--text']),
       '--',
       ...paths.map((value) => `:(literal)${value}`),
-      ...excluded.map((value) => `:(exclude,literal)${value}`),
+      ...[...excluded].map((value) => `:(exclude,literal)${value}`),
     ], { gitExecutable, indexFile, runner: gitRunner })
     const parsed = result.ok ? parseDiffSections(result.stdout) : []
     for (const { section } of group) {

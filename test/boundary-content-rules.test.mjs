@@ -678,6 +678,30 @@ test('a file renamed into a directory of its own name is read with its source', 
   assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
 })
 
+test('a file that replaces a large directory is read with one exclusion, not one per entry', (t) => {
+  const { site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  fs.mkdirSync(path.join(site, 'big.cfg'))
+  for (let index = 0; index < 400; index += 1) fs.writeFileSync(path.join(site, 'big.cfg', `entry-${index}.txt`), `entry ${index}\n`)
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'a large directory'])
+  git(site, ['rm', '--quiet', '-r', 'big.cfg'])
+  fs.writeFileSync(path.join(site, 'big.cfg'), `name = big\n${KEY_MATERIAL}\n`)
+  git(site, ['add', '.'])
+  const exclusions = []
+  const result = scanStagedRepository({
+    repoRoot: site,
+    repo: 'site',
+    gitRunner: (exe, args, options) => {
+      if (args.some((value) => value.startsWith(':(literal)'))) exclusions.push(args.filter((value) => value.startsWith(':(exclude,literal)')))
+      return spawnSync(exe, args, options)
+    },
+  })
+  assert.deepEqual(exclusions, [[':(exclude,literal)big.cfg/']])
+  assert.deepEqual(result.findings.filter((item) => item.rule === 'secret-material').map((item) => `${item.path}|${item.line}`), ['big.cfg|2'])
+  assert.deepEqual(result.diagnostics, [])
+})
+
 test('declared-binary text batches are split by size as well as count', (t) => {
   const { site } = makeWorkspace(t)
   fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
