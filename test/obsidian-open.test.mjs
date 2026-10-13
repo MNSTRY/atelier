@@ -112,7 +112,7 @@ const { createObsidianRegistry } = await import('../src/runtime/obsidian/extensi
 const { LIFECYCLE_PRIMITIVES, releaseStanding, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
-const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
+const { ENGINE_LOCK_DIRECTORY, createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
 const { readServiceRecord, readServiceSettings, releaseIdentity, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
@@ -367,12 +367,29 @@ function followChild(t, child) {
 }
 const trackingSpawn = (t) => (...args) => followChild(t, childProcess.spawn(...args))
 
+// The data roots of the worlds a running test made. A wait that times out says what their services last wrote, so a
+// service that did not stop in time can be told from one that was never asked, and from one whose tick was still going.
+const LIVE_DATA_ROOTS = new Set()
+function serviceDiagnosis() {
+  const lines = [`at ${new Date().toISOString()}`]
+  for (const dataRoot of LIVE_DATA_ROOTS) {
+    let root
+    try { root = workspaceStateRoot(dataRoot, WORKSPACE_ID) } catch (error) { lines.push(`no workspace root: ${error.code ?? error.name}`); continue }
+    const directory = path.join(root, 'state', 'service')
+    const tail = (name, count) => { try { return fs.readFileSync(path.join(directory, name), 'utf8').trim().split('\n').slice(-count).join('\n    ') } catch (error) { return `(${error.code ?? error.name})` } }
+    let tickets
+    try { tickets = fs.readdirSync(path.join(root, ENGINE_LOCK_DIRECTORY)).sort().join(', ') || '(none)' } catch (error) { tickets = `(${error.code ?? error.name})` }
+    lines.push(`service log:\n    ${tail('service.log', 12)}`, `runtime record: ${fs.existsSync(path.join(directory, 'runtime.json')) ? 'present' : 'absent'}`, `last error: ${tail('last-error.json', 1)}`, `engine lock: ${tickets}`)
+  }
+  return lines.join('\n  ')
+}
+
 async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condition' } = {}) {
   const until = Date.now() + timeoutMs
   for (;;) {
     const value = await check()
     if (value) return value
-    if (Date.now() > until) throw new Error(`timed out waiting for ${label}`)
+    if (Date.now() > until) throw new Error(`timed out waiting for ${label}\n  ${serviceDiagnosis()}`)
     await new Promise((resolve) => { setTimeout(resolve, everyMs) })
   }
 }
@@ -390,6 +407,8 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
   const projectDir = path.join(dir, 'project')
   const dataRoot = path.join(dir, 'data')
+  LIVE_DATA_ROOTS.add(dataRoot)
+  t.after(() => { LIVE_DATA_ROOTS.delete(dataRoot) })
   for (const [relative, content] of Object.entries(FILES)) {
     fs.mkdirSync(path.dirname(path.join(projectDir, relative)), { recursive: true })
     fs.writeFileSync(path.join(projectDir, relative), content)
@@ -2999,7 +3018,7 @@ test('a person at a terminal allows the first start by their account\'s name; a 
   assert.match(started.stdout, /allowed by someone, this account; recorded for this workspace/)
   const record = readServiceRecord(world.workspace())
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
-  assert.equal(stopped.json.service.stopped, true)
+  assert.equal(stopped.json?.service?.stopped, true, `${JSON.stringify(stopped.json ?? stopped.stderr).slice(0, 600)}\n  ${serviceDiagnosis()}`)
   await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
 
   // Another account at a terminal later: the consent recorded stays; only --consent-actor names another actor.
@@ -3066,7 +3085,7 @@ test('--adapter given once is remembered for the workspace before anything start
   // Given again later: nothing is written again.
   world.advance(60 * 1000)
   const again = await world.run(['service', 'start', '--json', '--adapter=obsidian-cli'], { seams })
-  assert.deepEqual([again.json.service.alreadyRunning, again.json.rememberedNow.adapter], [true, false])
+  assert.deepEqual([again.json?.service?.alreadyRunning, again.json?.rememberedNow?.adapter], [true, false], `${JSON.stringify(again.json ?? again.stderr).slice(0, 600)}\n  ${serviceDiagnosis()}`)
   assert.deepEqual(readMachineSettings(world.workspace()).decisions.adapter, adapter)
 
   // The real entry, in this process under the runner, with a private HOME (the refusal does not depend on it, and a
@@ -3706,7 +3725,7 @@ test('the service is started in the root directory, whichever directory the comm
   assert.deepEqual(seen, [path.parse(fs.realpathSync(TEST_SERVICE_ENTRY)).root], 'never the project folder the command was run in')
   const record = readServiceRecord(world.workspace())
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
-  assert.equal(stopped.json.service.stopped, true)
+  assert.equal(stopped.json?.service?.stopped, true, `${JSON.stringify(stopped.json ?? stopped.stderr).slice(0, 600)}\n  ${serviceDiagnosis()}`)
   await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
 })
 
@@ -3738,7 +3757,7 @@ test('open restarts the owned service when it runs another entry than the instal
   const again = await world.run(openArgs(), { seams: seams(TEST_SERVICE_ENTRY), open: FAST_APP })
   assert.deepEqual([again.json.service?.restarted, again.json.service?.runtimeId], [undefined, after.runtimeId], 'nothing is restarted twice')
   const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
-  assert.equal(stopped.json.service.stopped, true)
+  assert.equal(stopped.json?.service?.stopped, true, `${JSON.stringify(stopped.json ?? stopped.stderr).slice(0, 600)}\n  ${serviceDiagnosis()}`)
   await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
 })
 
@@ -3796,7 +3815,7 @@ test('`plugin on` with the installed entry to start replaces a service of an ear
   await waitFor(() => !isAlive(before.pid), { label: 'the earlier runtime to end' })
   if (EXCHANGE_HERE) assert.ok(fs.existsSync(path.join(world.vault(), '.obsidian', 'plugins', 'atelier-projection', 'main.js')), 'the plugin is in the vault')
   const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
-  assert.equal(stopped.json.service.stopped, true)
+  assert.equal(stopped.json?.service?.stopped, true, `${JSON.stringify(stopped.json ?? stopped.stderr).slice(0, 600)}\n  ${serviceDiagnosis()}`)
   await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
 })
 
