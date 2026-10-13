@@ -310,6 +310,7 @@ test('the rule that names a removed source: no such file, or a parent that is no
   assert.equal(rule('ENOENT', path.join(root, 'notes', 'gone.md')), true, 'an observed source, gone')
   assert.equal(rule('ENOTDIR', path.join(root, 'notes', 'gone.md')), true, 'an observed source whose folder is no longer one')
   assert.equal(rule('ENOENT', path.join(root, 'logs', 'old')), true, 'a folder that held an observed source, gone')
+  assert.equal(rule('ENOENT', path.join(root, 'notes', 'gone')), false, 'a path that only begins as an observed source does is no folder that held it')
   assert.equal(rule('ENOENT', path.join(root, 'notes', 'present.md')), false, 'a source still there')
   assert.equal(rule('ENOENT', path.join(root, 'notes', 'unreadable.md')), false, 'a path the walk listed and could not read')
   assert.equal(rule('ENOENT', path.join(root, 'notes', 'never.md')), false, 'a path the walk never listed')
