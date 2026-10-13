@@ -2289,6 +2289,86 @@ test('a lock release owed and then given back is owed no more: a later refusal i
   assert.equal(world.state('freshness.json').scopes[0].state, 'stale', 'and the refusal is recorded')
 })
 
+// The sync of a directory that follows the next lock ticket linked into place fails with EIO, once: an acquisition
+// whose ticket is published and that then fails. Answers a function that puts the file system back.
+function failDirectorySyncAfterTicketLink() {
+  const { fsyncSync, linkSync } = fs
+  let linked = false
+  const restore = () => { fs.fsyncSync = fsyncSync; fs.linkSync = linkSync }
+  fs.linkSync = function (existing, target, ...rest) {
+    const done = linkSync.call(this, existing, target, ...rest)
+    if (/[\\/]\d{12}\.json$/.test(String(target))) linked = true
+    return done
+  }
+  fs.fsyncSync = function (fd, ...rest) {
+    if (linked && fs.fstatSync(fd).isDirectory()) { restore(); throw Object.assign(new Error('input/output error'), { code: 'EIO' }) }
+    return fsyncSync.call(this, fd, ...rest)
+  }
+  return restore
+}
+const syncsDirectoriesByDescriptor = process.platform === 'win32' ? 'a directory is not synced through a descriptor on Windows' : false
+
+test('the engine lock: an acquisition that fails after its ticket is in place leaves no ticket of its own behind, and the next one takes the lock', { skip: syncsDirectoriesByDescriptor }, async (t) => {
+  const lock = lockWorld(t)
+  const first = await lock.acquire()
+  first.release()
+  const restore = failDirectorySyncAfterTicketLink()
+  try { await assert.rejects(lock.acquire(), (error) => error.code === 'EIO') } finally { restore() }
+  const tickets = fs.readdirSync(lock.directory).filter((name) => name.endsWith('.json'))
+  assert.deepEqual(tickets, [`${String(first.generation).padStart(12, '0')}.json`], 'only the released ticket of the earlier holder is there')
+  const next = await lock.acquire()
+  assert.deepEqual([next.acquired, next.generation], [true, first.generation + 1])
+  next.release()
+})
+
+test('the engine lock: a ticket whose removal after a failed acquisition fails too is removed at the next acquisition, and another holder\'s ticket is never removed', { skip: syncsDirectoriesByDescriptor }, async (t) => {
+  // The directory sync after the link fails, and so does the first removal of the ticket.
+  const lock = lockWorld(t)
+  const first = await lock.acquire()
+  first.release()
+  const ticketPath = (generation) => path.join(lock.directory, `${String(generation).padStart(12, '0')}.json`)
+  const restoreSync = failDirectorySyncAfterTicketLink()
+  const { unlinkSync } = fs
+  fs.unlinkSync = function (target, ...rest) {
+    if (/[\\/]\d{12}\.json$/.test(String(target))) { fs.unlinkSync = unlinkSync; throw Object.assign(new Error('input/output error'), { code: 'EIO' }) }
+    return unlinkSync.call(this, target, ...rest)
+  }
+  try { await assert.rejects(lock.acquire(), (error) => error.code === 'EIO') } finally { restoreSync(); fs.unlinkSync = unlinkSync }
+  assert.equal(fs.existsSync(ticketPath(first.generation + 1)), true, 'the ticket stays while it cannot be removed')
+  const next = await lock.acquire()
+  assert.deepEqual([next.acquired, next.generation], [true, first.generation + 1], 'it is removed before the next acquisition looks')
+  next.release()
+
+  // Another holder wins the generation this acquisition tries (its link meets that holder's ticket), and the
+  // comparison of the two then fails: the acquisition fails, and the other holder's ticket is left.
+  const other = JSON.stringify(lock.ticket({ pid: process.pid + 1 }))
+  const { linkSync, readFileSync } = fs
+  let compareFails = false
+  fs.linkSync = function (existing, target, ...rest) {
+    if (/[\\/]\d{12}\.json$/.test(String(target))) { fs.linkSync = linkSync; fs.writeFileSync(target, other); compareFails = true }
+    return linkSync.call(this, existing, target, ...rest)
+  }
+  fs.readFileSync = function (source, ...rest) {
+    if (compareFails && typeof source === 'number') { compareFails = false; fs.readFileSync = readFileSync; throw Object.assign(new Error('permission denied'), { code: 'EACCES' }) }
+    return readFileSync.call(this, source, ...rest)
+  }
+  try { await assert.rejects(lock.acquire(), (error) => error.code === 'EACCES') } finally { fs.linkSync = linkSync; fs.readFileSync = readFileSync }
+  assert.equal(fs.readFileSync(ticketPath(next.generation + 1), 'utf8'), other, 'the other holder\'s ticket is left as it was')
+})
+
+test('an engine whose acquisition of its lock failed after the ticket was in place takes the lock at the next tick and goes on maintaining', { ...needsExchange, skip: needsExchange.skip ?? syncsDirectoriesByDescriptor }, async (t) => {
+  const world = makeWorld(t)
+  const engine = world.engine()
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+  const restore = failDirectorySyncAfterTicketLink()
+  try { await assert.rejects(engine.tick(), (error) => error.code === 'EIO', 'the tick fails while it takes the lock') } finally { restore() }
+  const next = await engine.tick()
+  assert.equal(next.state, 'ticked', JSON.stringify(next))
+  assert.equal(world.scope(next).state, 'current')
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /Low water at six\./)
+})
+
 test('the engine lock: one holder, released and pruned, and taken from a dead holder only', async (t) => {
   const lock = lockWorld(t)
   const first = await lock.acquire()
