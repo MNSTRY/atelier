@@ -10,6 +10,7 @@ import {
   boundaryHookScript,
   checkBoundaryPolicy,
   checkPushContent,
+  hookIndexFromEnvironment,
   installBoundaryHooks,
   readBoundaryPushInput,
   resolveBoundaryAuditSource,
@@ -676,6 +677,61 @@ test('declared-binary text is read in batches, and file by file when a batch can
   result = scan((literal) => literal.length > 1 || literal[0] === ':(literal)f201.cfg')
   assert.deepEqual(result.diagnostics.map((item) => [item.path, item.details.reason, item.details.cause]), [['f201.cfg', 'declared-binary-text-unreadable', 'git-output-limit-exceeded']])
   assert.match(result.diagnostics[0].message, /byte limit/)
+})
+
+const PACKAGE_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
+
+/** Run git as a person would, with installed hooks answered only by this checkout's CLI. */
+function hookedGit(t, cwd) {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-hook-bin-'))
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }))
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'))
+  fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'))
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
+  Object.assign(env, { PATH: [bin, '/usr/bin', '/bin'].join(':'), MNSTRY_ATELIER_PACKAGE_ROOT: PACKAGE_ROOT })
+  return (args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env })
+}
+
+test('the pre-commit hook judges the index Git is committing, in every commit form', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { site, project } = makeWorkspace(t)
+  installBoundaryHooks({ project })
+  const run = hookedGit(t, site)
+  const head = () => git(site, ['rev-parse', 'HEAD'])
+
+  // A clean change commits, so a refusal below is the scan's.
+  fs.appendFileSync(path.join(site, CART), '// clean\n')
+  let result = run(['commit', '--quiet', '-am', 'clean'])
+  assert.equal(result.status, 0, result.stderr)
+
+  for (const form of [['-am', 'with -a'], ['-m', 'named path', '--', CART]]) {
+    const before = head()
+    fs.appendFileSync(path.join(site, CART), `${KEY_MATERIAL}\n`)
+    result = run(['commit', '--quiet', ...form])
+    assert.notEqual(result.status, 0, `${form[1]}: committed a key`)
+    assert.match(result.stderr + result.stdout, /secret-material|content-rule-violation/, form[1])
+    assert.equal(head(), before)
+    git(site, ['checkout', '--', CART])
+  }
+
+  // A linked worktree of the managed repo is judged as that repo.
+  const linked = path.join(path.dirname(site), 'example-site-linked')
+  git(site, ['worktree', 'add', '--quiet', '-b', 'linked', linked])
+  const inLinked = hookedGit(t, linked)
+  fs.appendFileSync(path.join(linked, CART), `${KEY_MATERIAL}\n`)
+  const before = git(linked, ['rev-parse', 'HEAD'])
+  result = inLinked(['commit', '--quiet', '-am', 'linked worktree'])
+  assert.notEqual(result.status, 0, 'a linked worktree committed a key')
+  assert.equal(git(linked, ['rev-parse', 'HEAD']), before)
+})
+
+test('a hook index is resolved against the work tree the hook runs in', (t) => {
+  const { site } = makeWorkspace(t)
+  const real = fs.realpathSync(site)
+  assert.equal(hookIndexFromEnvironment({ env: {}, cwd: site }), null)
+  const plain = hookIndexFromEnvironment({ env: { GIT_INDEX_FILE: '.git/index' }, cwd: site })
+  assert.equal(plain.workTree, real)
+  assert.equal(plain.indexFile, path.join(site, '.git', 'index'))
+  assert.equal(plain.commonDir, fs.realpathSync(path.join(site, '.git')))
 })
 
 test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {

@@ -548,3 +548,37 @@ test('a hand-set platform actor cannot resolve a placeholder login', () => {
   assert.equal(result.actorId, null)
   assert.equal(result.reason, 'unknown-platform-actor')
 })
+
+test('a removed review marker, or one in a file name, approves nothing', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  const marker = '\n<!-- Atelier-Boundary-Review: approved — an earlier change -->\n'
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  fs.appendFileSync(path.join(privateRepo, 'doc.md'), marker)
+  const named = process.platform !== 'win32' ? 'notes/boundary-review: approved.md' : null
+  if (named) writeDoc(privateRepo, named, 'mnstry-private-author:named', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+
+  const doc = path.join(privateRepo, 'doc.md')
+  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8').replace('audience: "private"', 'audience: "team"').replace(marker, '\n'))
+  if (named) {
+    const file = path.join(privateRepo, named)
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('audience: "private"', 'audience: "team"'))
+  }
+  git(privateRepo, ['add', '.'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  const flagged = report.errors.filter((item) => item.code === 'semantic-field-change-needs-review').map((item) => item.path).sort()
+  assert.deepEqual(flagged, named ? ['doc.md', named] : ['doc.md'])
+})
+
+test('a staged forbidden path with a quoted name is still forbidden', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  fs.mkdirSync(path.join(privateRepo, 'transcripts'))
+  fs.writeFileSync(path.join(privateRepo, 'transcripts', 'café "notes".txt'), 'a session\n')
+  git(privateRepo, ['add', '.'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.path === 'transcripts/café "notes".txt'), JSON.stringify(report.errors))
+})
