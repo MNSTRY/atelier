@@ -353,16 +353,19 @@ function fakeApp(overrides = {}) {
 
 const SPAWNED = []
 const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' } }
+// Ends a child this suite started, and waits for it (ten seconds at most).
+async function stopChild(entry) {
+  const { child } = entry
+  if (entry.gone || child.exitCode !== null || child.signalCode !== null) return
+  const exited = new Promise((resolve) => { child.once('exit', resolve) })
+  child.kill('SIGKILL')
+  await Promise.race([exited, new Promise((resolve) => { setTimeout(resolve, 10000) })])
+}
 function followChild(t, child) {
   const entry = { pid: child.pid, child, test: t.name, gone: child.pid === undefined }
   child.once('exit', () => { entry.gone = true })
   SPAWNED.push(entry)
-  t.after(async () => {
-    if (entry.gone || child.exitCode !== null || child.signalCode !== null) return
-    const exited = new Promise((resolve) => { child.once('exit', resolve) })
-    child.kill('SIGKILL')
-    await Promise.race([exited, new Promise((resolve) => { setTimeout(resolve, 10000) })])
-  })
+  t.after(() => stopChild(entry))
   return child
 }
 const trackingSpawn = (t) => (...args) => followChild(t, childProcess.spawn(...args))
@@ -432,7 +435,13 @@ async function listenOn(t, port, handler) {
 // One temporary project, one temporary data root, one controllable clock, and the command run inside this process.
 function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual', audienceAllow: ['team'] } } = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-opening-'))
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+  // The children this test started end before its folder is removed. After hooks run in the order they were registered,
+  // and this one is registered before any child's: on Windows a live service holds the folder, and a removal that
+  // throws then would skip the hooks after it, the children's own among them, leaving the service running.
+  t.after(async () => {
+    await Promise.all(SPAWNED.filter((entry) => entry.test === t.name).map(stopChild))
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  })
   const projectDir = path.join(dir, 'project')
   const dataRoot = path.join(dir, 'data')
   LIVE_DATA_ROOTS.add(dataRoot)
