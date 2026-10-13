@@ -275,7 +275,14 @@ A tick that fails for a reason nobody typed (a full disk, a crash inside a
 step) does not end the service. Its error code is kept in
 `state/service/last-error.json`, its message only in the private log; the
 delay before the next attempt doubles up to a ceiling, and the next tick
-proceeds.
+proceeds. It starts as the first tick of the service does, loading the project
+again and looking at every view, so nothing the failed tick saw and did not
+act on is lost. A tick whose engine lock could not be given back at its end
+(its released ticket could not be written) fails too: its error is recorded
+and the loop backs off, and its work was already recorded before the release.
+The lock stays this service's, and the next tick gives it back before it takes
+it again, instead of finding its own ticket and answering `busy` until the
+service is started again.
 
 ### Cases that need a person
 

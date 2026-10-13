@@ -2200,6 +2200,95 @@ function lockWorld(t) {
   }
 }
 
+// Writing in a directory is refused by its mode on POSIX, for a process that is not the superuser.
+const modeRefusesWrites = process.platform !== 'win32' && process.getuid?.() !== 0
+const unwritableWhile = (directory, operation) => {
+  fs.chmodSync(directory, 0o500)
+  try { return operation() } finally { fs.chmodSync(directory, 0o700) }
+}
+
+test('the engine lock: a release that fails settles nothing, and the next release gives the lock back', { skip: modeRefusesWrites ? false : 'a directory mode refuses no write here' }, async (t) => {
+  const lock = lockWorld(t)
+  const held = await lock.acquire()
+  assert.equal(held.acquired, true)
+  // The released ticket cannot be written: the release throws, and the lock is still held.
+  assert.throws(() => unwritableWhile(lock.directory, () => held.release()), (error) => error.code === 'EACCES')
+  const meanwhile = await lock.acquire()
+  assert.deepEqual([meanwhile.acquired, meanwhile.reason], [false, 'held-by-this-process'])
+  // Tried again once it can be written: given back, once.
+  assert.equal(held.release(), true)
+  assert.equal(held.release(), false, 'a release happens once')
+  const after = await lock.acquire()
+  assert.deepEqual([after.acquired, after.generation], [true, held.generation + 1])
+  after.release()
+})
+
+test('an engine whose lock could not be given back at the end of a tick gives it back at the next tick and goes on maintaining; mutation control: a lock that counts a failed release as done leaves every later tick busy', { ...needsExchange, skip: needsExchange.skip ?? (modeRefusesWrites ? false : 'a directory mode refuses no write here') }, async (t) => {
+  // The engine's lock, with the release at the end of the first tick refused by the directory's mode. `settlesOnFailure`
+  // makes a release that threw count as done, as before this change.
+  const run = async ({ settlesOnFailure = false } = {}) => {
+    const world = makeWorld(t)
+    let refuseNext = true
+    const acquireEngineLock = async (input) => {
+      const lock = await acquirePrivateGenerationLock(input)
+      if (!lock.acquired) return lock
+      let gaveUp = false
+      return { ...lock, release() {
+        if (gaveUp) return false
+        if (!refuseNext) return lock.release()
+        refuseNext = false
+        try { return unwritableWhile(input.directory, () => lock.release()) } catch (error) { if (settlesOnFailure) gaveUp = true; throw error }
+      } }
+    }
+    const engine = world.engine({ primitives: { ...ENGINE_PRIMITIVES, acquireEngineLock } })
+    await assert.rejects(engine.tick(), (error) => error.code === 'EACCES', 'the first tick fails at its release')
+    const fs1 = world.state('freshness.json')
+    assert.equal(fs1.scopes[0].state, 'current', 'its work was done and recorded')
+    fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+    const second = await engine.tick()
+    const lockDirectory = path.join(world.workspaceRoot(), ENGINE_LOCK_DIRECTORY)
+    return { second, scope: second.state === 'ticked' ? world.scope(second) : null, world, lockFiles: fs.readdirSync(lockDirectory).sort() }
+  }
+  const kept = await run()
+  assert.equal(kept.second.state, 'ticked', JSON.stringify(kept.second))
+  assert.equal(kept.scope.state, 'current')
+  assert.match(fs.readFileSync(kept.world.noteFile('west-wing:tide'), 'utf8'), /Low water at six\./, 'the change made after the failure is published')
+  assert.equal(kept.lockFiles.length, 2)
+  assert.deepEqual(kept.lockFiles.map((name) => name.split('.')[1]).sort(), ['json', 'released'], 'and the lock is given back at its end')
+  const stuck = await run({ settlesOnFailure: true })
+  assert.deepEqual([stuck.second.state, stuck.second.reason, stuck.second.lock?.reason], ['busy', 'engine-lock-held', 'held-by-this-process'], 'the oracle can fail: the engine waits for its own ticket')
+})
+
+test('a lock release owed and then given back is owed no more: a later refusal is recorded under the lock its tick holds, taken once', { ...needsExchange, skip: needsExchange.skip ?? (modeRefusesWrites ? false : 'a directory mode refuses no write here') }, async (t) => {
+  const world = makeWorld(t)
+  // The first two releases are refused: the one at the end of the first tick, and the owed one at the start of the
+  // second. The second tick's own release at its end then succeeds.
+  let refusals = 2
+  let acquisitions = 0
+  const acquireEngineLock = async (input) => {
+    acquisitions += 1
+    const lock = await acquirePrivateGenerationLock(input)
+    if (!lock.acquired) return lock
+    return { ...lock, release() {
+      if (refusals === 0) return lock.release()
+      refusals -= 1
+      return unwritableWhile(input.directory, () => lock.release())
+    } }
+  }
+  const engine = world.engine({ primitives: { ...ENGINE_PRIMITIVES, acquireEngineLock } })
+  await assert.rejects(engine.tick(), (error) => error.code === 'EACCES')
+  await assert.rejects(engine.tick(), (error) => error.code === 'EACCES', 'the owed release is refused again')
+  assert.equal(refusals, 0)
+  assert.equal((await engine.tick()).state, 'ticked')
+  // A tick that refuses with a typed reason records the refusal through the lock it already holds.
+  fs.writeFileSync(world.stateFile('pending-edits.json'), '{ "not": "pending edits" }\n')
+  acquisitions = 0
+  const refused = await engine.tick()
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  assert.equal(acquisitions, 1, 'the lock is taken once in that tick, not given back in its middle and taken again')
+  assert.equal(world.state('freshness.json').scopes[0].state, 'stale', 'and the refusal is recorded')
+})
+
 test('the engine lock: one holder, released and pruned, and taken from a dead holder only', async (t) => {
   const lock = lockWorld(t)
   const first = await lock.acquire()
