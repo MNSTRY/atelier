@@ -1170,8 +1170,11 @@ in the table are from before that change and have not been taken again on that
 corpus. Building the canonical graph gives the event loop a turn between the
 Markdown sources it reads, hashes and parses (the census): a first tick reads
 every source, and on a heavily loaded host the build of one view of 10,000
-invented notes held the listener for 8 s in one stretch. Walking the
-directories, resolving the links and assembling the graph still run through.
+invented notes held the listener for 8 s in one stretch. The other sources
+(HTML files and the sidecars of PDF and Word documents) are read without a turn
+between them, and a project bound to a personal workspace is built by its own
+route in one stretch. Walking the directories, resolving the links and
+assembling the graph still run through.
 So do capturing the source snapshot, the publisher's restart recovery,
 validating a prepared view and planning its units, the exchange probe, writing
 and syncing the journal before the candidates move, and the look again at
