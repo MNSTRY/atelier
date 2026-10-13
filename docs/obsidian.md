@@ -1196,11 +1196,13 @@ watcher (one that keeps its size and times and draws no event, at the latest
 by the next full reconciliation), as one changed just after a walk that ran
 through is; when the tick builds the graph, the look again at the sources
 after the build refuses such a change as `mixed-read`. A note gone from a
-vault, or a source that changed, is a change once: a tick that sees it and
-then fails without a typed reason (a file it cannot read, a disk that is full)
-has recorded it without acting on it. The next tick therefore looks at every
-view again, as the first tick of a process does, and a view whose note is
-missing reads `vault-note-missing` instead of staying `current`.
+vault, a source that changed, or a configuration file that changed is a change
+once: a tick that sees it and then fails without a typed reason (a file it
+cannot read, a disk that is full, a project loader that fails) has recorded it
+without acting on it. The next tick therefore starts as the first tick of a
+process does: it loads the project again and looks at every view, so a view
+whose note is missing reads `vault-note-missing` instead of staying `current`,
+and a changed source or view is published.
 The comparison of kept notes with their candidates reads asynchronously,
 sixteen at a time, and does not hold the listener. Observing pending edits
 and routing proposals wait between two edits and between two operations, so
@@ -1447,6 +1449,7 @@ The test suite proves each oracle can fail:
   `ENGINE_PRIMITIVES.isRetryDue` that never holds: a refused view waits for
   the full reconciliation, and the retry oracle fails.
 - `createMaintenanceEngineForOracleTests` with
-  `ENGINE_PRIMITIVES.rechecksEveryViewAfterFailure` false: a note removed in a
-  tick that then fails without a typed reason is lost, the view stays
-  `current` with the note gone, and the oracle fails.
+  `ENGINE_PRIMITIVES.rechecksEveryViewAfterFailure` false: a note removed, a
+  source changed or a view added in a tick that then fails without a typed
+  reason is lost, the view stays `current` with the note gone or the old
+  content, the new view is never published, and the oracle fails.

@@ -493,7 +493,7 @@ async function removalThenFailure(t, { primitives = ENGINE_PRIMITIVES, scopes = 
   return { view: world.scope(next, removeIn), missing: !fs.existsSync(removed) }
 }
 
-test('a note removed from a vault, or a source changed, is not lost to a tick that then fails without a typed reason: the next tick looks at every view again, so the view says the note is missing and the change is published; mutation control: without that, the view stays current with the note gone or the old content', needsExchange, async (t) => {
+test('a note removed from a vault, a source changed or a view added is not lost to a tick that then fails without a typed reason: the next tick starts as a first tick does, so the view says the note is missing and the change is published; mutation control: without that, the view stays current with the note gone or the old content, and the new view is never published', needsExchange, async (t) => {
   const unchecked = { ...ENGINE_PRIMITIVES, rechecksEveryViewAfterFailure: false }
   const cases = {
     // A source that cannot be looked at in the walk over the sources.
@@ -538,6 +538,26 @@ test('a note removed from a vault, or a source changed, is not lost to a tick th
   assert.match(published.published, /North is painted blue\./)
   const stale = await changedThenFailure(unchecked)
   assert.deepEqual([stale.state, /North is painted red\./.test(stale.published)], ['current', true], 'the oracle can fail: the change is lost and the old note is reported current')
+
+  // A view added to the configuration, and the project loader failing once in that tick after the configuration files
+  // were looked at: the next tick loads the project again and publishes the new view.
+  const addedThenLoaderFails = async (primitives) => {
+    const world = makeWorld(t)
+    let loaderFails = false
+    const loadProject = () => {
+      if (loaderFails) { loaderFails = false; throw Object.assign(new Error('input/output error'), { code: 'EIO' }) }
+      return world.loadProject()
+    }
+    const engine = world.engine({ loadProject, primitives })
+    assert.equal(world.scope(await engine.tick()).state, 'current')
+    world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+    loaderFails = true
+    await assert.rejects(engine.tick(), (error) => error.code === 'EIO')
+    const next = await engine.tick()
+    return world.scope(next, EAST_SCOPE.scopeId)?.state ?? null
+  }
+  assert.equal(await addedThenLoaderFails(ENGINE_PRIMITIVES), 'current')
+  assert.equal(await addedThenLoaderFails(unchecked), null, 'the oracle can fail: the new view is never published')
 })
 
 test('an engine handed the production seams with prepareView replaced prepares through that replacement', needsExchange, async (t) => {

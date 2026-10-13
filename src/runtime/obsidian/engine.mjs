@@ -906,10 +906,15 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       } catch (error) {
         if (!isTypedRefusal(error)) {
           // A tick that failed without a typed reason may have looked at files and recorded what it saw in the index
-          // without acting on it: a note gone from a vault, or a source that changed, is a change once, and the next
-          // look would find nothing to change. The next tick therefore looks at every view again, as the first tick of
-          // a process does after a failure: whatever is missing or changed then makes its view stale, not current.
-          if (rules.rechecksEveryViewAfterFailure) firstTick = true
+          // without acting on it: a note gone from a vault, a source that changed, or a configuration file that changed
+          // before the project could be loaded again, is a change once, and the next look would find nothing to change.
+          // The next tick therefore starts as the first tick of a process does: it loads the project again and looks
+          // at every view, so whatever is missing or changed makes its view stale, or is published, not left current.
+          if (rules.rechecksEveryViewAfterFailure) {
+            project = null
+            semantic = null
+            firstTick = true
+          }
           throw error
         }
         // Fail closed: nothing is published under a refusal, and every known view says why.
