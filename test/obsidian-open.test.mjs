@@ -112,7 +112,7 @@ const { createObsidianRegistry } = await import('../src/runtime/obsidian/extensi
 const { LIFECYCLE_PRIMITIVES, releaseStanding, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
-const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
+const { ENGINE_LOCK_DIRECTORY, createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
 const { readServiceRecord, readServiceSettings, releaseIdentity, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
@@ -367,14 +367,59 @@ function followChild(t, child) {
 }
 const trackingSpawn = (t) => (...args) => followChild(t, childProcess.spawn(...args))
 
-async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condition' } = {}) {
+// The data roots of the worlds the running test made. A wait that times out says what their services last wrote, so a
+// service that did not stop in time can be told from one that was never asked, and from one whose tick was still going.
+// A root leaves the set at the end of its test, and the set is emptied before every test as well: an after hook that
+// throws (a temporary folder a live process still holds, on Windows) skips the hooks registered after it.
+const LIVE_DATA_ROOTS = new Set()
+test.beforeEach(() => { LIVE_DATA_ROOTS.clear() })
+// The highest engine-lock generation, which alone decides whether the lock is held, and while it is not given back who
+// holds it: a tick in flight names this service's runtime, a ticket left by an earlier service names another. Names
+// other than a generation's ticket or release are not generations. A ticket holds no secret.
+function highestEngineTicket(directory) {
+  const generations = fs.readdirSync(directory).map((name) => /^(\d{12})\.(json|released)$/.exec(name)).filter(Boolean)
+  if (generations.length === 0) return 'no generation'
+  const highest = generations.map((match) => match[1]).sort().at(-1)
+  if (generations.some((match) => match[1] === highest && match[2] === 'released')) return `generation ${highest} released`
+  try {
+    const ticket = JSON.parse(fs.readFileSync(path.join(directory, `${highest}.json`), 'utf8'))
+    return `generation ${highest} held by pid ${ticket.pid} purpose ${ticket.purpose} runtime ${ticket.service?.runtimeId ?? null} acquired ${ticket.acquiredAt ?? null}`
+  } catch (error) { return `generation ${highest} held (${error.code ?? error.name})` }
+}
+function serviceDiagnosis() {
+  const lines = [`at ${new Date().toISOString()}`]
+  for (const dataRoot of LIVE_DATA_ROOTS) {
+    lines.push(`world ${path.basename(path.dirname(dataRoot))}:`)
+    let root
+    try { root = workspaceStateRoot(dataRoot, WORKSPACE_ID) } catch (error) { lines.push(`  no workspace root: ${error.code ?? error.name}`); continue }
+    const directory = path.join(root, 'state', 'service')
+    const tail = (name, count) => { try { return fs.readFileSync(path.join(directory, name), 'utf8').trim().split('\n').slice(-count).join('\n      ') } catch (error) { return `(${error.code ?? error.name})` } }
+    let tickets
+    try { tickets = `${fs.readdirSync(path.join(root, ENGINE_LOCK_DIRECTORY)).sort().join(', ') || '(none)'}; ${highestEngineTicket(path.join(root, ENGINE_LOCK_DIRECTORY))}` } catch (error) { tickets = `(${error.code ?? error.name})` }
+    lines.push(`  service log:\n      ${tail('service.log', 30)}`, `  runtime record: ${fs.existsSync(path.join(directory, 'runtime.json')) ? 'present' : 'absent'}`, `  last error: ${tail('last-error.json', 1)}`, `  engine lock: ${tickets}`)
+  }
+  return lines.join('\n  ')
+}
+// What a command or a stop answered, for a message: its exit, the last 400 characters of its stderr and its JSON, the
+// whole cut at 4,000 characters (a refused stop's answer is about 1,500).
+const describeAnswer = (answer) => JSON.stringify(answer !== null && typeof answer === 'object' && ('exit' in answer || 'stderr' in answer)
+  ? { exit: answer.exit, stderr: String(answer.stderr ?? '').slice(-400), json: answer.json ?? null } : answer ?? null).slice(0, 4000)
+
+async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condition', explain = null } = {}) {
   const until = Date.now() + timeoutMs
   for (;;) {
     const value = await check()
     if (value) return value
-    if (Date.now() > until) throw new Error(`timed out waiting for ${label}`)
+    if (Date.now() > until) throw new Error(`timed out waiting for ${label}${explain ? `\n  ${explain()}` : ''}\n  ${serviceDiagnosis()}`)
     await new Promise((resolve) => { setTimeout(resolve, everyMs) })
   }
+}
+
+// Waits for a service process to end. A timeout says which pid, what probing it answers now (a pid reused by another
+// process answers as one alive), and what the stop that should have ended it answered.
+const probeOf = (pid) => { try { process.kill(pid, 0); return 'alive' } catch (error) { return error.code } }
+function waitForExit(pid, label, answer = undefined) {
+  return waitFor(() => !isAlive(pid), { label: `${label} (pid ${pid})`, explain: () => `probe of pid ${pid}: ${probeOf(pid)}${answer === undefined ? '' : `; the stop answered ${describeAnswer(answer)}`}` })
 }
 
 async function listenOn(t, port, handler) {
@@ -390,6 +435,8 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
   const projectDir = path.join(dir, 'project')
   const dataRoot = path.join(dir, 'data')
+  LIVE_DATA_ROOTS.add(dataRoot)
+  t.after(() => { LIVE_DATA_ROOTS.delete(dataRoot) })
   for (const [relative, content] of Object.entries(FILES)) {
     fs.mkdirSync(path.dirname(path.join(projectDir, relative)), { recursive: true })
     fs.writeFileSync(path.join(projectDir, relative), content)
@@ -2934,7 +2981,7 @@ test('open starts the owned service the first time only with a consent, reconnec
   assert.deepEqual([unknown.exit, unknown.json.error.code], [EXIT.refused, 'unknown-scope'])
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
   assert.deepEqual([stopped.exit, stopped.json.service.stopped], [EXIT.ok, true])
-  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+  await waitForExit(record.pid, 'the stopped service to exit')
 })
 
 // ---------------------------------------------------------------------------
@@ -2999,8 +3046,8 @@ test('a person at a terminal allows the first start by their account\'s name; a 
   assert.match(started.stdout, /allowed by someone, this account; recorded for this workspace/)
   const record = readServiceRecord(world.workspace())
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
-  assert.equal(stopped.json.service.stopped, true)
-  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+  assert.equal(stopped.json?.service?.stopped, true, `${describeAnswer(stopped)}\n  ${serviceDiagnosis()}`)
+  await waitForExit(record.pid, 'the stopped service to exit')
 
   // Another account at a terminal later: the consent recorded stays; only --consent-actor names another actor.
   const again = await world.run(['service', 'start'], { seams, ...person, account: () => 'another' })
@@ -3009,8 +3056,8 @@ test('a person at a terminal allows the first start by their account\'s name; a 
   assert.doesNotMatch(again.stdout, /allowed by/)
   assert.equal(readServiceSettings(world.workspace()).consent.actor, 'someone')
   const second = readServiceRecord(world.workspace())
-  await world.run(['service', 'stop', '--json'], { seams })
-  await waitFor(() => !isAlive(second.pid), { label: 'the second service to exit' })
+  const secondStopped = await world.run(['service', 'stop', '--json'], { seams })
+  await waitForExit(second.pid, 'the second service to exit', secondStopped)
 })
 
 test('a first `service start` through this file\'s command listens on a reserved port, never one the product found by listening on port 0 (#102)', async (t) => {
@@ -3019,8 +3066,8 @@ test('a first `service start` through this file\'s command listens on a reserved
   const started = await world.run(['service', 'start', '--json', '--consent-actor', 'agent-synthetic'], { seams })
   const { port, pid } = readServiceRecord(world.workspace())
   assert.deepEqual([started.json.service.state, isEphemeral(port), readServiceSettings(world.workspace()).port], ['healthy', false, port], String(port))
-  await stopService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env })
-  await waitFor(() => !isAlive(pid), { label: 'the service to exit' })
+  const stopped = await stopService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env })
+  await waitForExit(pid, 'the service to exit', stopped)
 })
 
 test('a consent derived at a terminal never replaces one recorded meanwhile: the start decides under its lock, and still records one for a workspace that has none', async (t) => {
@@ -3028,7 +3075,7 @@ test('a consent derived at a terminal never replaces one recorded meanwhile: the
   const service = { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) }
   const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE, clock: world.clock }
   const derived = { actor: 'someone', coverage: 'service', derived: true }
-  const stop = async () => { const { pid } = readServiceRecord(world.workspace()); await stopService(lifecycle); await waitFor(() => !isAlive(pid), { label: 'the service to exit' }) }
+  const stop = async () => { const { pid } = readServiceRecord(world.workspace()); const answer = await stopService(lifecycle); await waitForExit(pid, 'the service to exit', answer) }
   // A command at a terminal found no consent and derived one; before its start, an agent's run recorded its own.
   await world.run(['service', 'start', '--json', '--consent-actor', 'agent-synthetic'], { seams: { ...UNREACHABLE_SEAMS, service } })
   const recorded = readServiceSettings(world.workspace()).consent
@@ -3045,8 +3092,8 @@ test('a consent derived at a terminal never replaces one recorded meanwhile: the
   const { grantedAt: _at, ...consent } = readServiceSettings(fresh.workspace()).consent
   assert.deepEqual(consent, { actor: 'someone', coverage: 'service' })
   const { pid } = readServiceRecord(fresh.workspace())
-  await stopService(freshLifecycle)
-  await waitFor(() => !isAlive(pid), { label: 'the fresh service to exit' })
+  const freshStopped = await stopService(freshLifecycle)
+  await waitForExit(pid, 'the fresh service to exit', freshStopped)
 })
 
 test('--adapter given once is remembered for the workspace before anything starts; the real entry then needs none, and under the test runner a remembered adapter always refuses', async (t) => {
@@ -3066,7 +3113,7 @@ test('--adapter given once is remembered for the workspace before anything start
   // Given again later: nothing is written again.
   world.advance(60 * 1000)
   const again = await world.run(['service', 'start', '--json', '--adapter=obsidian-cli'], { seams })
-  assert.deepEqual([again.json.service.alreadyRunning, again.json.rememberedNow.adapter], [true, false])
+  assert.deepEqual([again.json?.service?.alreadyRunning, again.json?.rememberedNow?.adapter], [true, false], `${describeAnswer(again)}\n  ${serviceDiagnosis()}`)
   assert.deepEqual(readMachineSettings(world.workspace()).decisions.adapter, adapter)
 
   // The real entry, in this process under the runner, with a private HOME (the refusal does not depend on it, and a
@@ -3087,8 +3134,8 @@ test('--adapter given once is remembered for the workspace before anything start
   assert.equal(SPAWNED.filter((entry) => entry.test === t.name).length, 1, 'only the service the first start made')
 
   const record = readServiceRecord(world.workspace())
-  await world.run(['service', 'stop', '--json'], { seams })
-  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+  const recordStopped = await world.run(['service', 'stop', '--json'], { seams })
+  await waitForExit(record.pid, 'the stopped service to exit', recordStopped)
 })
 
 test('`audience set me` is only you; any other list is the person\'s own; either is remembered, and `settings` shows what is remembered and how to change it', async (t) => {
@@ -3577,8 +3624,8 @@ test('open adds the view\'s allocated vault to the app and opens it there', need
   assert.deepEqual(app.launches, [vault])
   assert.equal(opened.json.readBack.intact, true)
   const record = readServiceRecord(world.workspace())
-  await world.run(['service', 'stop', '--json'], { seams })
-  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+  const recordStopped = await world.run(['service', 'stop', '--json'], { seams })
+  await waitForExit(record.pid, 'the stopped service to exit', recordStopped)
 })
 
 // The publisher's `direct-unheld` path, as the engine and `open` use it: a view never published into its allocated
@@ -3706,8 +3753,8 @@ test('the service is started in the root directory, whichever directory the comm
   assert.deepEqual(seen, [path.parse(fs.realpathSync(TEST_SERVICE_ENTRY)).root], 'never the project folder the command was run in')
   const record = readServiceRecord(world.workspace())
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
-  assert.equal(stopped.json.service.stopped, true)
-  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+  assert.equal(stopped.json?.service?.stopped, true, `${describeAnswer(stopped)}\n  ${serviceDiagnosis()}`)
+  await waitForExit(record.pid, 'the stopped service to exit')
 })
 
 // A copy of the test service entry: another file with other bytes, so to the lifecycle the entry of an earlier release.
@@ -3733,13 +3780,13 @@ test('open restarts the owned service when it runs another entry than the instal
   assert.deepEqual([opened.json.service?.restarted, opened.json.service?.runtimeId, opened.json.outcome], ['outdated', after.runtimeId, EXCHANGE_HERE ? 'current' : 'not-prepared'], JSON.stringify(opened.json).slice(0, 600))
   assert.notEqual(after.runtimeId, before.runtimeId)
   assert.equal(after.executable.digest, digest(fs.readFileSync(TEST_SERVICE_ENTRY)), 'the installed entry runs now')
-  await waitFor(() => !isAlive(before.pid), { label: 'the earlier runtime to end' })
+  await waitForExit(before.pid, 'the earlier runtime to end')
   assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded, not the one open was given')
   const again = await world.run(openArgs(), { seams: seams(TEST_SERVICE_ENTRY), open: FAST_APP })
   assert.deepEqual([again.json.service?.restarted, again.json.service?.runtimeId], [undefined, after.runtimeId], 'nothing is restarted twice')
   const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
-  assert.equal(stopped.json.service.stopped, true)
-  await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
+  assert.equal(stopped.json?.service?.stopped, true, `${describeAnswer(stopped)}\n  ${serviceDiagnosis()}`)
+  await waitForExit(after.pid, 'the stopped service to exit')
 })
 
 // A stand-in for a runtime of this workspace, in a process of its own. Health and stop answer as a service's; a tick
@@ -3793,11 +3840,11 @@ test('`plugin on` with the installed entry to start replaces a service of an ear
   assert.notEqual(after.runtimeId, before.runtimeId)
   assert.equal(after.executable.digest, digest(fs.readFileSync(TEST_SERVICE_ENTRY)), 'the installed entry runs now')
   assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded')
-  await waitFor(() => !isAlive(before.pid), { label: 'the earlier runtime to end' })
+  await waitForExit(before.pid, 'the earlier runtime to end')
   if (EXCHANGE_HERE) assert.ok(fs.existsSync(path.join(world.vault(), '.obsidian', 'plugins', 'atelier-projection', 'main.js')), 'the plugin is in the vault')
   const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
-  assert.equal(stopped.json.service.stopped, true)
-  await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
+  assert.equal(stopped.json?.service?.stopped, true, `${describeAnswer(stopped)}\n  ${serviceDiagnosis()}`)
+  await waitForExit(after.pid, 'the stopped service to exit')
 })
 
 // The release a record names: this package's by default (`releaseIdentity`, where it exists), or the one given.
@@ -3830,7 +3877,7 @@ const stopWhateverRuns = async (world, seams) => {
   const record = readServiceRecord(world.workspace())
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
   assert.equal(stopped.json.service.stopped, true, JSON.stringify(stopped.json).slice(0, 300))
-  if (record) await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+  if (record) await waitForExit(record.pid, 'the stopped service to exit')
 }
 
 test('open restarts an owned service of an earlier release that refuses a tick naming a view, and says so; without the installed entry to start, such a service is only reported', async (t) => {
@@ -3846,7 +3893,7 @@ test('open restarts an owned service of an earlier release that refuses a tick n
   // The lines of an answer that is not success go to stderr: `not-prepared` where no atomic exchange exists.
   const shown = `${opened.stdout}\n${opened.stderr}`
   assert.ok(shown.split('\n').includes('service: restarted (outdated)'), shown)
-  await waitFor(() => !isAlive(earlier.child.pid), { label: 'the earlier runtime to end' })
+  await waitForExit(earlier.child.pid, 'the earlier runtime to end')
   assert.notEqual(readServiceRecord(world.workspace()).runtimeId, earlier.runtimeId)
   assert.deepEqual(readServiceSettings(world.workspace()).consent, earlier.consent, 'under the consent already recorded')
   await stopWhateverRuns(world, seams)
@@ -3859,7 +3906,7 @@ test('a service whose entry module is the installed one but whose release is ano
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
   const opened = await world.run(openArgs(), { seams, open: FAST_APP })
   assert.equal(opened.json.service?.restarted, 'outdated', JSON.stringify(opened.json).slice(0, 500))
-  await waitFor(() => !isAlive(older.child.pid), { label: 'the older runtime to end' })
+  await waitForExit(older.child.pid, 'the older runtime to end')
   const record = readServiceRecord(world.workspace())
   assert.deepEqual(record.executable.ext?.release, releaseIdentity(), 'the runtime started in its place records this release')
   // Opened again, it is this release: nothing is replaced.
@@ -3941,7 +3988,7 @@ test('a service whose record names the installed entry module and no release, as
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
   const opened = await world.run(openArgs(), { seams, open: FAST_APP })
   assert.equal(opened.json.service?.restarted, 'outdated', JSON.stringify(opened.json).slice(0, 500))
-  await waitFor(() => !isAlive(earlier.child.pid), { label: 'the earlier runtime to end' })
+  await waitForExit(earlier.child.pid, 'the earlier runtime to end')
   assert.deepEqual(readServiceRecord(world.workspace()).executable.ext?.release, releaseIdentity())
   await stopWhateverRuns(world, seams)
 })
@@ -4082,7 +4129,7 @@ test('a real service in a long tick is busy: open says so, start starts nothing,
   await waitFor(async () => (await serviceStatus({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: 1000 })).state === 'healthy', { timeoutMs: 30000, label: 'the long tick to end' })
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
   assert.deepEqual([stopped.exit, stopped.json.service.stopped], [EXIT.ok, true])
-  await waitFor(() => !isAlive(pid), { label: 'the stopped service to exit' })
+  await waitForExit(pid, 'the stopped service to exit')
 })
 
 async function assertTimeoutIsNotAbandonment(t, proofOf) {
