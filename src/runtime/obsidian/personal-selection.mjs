@@ -39,8 +39,9 @@ import { refuse } from './errors.mjs'
 // it back could publish what nobody confirmed after the records removed. Every
 // read of the history's end is noted (notePersonalSelectionHead): the first
 // read here, the read once the generation is loaded, the recheck of a project
-// already loaded, and a read the engine asks for, once a tick, when its guard
-// stops a view because an observed file changed or could not be read. A
+// already loaded, and a read the engine asks for when its guard stops a view
+// because an observed file changed or could not be read (once for views
+// stopped one after another). A
 // history that ends earlier than the highest record noted refuses
 // `selection-history-shortened` at a load and at a recheck, and nothing is
 // loaded or used from it while it is shorter; the guard's read only notes, and

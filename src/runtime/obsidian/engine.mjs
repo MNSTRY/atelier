@@ -707,7 +707,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       const bindings = configFilesOf(project).map(file => ({ ...file, digest: index.get(file.key)?.digest ?? null }))
       const machineDigest = digestOfJson(machine)
       const eligibilityRevision = String(eligibility.revision())
-      // The history's end is read once a tick at the guard, however many views the change stops.
+      // The history's end is read once for a run of stopped views, however many views one change stops; a check that
+      // passes ends the run, so a change that stops a later view is read again.
       let selectionNoted = false
       const noteSelectionOnce = () => { if (!selectionNoted) { selectionNoted = true; rules.noteSelectionAtGuard(project) } }
       const assertBindings = () => {
@@ -722,7 +723,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           // means is decided there, by observation and the project loader, as before.
           if (!rules.guardReadFailed(error)) throw error
           forceFull = true
-          // The file may be a selection record being written or removed: the history's end is read for the note.
+          // The file may be a selection record that cannot be read now (no permission, an I/O error, a file replaced while
+          // it was read): the history's end is read for the note.
           noteSelectionOnce()
           refuse('mixed-read', 'a file that decides source selection could not be read again while a view was being prepared or published', { cause: error.code })
         }
@@ -734,6 +736,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           noteSelectionOnce()
           refuse('mixed-read', 'source selection or eligibility changed while a view was being prepared or published')
         }
+        selectionNoted = false
       }
       let built = null
       // Whether a selected source of a prepared view moved since this tick observed it, decided as observation
