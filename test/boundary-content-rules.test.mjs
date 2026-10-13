@@ -365,23 +365,31 @@ test('a staged or pushed deletion of a tracked binary has nothing to read and do
   git(site, ['commit', '--quiet', '-m', 'binary asset'])
   git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
 
-  // The deletion is staged beside a binary that is added in the same change, so
-  // skipping deleted paths cannot skip what the change introduces.
+  // The deletion is staged beside a binary added in the same change. Git orders
+  // sections by path, so the added zz-opaque.bin comes after the deleted file:
+  // a deleted section that did not reset would leave the addition unscanned.
   git(site, ['rm', '--quiet', 'retired.bin'])
   const signature = Buffer.from(['-----BEGIN ', 'PRIVATE KEY-----'].join(''))
-  fs.writeFileSync(path.join(site, 'opaque.bin'), Buffer.concat([Buffer.from([0]), signature]))
-  git(site, ['add', 'opaque.bin'])
-  let report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  fs.writeFileSync(path.join(site, 'zz-opaque.bin'), Buffer.concat([Buffer.from([0]), signature]))
+  git(site, ['add', 'zz-opaque.bin'])
+  const report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
   assert.ok(!report.errors.some((item) => item.path === 'retired.bin'), JSON.stringify(report.errors))
-  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'opaque.bin' && item.binary === true))
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'zz-opaque.bin' && item.binary === true))
 
-  git(site, ['reset', '--quiet', 'opaque.bin'])
-  fs.rmSync(path.join(site, 'opaque.bin'))
-  report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
-  assert.ok(!report.errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(report.errors))
+  // The same holds across a push range.
+  git(site, ['commit', '--quiet', '-m', 'retire one binary, add another'])
+  let pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(pushed.ok, false)
+  assert.ok(!pushed.errors.some((item) => item.path === 'retired.bin'), JSON.stringify(pushed.errors))
+  assert.ok(pushed.errors.some((item) => item.rule === 'secret-material' && item.path === 'zz-opaque.bin'))
 
+  // A deletion on its own passes both checks.
+  git(site, ['reset', '--quiet', '--hard', 'HEAD~1'])
+  git(site, ['rm', '--quiet', 'retired.bin'])
+  const deletionOnly = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(!deletionOnly.errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(deletionOnly.errors))
   git(site, ['commit', '--quiet', '-m', 'retire binary asset'])
-  const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
   assert.equal(pushed.ok, true, JSON.stringify(pushed.errors))
 })
 
