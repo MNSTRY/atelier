@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -578,6 +578,86 @@ test('declared-binary text with a decomposed name, or renamed with an edit, is j
   assert.ok(!errors.some((item) => item.line === 2), JSON.stringify(errors))
 })
 
+test('declared-binary text that a narrowed diff pairs differently is read again on its own', (t) => {
+  const settings = (prefix, count) => Array.from({ length: count }, (_, index) => `${prefix}_${index + 3} = value_${index + 3}`).join('\n')
+
+  // Git pairs a unique basename first, and narrowing the paths changes which is unique.
+  const moved = makeWorkspace(t)
+  fs.writeFileSync(path.join(moved.site, '.gitattributes'), '*.cfg -diff\n')
+  const original = `head = 0\n${KEY_MATERIAL}\n${settings('setting_number', 18)}\n`
+  for (const dir of ['a', 'b', 'c', 'd']) fs.mkdirSync(path.join(moved.site, dir))
+  fs.writeFileSync(path.join(moved.site, 'a/x.cfg'), original)
+  fs.writeFileSync(path.join(moved.site, 'b/x.cfg'), `${settings('unrelated', 20)}\n`)
+  git(moved.site, ['add', '.'])
+  git(moved.site, ['commit', '--quiet', '-m', 'accepted earlier use in a/x.cfg'])
+  git(moved.site, ['rm', '--quiet', 'a/x.cfg', 'b/x.cfg'])
+  fs.writeFileSync(path.join(moved.site, 'c/p.cfg'), `head = 0\n${settings('setting_number', 18)}\ntail = p\n`)
+  fs.writeFileSync(path.join(moved.site, 'd/x.cfg'), `head = 0\n${KEY_MATERIAL}\n${settings('setting_number', 15)}\nd1 = 1\nd2 = 2\nd3 = 3\n`)
+  git(moved.site, ['add', '.'])
+  // The main diff renames a/x.cfg to c/p.cfg, so d/x.cfg is new and judged whole.
+  let errors = stagedSecretErrors(moved.site, moved.project, moved.policy)
+  assert.ok(errors.some((item) => item.path === 'd/x.cfg' && item.line === 2 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
+
+  // A copy found only by the narrowed diff, past a rename limit the main diff hit.
+  const copied = makeWorkspace(t)
+  fs.writeFileSync(path.join(copied.site, '.gitattributes'), '*.cfg -diff\n')
+  fs.writeFileSync(path.join(copied.site, 'm1.cfg'), `head = 0\n${KEY_MATERIAL}\n${settings('setting', 28)}\n`)
+  git(copied.site, ['add', '.'])
+  git(copied.site, ['commit', '--quiet', '-m', 'accepted earlier use in m1.cfg'])
+  fs.appendFileSync(path.join(copied.site, 'm1.cfg'), 'tail = 1\n')
+  fs.copyFileSync(path.join(copied.site, 'm1.cfg'), path.join(copied.site, 'd.cfg'))
+  fs.appendFileSync(path.join(copied.site, 'd.cfg'), 'extra = 1\n')
+  fs.writeFileSync(path.join(copied.site, 'x.txt'), 'note one\n')
+  git(copied.site, ['add', '.'])
+  git(copied.site, ['config', 'diff.renames', 'copies'])
+  git(copied.site, ['config', 'diff.renameLimit', '1'])
+  errors = stagedSecretErrors(copied.site, copied.project, copied.policy)
+  assert.ok(errors.some((item) => item.path === 'd.cfg' && item.line === 2 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
+})
+
+test('declared-binary text is read in batches, and file by file when a batch cannot be read', (t) => {
+  const { site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  const names = Array.from({ length: 205 }, (_, index) => `f${String(index).padStart(3, '0')}.cfg`)
+  const planted = new Set(['f000.cfg', 'f199.cfg', 'f200.cfg', 'f204.cfg'])
+  for (const name of names) fs.writeFileSync(path.join(site, name), `name = ${name}\n${planted.has(name) ? `${KEY_MATERIAL}\n` : ''}`)
+  git(site, ['add', '.'])
+  const textDiffs = []
+  const scan = (fails = () => false) => scanStagedRepository({
+    repoRoot: site,
+    repo: 'site',
+    gitRunner: (exe, args, options) => {
+      const literal = args.filter((value) => value.startsWith(':(literal)'))
+      if (literal.length > 0) {
+        textDiffs.push(literal.length)
+        if (fails(literal)) return { status: null, error: Object.assign(new Error('output limit'), { code: 'ENOBUFS' }), stdout: '' }
+      }
+      return spawnSync(exe, args, options)
+    },
+  })
+  const flagged = (result) => result.findings.filter((item) => item.rule === 'secret-material').map((item) => `${item.path}|${item.line}`).sort()
+  const expected = [...planted].map((name) => `${name}|2`).sort()
+
+  let result = scan()
+  assert.deepEqual(flagged(result), expected)
+  assert.deepEqual(result.diagnostics, [])
+  assert.deepEqual(textDiffs, [200, 5])
+
+  // A batch over the output limit is read again one file at a time.
+  textDiffs.length = 0
+  result = scan((literal) => literal.length > 1)
+  assert.deepEqual(flagged(result), expected)
+  assert.deepEqual(result.diagnostics, [])
+  assert.equal(textDiffs.length, 2 + 205)
+
+  // A file that cannot be read on its own blocks, naming the cause.
+  result = scan((literal) => literal.length > 1 || literal[0] === ':(literal)f201.cfg')
+  assert.deepEqual(result.diagnostics.map((item) => [item.path, item.details.reason, item.details.cause]), [['f201.cfg', 'declared-binary-text-unreadable', 'git-output-limit-exceeded']])
+  assert.match(result.diagnostics[0].message, /byte limit/)
+})
+
 test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {
   assert.equal(diffHeaderPath('diff --git a/docs/a.md b/docs/a.md'), 'docs/a.md')
   assert.equal(diffHeaderPath('diff --git a/x b/y.bin b/x b/y.bin'), 'x b/y.bin')
@@ -649,6 +729,10 @@ test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable s
   assert.equal(unmerged[0].incomplete, null)
   assert.equal(unmerged[1].path, 'm.txt')
   assert.equal(unmerged[1].incomplete, 'unmerged-path')
+  // Git prints an unmerged name as it is, never quoted.
+  const [quotedName] = parseDiffSections('* Unmerged path "x".txt')
+  assert.equal(quotedName.path, '"x".txt')
+  assert.equal(quotedName.incomplete, 'unmerged-path')
   assert.equal(short[0].incomplete, 'hunk-shorter-than-its-header')
 })
 

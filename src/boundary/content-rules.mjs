@@ -339,11 +339,11 @@ export function parseDiffSections(diff) {
     }
     if (raw.startsWith('* Unmerged path ')) {
       // An unmerged entry has no patch to read; it stands as its own unreadable
-      // section instead of being taken for a line of the file before it.
+      // section instead of being taken for a line of the file before it. Git
+      // prints this name as it is, never quoted.
       const listed = raw.slice('* Unmerged path '.length)
-      const named = listed.startsWith('"') ? readQuotedToken(listed, 0) : { value: listed, end: listed.length }
       current = {
-        path: named && named.end === listed.length && named.value !== '' ? named.value : null,
+        path: listed !== '' ? listed : null,
         added: false,
         deleted: false,
         binary: false,
@@ -554,21 +554,26 @@ function scanBinaryBuffer({ buffer, filePath, rules, exceptions, repo }) {
 }
 
 const DECLARED_TEXT_BATCH = 200
+// A new file's diff can be twice its size (a "+" before every short line), so a
+// batch holds at most half the diff limit in blob bytes.
+const DECLARED_TEXT_BATCH_BYTES = DIFF_RESULT_MAX_BYTES / 2
 
 /**
  * Git reports a file as binary when its attributes say so, whatever it holds
  * (for example `*.cfg binary` in .gitattributes, which can arrive with the tree).
- * Such text is judged like any other text: by its added lines, taken from one
- * `--text` diff of just those paths and their rename sources, so a rename is
- * paired as in the main diff. Pathspecs are taken literally: core.precomposeUnicode
- * is off for this call, because it would rewrite a decomposed name on the command
- * line and match nothing. Returns added lines per path, or null where unreadable.
+ * Such text is judged like any other text: by its added lines, taken from a
+ * `--text` diff of just those paths and their rename sources. Narrowing the
+ * paths can change how Git pairs renames and copies, so a file's lines are used
+ * only when it is paired exactly as in the main diff; otherwise, or when a batch
+ * cannot be read, the file is read again on its own. Pathspecs are taken
+ * literally: core.precomposeUnicode is off for this call, because it would
+ * rewrite a decomposed name on the command line and match nothing. Returns, per
+ * path, `{ addedLines }` or `{ cause }` naming why the text was not read.
  */
-function declaredBinaryTextLines({ repoRoot, revisions, sections, gitExecutable, gitRunner }) {
-  const lines = new Map()
-  for (let start = 0; start < sections.length; start += DECLARED_TEXT_BATCH) {
-    const group = sections.slice(start, start + DECLARED_TEXT_BATCH)
-    const paths = [...new Set(group.flatMap((section) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
+function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, gitRunner }) {
+  const outcomes = new Map()
+  const read = (group) => {
+    const paths = [...new Set(group.flatMap(({ section }) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
     const result = gitOutputResult(repoRoot, [
       '-c', 'core.precomposeUnicode=false',
       ...canonicalDiffArgs(revisions, ['--text']),
@@ -576,14 +581,35 @@ function declaredBinaryTextLines({ repoRoot, revisions, sections, gitExecutable,
       ...paths.map((value) => `:(literal)${value}`),
     ], { gitExecutable, runner: gitRunner })
     const parsed = result.ok ? parseDiffSections(result.stdout) : []
-    for (const section of group) {
+    for (const { section } of group) {
       const matches = parsed.filter((candidate) => candidate.path === section.path && !candidate.deleted)
-      lines.set(section.path, matches.length > 0 && matches.every((candidate) => !candidate.incomplete && !candidate.binary)
-        ? matches.flatMap((candidate) => candidate.addedLines)
-        : null)
+      let cause = null
+      if (!result.ok) cause = result.code
+      else if (matches.length === 0) cause = 'missing-from-text-diff'
+      else if (matches.some((candidate) => candidate.oldPath !== section.oldPath)) cause = 'paired-differently-from-main-diff'
+      else cause = matches.find((candidate) => candidate.incomplete)?.incomplete ?? (matches.some((candidate) => candidate.binary) ? 'binary-in-text-diff' : null)
+      outcomes.set(section.path, cause ? { cause } : { addedLines: matches.flatMap((candidate) => candidate.addedLines) })
     }
   }
-  return lines
+  const groups = []
+  let group = []
+  let bytes = 0
+  for (const entry of entries) {
+    if (group.length > 0 && (group.length >= DECLARED_TEXT_BATCH || bytes + entry.bytes > DECLARED_TEXT_BATCH_BYTES)) {
+      groups.push(group)
+      group = []
+      bytes = 0
+    }
+    group.push(entry)
+    bytes += entry.bytes
+  }
+  if (group.length > 0) groups.push(group)
+  for (const batch of groups) {
+    read(batch)
+    if (batch.length === 1) continue
+    for (const entry of batch) if (outcomes.get(entry.section.path).cause) read([entry])
+  }
+  return outcomes
 }
 
 function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, repo, gitExecutable, gitRunner }) {
@@ -641,15 +667,22 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
       findings.push(...scanBinaryBuffer({ buffer: result.stdout, filePath, rules, exceptions, repo }))
       continue
     }
-    declaredText.push(section)
+    declaredText.push({ section, bytes: result.bytes })
   }
   if (declaredText.length > 0) {
-    const lines = declaredBinaryTextLines({ repoRoot, revisions, sections: declaredText, gitExecutable, gitRunner })
+    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, gitExecutable, gitRunner })
     const contentRules = rules.filter((rule) => (rule.kind ?? 'content') === 'content')
-    for (const section of declaredText) {
-      const addedLines = lines.get(section.path)
-      if (!addedLines) {
-        diagnostics.push(incompleteDiagnostic({ repo, path: section.path, message: 'text declared binary could not be read as text, so its content was not scanned', details: { reason: 'declared-binary-text-unreadable' } }))
+    for (const { section } of declaredText) {
+      const { addedLines, cause } = outcomes.get(section.path)
+      if (cause) {
+        diagnostics.push(incompleteDiagnostic({
+          repo,
+          path: section.path,
+          message: cause === 'git-output-limit-exceeded'
+            ? `text declared binary has a diff over the ${DIFF_RESULT_MAX_BYTES}-byte limit, so its content was not scanned`
+            : 'text declared binary could not be read as text, so its content was not scanned',
+          details: { reason: 'declared-binary-text-unreadable', cause },
+        }))
         continue
       }
       findings.push(...scanAddedContent({ files: [{ path: section.path, added: false, addedLines }], rules: contentRules, exceptions, repo }))
