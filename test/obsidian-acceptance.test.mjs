@@ -1413,6 +1413,103 @@ try {
     assert.deepEqual(await settle({ sent: 900, waitMs: 20 }), { waited: true, settled: false, pauses: 4 })
   })
 
+  test('outside an owned run: the event-loop benchmark counts what a watcher reports, names the published notes among it, and passes every event on as it came', async () => {
+    const { SECOND_TICK_SCENARIOS, countingWatcherFactory } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
+    assert.deepEqual(SECOND_TICK_SCENARIOS, ['next-tick', 'full-reconciliation'])
+    // A watcher driven by hand: `emit` is what the factory under count was given to call, `fail` what it calls for a
+    // root it cannot watch.
+    let emit = null
+    let fail = null
+    let closed = 0
+    let clock = 100
+    const counted = countingWatcherFactory({ make: ({ onUnavailable }) => { fail = onUnavailable; return ({ roots, onEvent }) => { emit = onEvent; return { roots, close() { closed += 1 } } } }, now: () => clock })
+    assert.deepEqual(counted.seen(), { events: 0, unnamed: 0, unnamedInVault: 0, unavailable: 0, lastAtMs: null, vaultNotesNamed: 0 })
+    const passed = []
+    const roots = [{ id: 'vault:scope-1', path: '/vault-1', recursive: true }, { id: 'vault:scope-2', path: '/vault-2', recursive: true }, { id: 'repo:east', path: '/east', recursive: true }]
+    const handle = counted({ roots, onEvent: (event) => passed.push(event) })
+    assert.equal(handle.roots, roots, 'the watcher is made by the factory counted, from the same roots')
+    const events = [
+      { rootId: 'vault:scope-1', relative: 'notes/harbor.md' },
+      // The same note again, as a watcher repeats itself: one note named.
+      { rootId: 'vault:scope-1', relative: 'notes/harbor.md' },
+      { rootId: 'vault:scope-1', relative: 'notes/tide.md' },
+      // The same path in another vault is another published note.
+      { rootId: 'vault:scope-2', relative: 'notes/harbor.md' },
+      // The app's own folder in a vault, a file that is no note, and a source file: none is a published note.
+      { rootId: 'vault:scope-1', relative: '.obsidian/plugins/atelier/notes.md' },
+      { rootId: 'vault:scope-1', relative: 'attachments/chart.pdf' },
+      { rootId: 'repo:east', relative: 'notes/harbor.md' },
+      // "Something under it": no file named, once in a vault and once in a repository.
+      { rootId: 'vault:scope-2', relative: null },
+      { rootId: 'repo:east', relative: null },
+    ]
+    const asEmitted = structuredClone(events)
+    for (const event of events) { clock += 5; emit(event) }
+    assert.equal(passed.length, events.length)
+    for (const [index, event] of events.entries()) assert.equal(passed[index], event, 'the engine is handed the watcher\'s own event')
+    assert.deepEqual(passed, asEmitted, 'and nothing in it was changed on the way')
+    fail({ rootId: 'repo:east' })
+    assert.deepEqual(counted.seen(), { events: 9, unnamed: 2, unnamedInVault: 1, unavailable: 1, lastAtMs: 145, vaultNotesNamed: 3 })
+    handle.close()
+    assert.equal(closed, 1)
+  })
+
+  test('outside an owned run: the event-loop benchmark measures the delay of one operation alone, a stretch it begins with included; mutation control: read without a timer turn before and after, the stretch is not in it', async () => {
+    const { measureEventLoopDelay } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
+    const { monitorEventLoopDelay, performance } = await import('node:perf_hooks')
+    const histogram = monitorEventLoopDelay({ resolution: 10 })
+    histogram.enable()
+    try {
+      // An operation that holds the event loop from its first instruction, as a tick that walks a vault does.
+      const hold = (ms) => async () => { const until = performance.now() + ms; while (performance.now() < until) { /* held */ } return 'done' }
+      // An earlier stretch, longer than the one measured: it is not part of the measure.
+      await hold(400)()
+      await new Promise((resolve) => { setTimeout(resolve, 30) })
+      const measured = await measureEventLoopDelay(histogram, hold(150))
+      assert.equal(measured.value, 'done')
+      assert.ok(measured.endedMs - measured.startedMs >= 150)
+      assert.ok(measured.maxEventLoopDelayMs >= 100 && measured.maxEventLoopDelayMs < 390, `a stretch of 150 ms measured as ${measured.maxEventLoopDelayMs} ms`)
+      const blind = await measureEventLoopDelay(histogram, hold(150), { pause: async () => {} })
+      assert.ok(!(blind.maxEventLoopDelayMs >= 100), `the oracle can fail: ${blind.maxEventLoopDelayMs} ms`)
+    } finally { histogram.disable() }
+  })
+
+  test('outside an owned run: the event-loop benchmark judges a second tick by what it did, by how long it held the event loop, and by the requests across it', async () => {
+    const { judgeSecondTick } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
+    const identity = { runtimeId: 'rt-1', pid: 7, workspaceId: 'ws-1' }
+    const record = { serviceName: 'atelier-obsidian-synthetic', executable: { digest: 'sha256:aa' } }
+    const health = (startedMs, endedMs, extra = {}) => ({ startedMs, endedMs, kind: 'health', ...identity, serviceName: record.serviceName, executableDigest: record.executable.digest, ...extra })
+    const watcher = { before: { events: 40, unnamed: 0, unnamedInVault: 0, unavailable: 0, lastAtMs: 900, vaultNotesNamed: 32 }, after: { events: 40, unnamed: 0, unnamedInVault: 0, unavailable: 0, lastAtMs: 900, vaultNotesNamed: 32 } }
+    const tick = (extra = {}) => ({ kind: 'second-tick', startedMs: 1000, endedMs: 3000, state: 'ticked', full: false, changes: 0, scopes: [{ scopeId: 'scope-1', state: 'current', reason: 'published-and-verified', verified: true }], maxEventLoopDelayMs: 1990, watcher, ...extra })
+    // One request spans the tick, as when the tick is one stretch; one before and one after are outside its window.
+    const probes = [health(900, 960), health(990, 3010), health(3040, 3050)]
+    const judge = (second, { scenario = 'next-tick', requests = probes } = {}) => judgeSecondTick({ probes: requests, second, scenario, scopes: 1, identity, record })
+    assert.deepEqual(judge(tick()), { probes: 1, maxResponseMs: 2020, firstLagMs: 0, lastLagMs: 0 })
+    // After a long publication the tick after it is a full reconciliation, in a service too: recorded, not refused.
+    assert.equal(judge(tick({ full: true })).probes, 1)
+    assert.equal(judge(tick({ full: true, watcher: null }), { scenario: 'full-reconciliation' }).probes, 1)
+    assert.throws(() => judge(tick({ full: false, watcher: null }), { scenario: 'full-reconciliation' }), /must be a full reconciliation/)
+    // What the tick did.
+    assert.throws(() => judge(tick({ state: 'busy' })), assert.AssertionError)
+    assert.throws(() => judge(tick({ changes: 1 })), /nothing changed between the two ticks/)
+    assert.throws(() => judge(tick({ scopes: [] })), assert.AssertionError)
+    assert.throws(() => judge(tick({ scopes: [{ scopeId: 'scope-1', state: 'stale', reason: 'invalidated', verified: false }] })), assert.AssertionError)
+    // What it was told: by a watcher that watched every root, of at least one published note, before it began.
+    assert.throws(() => judge(tick({ watcher: { ...watcher, before: { ...watcher.before, vaultNotesNamed: 0 } } })), /named no published note before the tick/)
+    assert.throws(() => judge(tick({ watcher: { ...watcher, before: { ...watcher.before, unavailable: 1 } } })), /could not watch every root/)
+    // How long it held the event loop, whatever the requests show: here the request began late and waited under five seconds.
+    assert.throws(() => judge(tick({ endedMs: 6200, maxEventLoopDelayMs: 5190 }), { requests: [health(1240, 6210)] }), /held the event loop for 5190 ms/)
+    // The requests: a timeout, an answer of five seconds, another process, and sampling that stops short of an edge.
+    assert.throws(() => judge(tick(), { requests: [{ startedMs: 990, endedMs: 3010, kind: 'timeout' }] }), assert.AssertionError)
+    assert.throws(() => judge(tick({ endedMs: 6100, maxEventLoopDelayMs: 4990 }), { requests: [health(990, 6110)] }), assert.AssertionError)
+    assert.throws(() => judge(tick(), { requests: [health(990, 3010, { pid: 8 })] }), assert.AssertionError)
+    assert.throws(() => judge(tick(), { requests: [health(990, 2000)] }), assert.AssertionError)
+    // A tick that fell between two requests: shorter than the edge allowance and overlapped by none. Passed, with none.
+    assert.deepEqual(judge(tick({ startedMs: 1000, endedMs: 1020, maxEventLoopDelayMs: 18 }), { requests: [health(900, 960), health(1040, 1050)] }), { probes: 0, maxResponseMs: 0, firstLagMs: null, lastLagMs: null })
+    // One as long as the allowance that no request overlapped was not sampled, and fails.
+    assert.throws(() => judge(tick({ startedMs: 1000, endedMs: 1250, maxEventLoopDelayMs: 240 }), { requests: [health(900, 960), health(1300, 1310)] }), assert.AssertionError)
+  })
+
   test('outside an owned run: the event-loop benchmark judges a window by every request in it, the one answered after the end included, however many there are', async () => {
     const { judgeFirstTickWindow, judgeTransitionWindow } = await import('../scripts/obsidian/benchmark-event-loop.mjs')
     const identity = { runtimeId: 'runtime-invented', pid: 4242, workspaceId: 'workspace-invented' }
