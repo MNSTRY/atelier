@@ -6,7 +6,8 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import crypto from 'node:crypto'
-import { CORPUS, LABELS, anchorChange as anchorChangeWithQuote, assess, citations, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
+import { decisionRequestDigest } from '../src/decisions/contracts.mjs'
+import { CAPTURE_SCHEMA, CORPUS, LABELS, anchorChange as anchorChangeWithQuote, assess, citations, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
 
 // Foundation's repository-local decision-practice consumer, exercised on a
 // disposable git repository with invented decisions and sources.
@@ -640,4 +641,159 @@ test('a lost anchor in a long file quotes the end of the head, where its lines w
   assert.deepEqual([value.status, value.anchor.head, value.anchor.reanchor], ['escalate', null, true])
   assert.equal(value.quoted.selector.value, 'lines:194-200')
   assert.equal(value.quoted.contentDigest, sha(numbered.split('\n').slice(193, 200).join('\n')))
+})
+
+test('a capture hands over exactly what the evaluator was given and returned, and leaves the measurement unchanged', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
+  const before = r.git('status', '--porcelain', '--ignored')
+  const plain = measure({ repo: r.dir, pr: 60, base: r.base, head })
+  const calls = []
+  const captured = measure({ repo: r.dir, pr: 60, base: r.base, head, capture: (context) => calls.push(context) })
+  // One hand-over per measurement, and the same measurement with or without it.
+  assert.equal(calls.length, 1)
+  const { measuredAt: plainAt, ...withoutCapture } = plain
+  const { measuredAt: capturedAt, ...withCapture } = captured
+  assert.deepEqual(withCapture, withoutCapture)
+  assert.equal(r.git('status', '--porcelain', '--ignored'), before)
+
+  const [context] = calls
+  assert.deepEqual(Object.keys(context).sort(), ['definitionRef', 'evaluations', 'notEvaluated', 'records', 'uncited'])
+  assert.deepEqual(context.definitionRef, captured.definitionRef)
+  assert.ok(Array.isArray(context.records) && context.records.length > 0)
+  // One evaluation per evaluated outcome: the evaluator ran once for each.
+  const evaluated = captured.decisions.flatMap((item) => item.outcomes.filter((entry) => entry.status !== 'not-evaluated').map((entry) => [item.id, entry]))
+  assert.equal(context.evaluations.length, evaluated.length)
+  assert.equal(context.evaluations.length, 1)
+  const [entry] = context.evaluations
+  const [decisionId, measured] = evaluated[0]
+  assert.deepEqual([entry.decision, entry.file, entry.anchor], [decisionId, 'docs/layers.md', null])
+  // The request, its digest and the result are the ones the evaluator validated.
+  assert.equal(entry.instance.result.requestDigest, decisionRequestDigest(entry.instance.request))
+  assert.equal(entry.instance.result.requestId, entry.instance.request.id)
+  assert.deepEqual(entry.instance.prerequisites, [{ id: 'cited-source-changed', value: true }])
+  assert.deepEqual(entry.instance.evidence[0].reference, measured.quoted)
+  // The measurement line is a reduction of this outcome and nothing else.
+  assert.equal(measured.status, 'proceed')
+  assert.deepEqual([entry.outcome.status, entry.outcome.reason], [measured.status, measured.reason])
+  assert.equal(sha(entry.outcome.proposal.data.body), measured.draftDigest)
+  assert.deepEqual(context.notEvaluated, [])
+  assert.deepEqual(context.uncited, captured.decisions.filter((item) => item.cited.length === 0).map((item) => item.id))
+  assert.throws(() => measure({ repo: r.dir, pr: 60, base: r.base, head, capture: [] }), /capture must be a function or null/)
+})
+
+test('a capture keeps unevaluated and unchanged citations as facts, without inventing an input', (t) => {
+  // An out-of-range anchor is never evaluated: it is listed, with no instance.
+  const far = anchoredRepo(t, '#L6-L9')
+  const farHead = far.commit('edit', () => fs.writeFileSync(path.join(far.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
+  let refusedContext = null
+  const refused = measure({ repo: far.dir, pr: 61, base: far.base, head: farHead, capture: (context) => { refusedContext = context } })
+  assert.equal(outcome(refused).status, 'not-evaluated')
+  assert.deepEqual(refusedContext.evaluations, [])
+  assert.deepEqual(refusedContext.notEvaluated, [{ decision: refused.decisions.find((item) => item.cited.length).id, file: 'docs/layers.md', anchor: 'lines:6-9', fragment: null, reason: 'cited-anchor-out-of-range' }])
+
+  // An unchanged cited source is evaluated once and stops on the false prerequisite.
+  const r = repo(t)
+  const head = r.commit('unrelated', () => fs.writeFileSync(path.join(r.dir, 'other.md'), 'unrelated\n'))
+  let stoppedContext = null
+  const stopped = measure({ repo: r.dir, pr: 62, base: r.base, head, capture: (context) => { stoppedContext = context } })
+  assert.equal(stoppedContext.evaluations.length, 1)
+  assert.deepEqual(stoppedContext.evaluations[0].instance.prerequisites, [{ id: 'cited-source-changed', value: false }])
+  assert.deepEqual([stoppedContext.evaluations[0].outcome.status, stoppedContext.evaluations[0].outcome.reason], [outcome(stopped).status, outcome(stopped).reason])
+  assert.equal(outcome(stopped).draftDigest, null)
+  assert.deepEqual(stoppedContext.notEvaluated, [])
+})
+
+test('the CLI writes a capture only when asked, bound to the measurement line, and never over an existing file', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one', 'Changed one')))
+  const out = path.join(r.dir, '..', `${path.basename(r.dir)}-measurements.jsonl`)
+  const capture = path.join(r.dir, '..', `${path.basename(r.dir)}-capture.json`)
+  t.after(() => { fs.rmSync(out, { force: true }); fs.rmSync(capture, { force: true }) })
+  const run = (...extra) => spawnSync(process.execPath, [SCRIPT, 'measure', '--pr', '63', '--base', r.base, '--head', head, '--repo', r.dir, '--out', out, ...extra], { encoding: 'utf8' })
+
+  // Without --capture nothing but the measurement line is written.
+  const plain = run()
+  assert.equal(plain.status, 0, plain.stderr)
+  assert.equal(fs.existsSync(capture), false)
+  assert.equal(fs.readFileSync(out, 'utf8').trim().split('\n').length, 1)
+
+  const first = run('--capture', capture)
+  assert.equal(first.status, 0, first.stderr)
+  const lines = fs.readFileSync(out, 'utf8').trim().split('\n')
+  assert.equal(lines.length, 2)
+  const bytes = fs.readFileSync(capture, 'utf8')
+  const written = JSON.parse(bytes)
+  assert.equal(written.schema, CAPTURE_SCHEMA)
+  // The capture names the very line it belongs to, by the digest a label would use.
+  assert.equal(written.measurementDigest, sha(lines[1]))
+  assert.deepEqual(written.measurement, JSON.parse(lines[1]))
+  assert.equal(written.evaluations.length, 1)
+  assert.equal(written.evaluations[0].instance.result.requestDigest, decisionRequestDigest(written.evaluations[0].instance.request))
+  assert.equal(sha(written.evaluations[0].outcome.proposal.data.body), outcome(written.measurement).draftDigest)
+
+  // An existing capture is refused before anything is appended, and is left as it was.
+  const again = run('--capture', capture)
+  assert.equal(again.status, 2)
+  assert.match(again.stderr, /already exists/)
+  assert.equal(fs.readFileSync(out, 'utf8').trim().split('\n').length, 2)
+  assert.equal(fs.readFileSync(capture, 'utf8'), bytes)
+  // The measurements file itself is never a capture target, and a bare flag is refused.
+  assert.equal(run('--capture', out).status, 2)
+  assert.equal(run('--capture').status, 2)
+  assert.equal(fs.readFileSync(out, 'utf8').trim().split('\n').length, 2)
+})
+
+test('the CLI refuses a capture that names the measurements file, by any path, before anything is measured or written', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one', 'Changed one')))
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-consumer-alias-')))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  const real = path.join(outside, 'real')
+  const linked = path.join(outside, 'linked')
+  fs.mkdirSync(real)
+  fs.symlinkSync(real, linked, process.platform === 'win32' ? 'junction' : 'dir')
+  const out = path.join(real, 'measurements.jsonl')
+  const run = (...extra) => spawnSync(process.execPath, [SCRIPT, 'measure', '--pr', '64', '--base', r.base, '--head', head, '--repo', r.dir, ...extra], { encoding: 'utf8' })
+  const refusedAsSame = (capture, ...more) => {
+    const result = run('--out', out, '--capture', capture, ...more)
+    assert.equal(result.status, 2, capture)
+    assert.match(result.stderr, /same file/)
+    assert.equal(result.stdout, '')
+  }
+  // Neither file exists yet. The same name, another spelling of it, and the same
+  // file reached through a symlinked parent directory are each refused, with or
+  // without --print, and nothing is created.
+  refusedAsSame(out)
+  refusedAsSame(`${real}${path.sep}.${path.sep}measurements.jsonl`)
+  refusedAsSame(path.join(linked, 'measurements.jsonl'))
+  refusedAsSame(path.join(linked, 'measurements.jsonl'), '--print')
+  assert.deepEqual(fs.readdirSync(real), [])
+
+  // With an existing measurements file, the refusal leaves it byte for byte.
+  const measured = run('--out', out)
+  assert.equal(measured.status, 0, measured.stderr)
+  const before = fs.readFileSync(out)
+  refusedAsSame(out)
+  refusedAsSame(path.join(linked, 'measurements.jsonl'))
+  assert.deepEqual(fs.readFileSync(out), before)
+  assert.deepEqual(fs.readdirSync(real), ['measurements.jsonl'])
+
+  // A different file beside it, even through the link, is still accepted;
+  // --print still prints the measurement and appends nothing.
+  const capture = path.join(linked, 'capture.json')
+  const printed = run('--out', out, '--capture', capture, '--print')
+  assert.equal(printed.status, 0, printed.stderr)
+  assert.equal(JSON.parse(printed.stdout).pr, 64)
+  assert.deepEqual(fs.readFileSync(out), before)
+  const written = JSON.parse(fs.readFileSync(capture, 'utf8'))
+  assert.equal(written.schema, CAPTURE_SCHEMA)
+  assert.equal(written.evaluations.length, 1)
+  // And the ordinary pair of distinct files still appends exactly one line.
+  const second = path.join(real, 'capture-two.json')
+  const appended = run('--out', out, '--capture', second)
+  assert.equal(appended.status, 0, appended.stderr)
+  const lines = fs.readFileSync(out, 'utf8').trim().split('\n')
+  assert.equal(lines.length, 2)
+  assert.equal(JSON.parse(fs.readFileSync(second, 'utf8')).measurementDigest, sha(lines[1]))
 })
