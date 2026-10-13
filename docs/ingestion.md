@@ -1,6 +1,7 @@
 # Progressive local ingestion
 
-Status: experimental source implementation, not yet a released package feature.
+Status: experimental. Shipped since 0.2.0-alpha.13 as the `atelier ingest`
+command and the `@mnstry/atelier/ingestion` export.
 The local runner preserves explicitly selected files and makes bounded text
 search useful before semantic interpretation. It composes the existing
 [immutable intake](intake-and-guides.md) with a resumable plan. It never enrolls
@@ -16,8 +17,7 @@ traversal, symlinks and implicit external reads are refused. The local CLI is
 for a trusted workspace owner. Its workspace identifier is a binding against
 accidental cross-workspace reuse, not an authenticated identity or tenant ACL.
 
-The following examples assume the development checkout or a future package
-version containing this command. Released alpha.7 does not contain it.
+The following examples need 0.2.0-alpha.13 or later.
 
 ```sh
 atelier ingest plan <<'JSON'

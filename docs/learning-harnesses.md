@@ -1,8 +1,7 @@
 # Knowledge development and the learning cycle
 
-Status: implemented locally for the next release. Published alpha.7 does not
-contain these commands. Use `node bin/atelier.mjs harness help` in this source
-checkout, or `atelier harness help` from a package built from this candidate.
+Status: shipped since 0.2.0-alpha.13. Run `atelier harness help` for the
+commands.
 
 Knowledge Harness helps people establish, develop, use and revise what they know.
 Ingestion is one capability within that larger purpose. Sources can also originate
