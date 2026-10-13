@@ -1058,14 +1058,24 @@ unit and loader is what it was.
   record number at every read of the history's end (a load's first read, its
   read once the generation is loaded, the recheck at a full reconciliation,
   and a read made when a tick stops a view as `mixed-read` because an observed
-  file changed), whether or not the record's generation could be used, and
-  whichever part of the service read it. A history that ends earlier refuses
-  `selection-history-shortened` at each of those reads, and nothing is loaded
-  from it while it is shorter. A project already loaded is held to this at its
-  next recheck, at the latest the next full reconciliation; until then it
+  file changed or could not be read, once for views stopped one after another),
+  whether or not the
+  record's generation could be used, and whichever part of the service read
+  it. A history that ends earlier refuses `selection-history-shortened` at a
+  load and at a recheck, and nothing is loaded from it while it is shorter; at
+  the read made when a tick stops a view, the view says `mixed-read` at that
+  tick and the code at the next. A project already loaded is loaded again at
+  the next tick once any part of the service has read the history ending at a
+  later record than the one the project was loaded under, so a confirmation
+  read elsewhere in the service and removed before the engine looked refuses at
+  that tick; otherwise a project already loaded is held to this at its next
+  recheck, at the latest the next full reconciliation, and until then it
   publishes nothing new under another record, and a change at its sources
   brings the recheck forward. A record added and removed between two of those
-  reads was never read, and does not count. The views say why (`open` and
+  reads was never read, and does not count: while a load of its own is under
+  way, the plugin's status read compares the files that decide its views and
+  reads no history, so a record it sees then only as a changed file is not
+  noted. The views say why (`open` and
   `status --json` name the ways out), and the vault keeps what it last
   published.
 - **What ends that refusal.** The removed records put back; a history as long

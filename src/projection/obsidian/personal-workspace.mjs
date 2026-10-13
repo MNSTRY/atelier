@@ -461,6 +461,15 @@ export function assertPersonalSelection(project) {
   if (now.sequence !== pinned.sequence || now.head !== pinned.head) refuse('personal-selection-changed', 'the confirmed selection of the personal workspace is no longer the one this project was loaded under; nothing is used from it', { source: 'personal-workspace' })
 }
 
+// Whether this process has read a pinned project's selection history ending at a later record than the one the
+// project is pinned to: a confirmation since, or a history that was longer and is cut short now. Either way the project
+// is not the one to publish under any more, and is loaded again: the load follows the confirmation, or refuses the
+// shortened history. In memory, with no read. False for a project that is not pinned.
+export function personalSelectionBehind(project) {
+  const pinned = personalSelectionOf(project)
+  return pinned !== null && (READ_UP_TO.get(pinned.personalHome) ?? 0) > pinned.sequence
+}
+
 // Reads where the history of a pinned project's home ends now, for the note alone: what the read refuses is not this
 // caller's to raise. For the engine's guard, which sees a selection record's file change in the middle of a tick and
 // stops the view as `mixed-read` without reading the history: the record that stopped it is read while it is there, so
