@@ -634,8 +634,94 @@ test('a file that replaces a directory is never judged by a pairing the main dif
   fs.rmSync(path.join(site, 'conf.cfg'), { recursive: true, force: true })
   fs.writeFileSync(path.join(site, 'conf.cfg'), `${contents}extra = 1\n`)
   git(site, ['add', '.'])
+  // The directory's files are not read with it, so the file is judged whole, as the main diff has it.
   const errors = stagedSecretErrors(site, project, policy)
-  assert.ok(errors.some((item) => item.path === 'conf.cfg' && (item.rule === 'secret-material' || item.code === 'content-scan-incomplete')), JSON.stringify(errors))
+  assert.ok(errors.some((item) => item.path === 'conf.cfg' && item.line === 2 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
+})
+
+test('a file that replaces a directory is paired as the main diff pairs it, whatever else moved out', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  const settings = Array.from({ length: 18 }, (_, index) => `setting_${index} = value_${index}`).join('\n')
+  fs.mkdirSync(path.join(site, 'conf.cfg'))
+  fs.writeFileSync(path.join(site, 'conf.cfg', 'main.cfg'), `head = 0\n${settings}\n`)
+  fs.writeFileSync(path.join(site, 'conf.cfg', 'other.cfg'), `head = 0\n${KEY_MATERIAL}\n${settings}\n`)
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'accepted earlier use in conf.cfg/other.cfg'])
+  // other.cfg moves out unchanged; main.cfg becomes the file conf.cfg, gaining the key.
+  fs.mkdirSync(path.join(site, 'w'))
+  git(site, ['mv', 'conf.cfg/other.cfg', 'w/other.cfg'])
+  git(site, ['rm', '--quiet', 'conf.cfg/main.cfg'])
+  fs.rmSync(path.join(site, 'conf.cfg'), { recursive: true, force: true })
+  fs.writeFileSync(path.join(site, 'conf.cfg'), `head = 0\n${KEY_MATERIAL}\n${settings}\nx = 1\n`)
+  git(site, ['add', '.'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'conf.cfg' && item.line === 2 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
+})
+
+test('a file renamed into a directory of its own name is read with its source', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  const settings = Array.from({ length: 20 }, (_, index) => `setting_${index} = value_${index}`).join('\n')
+  fs.writeFileSync(path.join(site, 'conf.cfg'), `${settings}\n`)
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'a file'])
+  git(site, ['mv', 'conf.cfg', 'moving.cfg'])
+  fs.mkdirSync(path.join(site, 'conf.cfg'))
+  git(site, ['mv', 'moving.cfg', 'conf.cfg/main.cfg'])
+  fs.appendFileSync(path.join(site, 'conf.cfg', 'main.cfg'), `${KEY_MATERIAL}\n`)
+  git(site, ['add', '.'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'conf.cfg/main.cfg' && item.line === 21 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(errors))
+})
+
+test('a file that replaces a large directory is read with one exclusion, not one per entry', (t) => {
+  const { site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  fs.mkdirSync(path.join(site, 'big.cfg'))
+  for (let index = 0; index < 400; index += 1) fs.writeFileSync(path.join(site, 'big.cfg', `entry-${index}.txt`), `entry ${index}\n`)
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'a large directory'])
+  git(site, ['rm', '--quiet', '-r', 'big.cfg'])
+  fs.writeFileSync(path.join(site, 'big.cfg'), `name = big\n${KEY_MATERIAL}\n`)
+  git(site, ['add', '.'])
+  const exclusions = []
+  const result = scanStagedRepository({
+    repoRoot: site,
+    repo: 'site',
+    gitRunner: (exe, args, options) => {
+      if (args.some((value) => value.startsWith(':(literal)'))) exclusions.push(args.filter((value) => value.startsWith(':(exclude,literal)')))
+      return spawnSync(exe, args, options)
+    },
+  })
+  assert.deepEqual(exclusions, [[':(exclude,literal)big.cfg/']])
+  assert.deepEqual(result.findings.filter((item) => item.rule === 'secret-material').map((item) => `${item.path}|${item.line}`), ['big.cfg|2'])
+  assert.deepEqual(result.diagnostics, [])
+})
+
+test('declared-binary text batches are split by size as well as count', (t) => {
+  const { site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg -diff\n')
+  const line = `${'x'.repeat(63)}\n`
+  for (const name of ['a.cfg', 'b.cfg']) fs.writeFileSync(path.join(site, name), `${KEY_MATERIAL}\n${line.repeat(80 * 1024)}`)
+  git(site, ['add', '.'])
+  const textDiffs = []
+  const result = scanStagedRepository({
+    repoRoot: site,
+    repo: 'site',
+    gitRunner: (exe, args, options) => {
+      const literal = args.filter((value) => value.startsWith(':(literal)'))
+      if (literal.length > 0) textDiffs.push(literal.length)
+      return spawnSync(exe, args, options)
+    },
+  })
+  // Each file holds about 5 MiB, so two would pass half the 16 MiB diff limit together.
+  assert.deepEqual(textDiffs, [1, 1])
+  assert.deepEqual(result.findings.filter((item) => item.rule === 'secret-material').map((item) => item.path).sort(), ['a.cfg', 'b.cfg'])
+  assert.deepEqual(result.diagnostics, [])
 })
 
 test('declared-binary text is read in batches, and file by file when a batch cannot be read', (t) => {

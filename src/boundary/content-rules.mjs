@@ -572,7 +572,8 @@ const DECLARED_TEXT_BATCH_BYTES = DIFF_RESULT_MAX_BYTES / 2
 
 /**
  * Git reports a file as binary when its attributes say so, whatever it holds
- * (for example `*.cfg binary` in .gitattributes, which can arrive with the tree).
+ * (for example `*.cfg binary` in .gitattributes, which can arrive with the tree),
+ * or when the content it replaces was binary.
  * Such text is judged like any other text: by its added lines, taken from a
  * `--text` diff of just those paths and their rename sources. Narrowing the
  * paths can change how Git pairs renames and copies, so a file's lines are used
@@ -582,15 +583,30 @@ const DECLARED_TEXT_BATCH_BYTES = DIFF_RESULT_MAX_BYTES / 2
  * rewrite a decomposed name on the command line and match nothing. Returns, per
  * path, `{ addedLines }` or `{ cause }` naming why the text was not read.
  */
-function declaredBinaryTextLines({ repoRoot, revisions, entries, gitExecutable, gitRunner, indexFile = null }) {
+function declaredBinaryTextLines({ repoRoot, revisions, entries, changedPaths = [], gitExecutable, gitRunner, indexFile = null }) {
   const outcomes = new Map()
   const read = (group) => {
     const paths = [...new Set(group.flatMap(({ section }) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
+    // A literal pathspec also matches a directory of that name, so a file that
+    // replaced a directory would bring the directory's changed files in as
+    // rename candidates and as output. Only changed entries can appear in a
+    // diff. Under a read path with nothing else read inside, one subtree
+    // exclusion covers them all; under one that holds another read path, the
+    // changed entries not read are excluded one by one. Usually there are none.
+    const reading = new Set(paths)
+    const excluded = new Set()
+    for (const read of paths) {
+      const under = changedPaths.filter((value) => value.startsWith(`${read}/`))
+      if (under.length === 0) continue
+      if (!paths.some((other) => other.startsWith(`${read}/`))) excluded.add(`${read}/`)
+      else for (const value of under) if (!reading.has(value)) excluded.add(value)
+    }
     const result = gitOutputResult(repoRoot, [
       '-c', 'core.precomposeUnicode=false',
       ...canonicalDiffArgs(revisions, ['--text']),
       '--',
       ...paths.map((value) => `:(literal)${value}`),
+      ...[...excluded].map((value) => `:(exclude,literal)${value}`),
     ], { gitExecutable, indexFile, runner: gitRunner })
     const parsed = result.ok ? parseDiffSections(result.stdout) : []
     for (const { section } of group) {
@@ -682,7 +698,8 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
     declaredText.push({ section, bytes: result.bytes })
   }
   if (declaredText.length > 0) {
-    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, gitExecutable, gitRunner, indexFile })
+    const changedPaths = [...new Set(sections.flatMap((section) => [section.path, section.oldPath]).filter((value) => value && value !== ''))]
+    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, changedPaths, gitExecutable, gitRunner, indexFile })
     const contentRules = rules.filter((rule) => (rule.kind ?? 'content') === 'content')
     for (const { section } of declaredText) {
       const { addedLines, cause } = outcomes.get(section.path)
@@ -691,8 +708,8 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
           repo,
           path: section.path,
           message: cause === 'git-output-limit-exceeded'
-            ? `text declared binary has a diff over the ${DIFF_RESULT_MAX_BYTES}-byte limit, so its content was not scanned`
-            : 'text declared binary could not be read as text, so its content was not scanned',
+            ? `text that Git reports as binary has a diff over the ${DIFF_RESULT_MAX_BYTES}-byte limit, so its content was not scanned`
+            : 'text that Git reports as binary could not be read as text, so its content was not scanned',
           details: { reason: 'declared-binary-text-unreadable', cause },
         }))
         continue
