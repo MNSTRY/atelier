@@ -548,6 +548,36 @@ test('text declared binary is judged by its added lines, not its whole content',
   assert.ok(!errors.some((item) => item.line === 2), JSON.stringify(errors))
 })
 
+test('declared-binary text with a decomposed name, or renamed with an edit, is judged by its added lines', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.json -diff\n*.cfg -diff\n')
+  // Stored decomposed (NFD), as an older checkout or another platform leaves it.
+  const decomposed = 'r\u0065\u0301sume\u0301.json'
+  fs.writeFileSync(path.join(site, decomposed), '{"name": "example"}\n')
+  fs.writeFileSync(path.join(site, 'old.cfg'), `alpha = 1\n${KEY_MATERIAL}\nbeta = 2\ngamma = 3\ndelta = 4\nepsilon = 5\nzeta = 6\n`)
+  git(site, ['-c', 'core.precomposeUnicode=false', 'add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'existing files, one with an accepted earlier use'])
+  git(site, ['config', 'core.precomposeUnicode', 'true'])
+
+  // A new branch that only adds a README pushes its whole history from the empty tree.
+  git(site, ['checkout', '--quiet', '-b', 'feature'])
+  commit(site, 'README.md', '# Site\n', 'readme')
+  const branchPush = [{ localRef: 'refs/heads/feature', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/feature', remoteSha: '0'.repeat(40) }]
+  let pushed = checkPushContent({ project, policy, updates: branchPush, cwd: site })
+  assert.ok(!pushed.errors.some((item) => item.code === 'content-scan-incomplete'), JSON.stringify(pushed.errors))
+
+  // Renamed with one appended line: the earlier use at line 2 is not judged again.
+  git(site, ['mv', 'old.cfg', 'new.cfg'])
+  fs.appendFileSync(path.join(site, 'new.cfg'), 'eta = 7\n')
+  git(site, ['add', 'new.cfg'])
+  assert.deepEqual(stagedSecretErrors(site, project, policy), [])
+  fs.appendFileSync(path.join(site, 'new.cfg'), `${KEY_MATERIAL}\n`)
+  git(site, ['add', 'new.cfg'])
+  const errors = stagedSecretErrors(site, project, policy)
+  assert.ok(errors.some((item) => item.path === 'new.cfg' && item.line === 9 && item.rule === 'secret-material'), JSON.stringify(errors))
+  assert.ok(!errors.some((item) => item.line === 2), JSON.stringify(errors))
+})
+
 test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {
   assert.equal(diffHeaderPath('diff --git a/docs/a.md b/docs/a.md'), 'docs/a.md')
   assert.equal(diffHeaderPath('diff --git a/x b/y.bin b/x b/y.bin'), 'x b/y.bin')
@@ -608,6 +638,17 @@ test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable s
   assert.ok(result.diagnostics.some((item) => item.code === 'content-scan-incomplete' && item.details.reason === 'unreadable-file-path'), JSON.stringify(result))
 
   const short = parseDiffSections(['diff --git a/a.txt b/a.txt', '@@ -0,0 +1,2 @@', '+only one'].join('\n'))
+
+  // An unmerged entry is its own unreadable section, not a line of the file before it.
+  const unmerged = parseDiffSections([
+    'diff --git a/a.txt b/a.txt',
+    '@@ -0,0 +1 @@',
+    '+fine',
+    '* Unmerged path m.txt',
+  ].join('\n'))
+  assert.equal(unmerged[0].incomplete, null)
+  assert.equal(unmerged[1].path, 'm.txt')
+  assert.equal(unmerged[1].incomplete, 'unmerged-path')
   assert.equal(short[0].incomplete, 'hunk-shorter-than-its-header')
 })
 

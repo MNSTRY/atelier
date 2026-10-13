@@ -329,9 +329,29 @@ export function parseDiffSections(diff) {
         deleted: false,
         binary: false,
         newBlob: null,
+        oldPath: null,
         addedLines: [],
         incomplete: null,
         inHeader: true,
+      }
+      sections.push(current)
+      continue
+    }
+    if (raw.startsWith('* Unmerged path ')) {
+      // An unmerged entry has no patch to read; it stands as its own unreadable
+      // section instead of being taken for a line of the file before it.
+      const listed = raw.slice('* Unmerged path '.length)
+      const named = listed.startsWith('"') ? readQuotedToken(listed, 0) : { value: listed, end: listed.length }
+      current = {
+        path: named && named.end === listed.length && named.value !== '' ? named.value : null,
+        added: false,
+        deleted: false,
+        binary: false,
+        newBlob: null,
+        oldPath: null,
+        addedLines: [],
+        incomplete: 'unmerged-path',
+        inHeader: false,
       }
       sections.push(current)
       continue
@@ -360,7 +380,12 @@ export function parseDiffSections(diff) {
       current.newBlob = ZERO_SHA_RE.test(index[2]) ? null : index[2]
     } else if (raw.startsWith('new file mode ')) current.added = true
     else if (raw.startsWith('deleted file mode ')) current.deleted = true
-    else if (raw.startsWith('rename to ') || raw.startsWith('copy to ')) {
+    else if (raw.startsWith('rename from ') || raw.startsWith('copy from ')) {
+      const source = raw.slice(raw.indexOf(' from ') + 6)
+      const named = source.startsWith('"') ? readQuotedToken(source, 0) : { value: source, end: source.length }
+      if (named && named.end === source.length && named.value !== '') current.oldPath = named.value
+      else current.incomplete ??= 'unreadable-rename-source'
+    } else if (raw.startsWith('rename to ') || raw.startsWith('copy to ')) {
       const target = raw.slice(raw.indexOf(' to ') + 4)
       const named = target.startsWith('"') ? readQuotedToken(target, 0) : { value: target, end: target.length }
       if (named && named.end === target.length && named.value !== '') current.path = named.value
@@ -528,21 +553,37 @@ function scanBinaryBuffer({ buffer, filePath, rules, exceptions, repo }) {
   return findings
 }
 
+const DECLARED_TEXT_BATCH = 200
+
 /**
  * Git reports a file as binary when its attributes say so, whatever it holds
  * (for example `*.cfg binary` in .gitattributes, which can arrive with the tree).
- * Such text is judged like any other text: by its added lines, taken from a diff
- * of that one path with attributes overridden.
+ * Such text is judged like any other text: by its added lines, taken from one
+ * `--text` diff of just those paths and their rename sources, so a rename is
+ * paired as in the main diff. Pathspecs are taken literally: core.precomposeUnicode
+ * is off for this call, because it would rewrite a decomposed name on the command
+ * line and match nothing. Returns added lines per path, or null where unreadable.
  */
-function declaredBinaryTextLines({ repoRoot, revisions, filePath, gitExecutable, gitRunner }) {
-  const result = gitOutputResult(repoRoot, [...canonicalDiffArgs(revisions, ['--text']), '--', `:(literal)${filePath}`], {
-    gitExecutable,
-    runner: gitRunner,
-  })
-  if (!result.ok) return null
-  const sections = parseDiffSections(result.stdout).filter((section) => !section.deleted)
-  if (!sections.length || sections.some((section) => section.incomplete || section.path !== filePath || section.binary)) return null
-  return sections.flatMap((section) => section.addedLines)
+function declaredBinaryTextLines({ repoRoot, revisions, sections, gitExecutable, gitRunner }) {
+  const lines = new Map()
+  for (let start = 0; start < sections.length; start += DECLARED_TEXT_BATCH) {
+    const group = sections.slice(start, start + DECLARED_TEXT_BATCH)
+    const paths = [...new Set(group.flatMap((section) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
+    const result = gitOutputResult(repoRoot, [
+      '-c', 'core.precomposeUnicode=false',
+      ...canonicalDiffArgs(revisions, ['--text']),
+      '--',
+      ...paths.map((value) => `:(literal)${value}`),
+    ], { gitExecutable, runner: gitRunner })
+    const parsed = result.ok ? parseDiffSections(result.stdout) : []
+    for (const section of group) {
+      const matches = parsed.filter((candidate) => candidate.path === section.path && !candidate.deleted)
+      lines.set(section.path, matches.length > 0 && matches.every((candidate) => !candidate.incomplete && !candidate.binary)
+        ? matches.flatMap((candidate) => candidate.addedLines)
+        : null)
+    }
+  }
+  return lines
 }
 
 function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, repo, gitExecutable, gitRunner }) {
@@ -550,6 +591,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
   const diagnostics = []
   let totalBytes = 0
   const seen = new Set()
+  const declaredText = []
   // A deleted path is absent from the revision being scanned, so there is nothing
   // to read: the blob it had is already in history and is not being introduced.
   for (const section of sections) {
@@ -599,17 +641,19 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
       findings.push(...scanBinaryBuffer({ buffer: result.stdout, filePath, rules, exceptions, repo }))
       continue
     }
-    const addedLines = declaredBinaryTextLines({ repoRoot, revisions, filePath, gitExecutable, gitRunner })
-    if (addedLines === null) {
-      diagnostics.push(incompleteDiagnostic({ repo, path: filePath, message: 'text declared binary could not be read as text, so its content was not scanned', details: { reason: 'declared-binary-text-unreadable' } }))
-      continue
+    declaredText.push(section)
+  }
+  if (declaredText.length > 0) {
+    const lines = declaredBinaryTextLines({ repoRoot, revisions, sections: declaredText, gitExecutable, gitRunner })
+    const contentRules = rules.filter((rule) => (rule.kind ?? 'content') === 'content')
+    for (const section of declaredText) {
+      const addedLines = lines.get(section.path)
+      if (!addedLines) {
+        diagnostics.push(incompleteDiagnostic({ repo, path: section.path, message: 'text declared binary could not be read as text, so its content was not scanned', details: { reason: 'declared-binary-text-unreadable' } }))
+        continue
+      }
+      findings.push(...scanAddedContent({ files: [{ path: section.path, added: false, addedLines }], rules: contentRules, exceptions, repo }))
     }
-    findings.push(...scanAddedContent({
-      files: [{ path: filePath, added: false, addedLines }],
-      rules: rules.filter((rule) => (rule.kind ?? 'content') === 'content'),
-      exceptions,
-      repo,
-    }))
   }
   return { findings, diagnostics, bytes: totalBytes }
 }
