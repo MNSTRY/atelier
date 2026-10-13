@@ -264,12 +264,19 @@ machine for weeks.
   or `git commit <paths>` and a linked worktree's own index.
 - `pre-push` runs `atelier boundary push-check` — git writes the ref updates to
   the hook's stdin, and only that range is judged: the change from the
-  remote's commit to the pushed tip, and every commit the push carries that no
-  remote-tracking ref already has, each against its parent, so content added
+  remote's commit to the pushed tip, and every commit the push carries that the
+  remote's tracking refs do not hold, each against its parent, so content added
   and removed again within the push is still caught (the finding names its
-  commit). A brand-new branch is diffed against the empty tree, in SHA-1 and
-  SHA-256 repositories alike, so nothing slips through unscanned. A push
-  carrying more than 1000 such commits is refused; push it in smaller parts.
+  commit). A merge is judged only for what is new against all of its parents,
+  so pulling a collaborator's published work does not refuse your push. The
+  hook passes the remote's name; a hook installed before that judges against
+  every remote's tracking refs, so reinstall it (`atelier boundary
+  install-hooks`) for history that only another remote holds to be judged on
+  its way to a new one. A brand-new branch is diffed against the empty tree, in
+  SHA-1 and SHA-256 repositories alike, so nothing slips through unscanned. A
+  push carrying more than 1000 such commits, or more evidence than the
+  aggregate budget, is refused; push it in smaller parts, an earlier commit
+  first.
 - `atelier boundary audit` scans the current working tree by default and
   **reports without blocking**, listing matches, incomplete-read diagnostics,
   and declared exceptions with their reasons. Use `--head` for a committed

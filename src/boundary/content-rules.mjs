@@ -211,6 +211,8 @@ export const CANONICAL_DIFF_FLAGS = Object.freeze([
   '--inter-hunk-context=0',
   '--submodule=short',
   '--full-index',
+  // A deleted file adds nothing to judge; its removed lines would only spend the output limit.
+  '--irreversible-delete',
 ])
 
 const OCTAL_ESCAPE = /^[0-7]{3}$/
@@ -647,7 +649,7 @@ function declaredBinaryTextLines({ repoRoot, revisions, entries, changedPaths = 
   return outcomes
 }
 
-function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, repo, gitExecutable, gitRunner, indexFile = null }) {
+function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, repo, gitExecutable, gitRunner, indexFile = null, seenBlobs = null }) {
   const findings = []
   const diagnostics = []
   let totalBytes = 0
@@ -658,6 +660,8 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
   for (const section of sections) {
     if (!section.binary || section.deleted || section.path === null || seen.has(section.path)) continue
     seen.add(section.path)
+    // A blob already read for this push was judged then; read each one once.
+    if (section.newBlob && seenBlobs?.has(section.newBlob)) continue
     const filePath = section.path
     if (!section.newBlob) {
       diagnostics.push(incompleteDiagnostic({ repo, path: filePath, message: 'binary content could not be identified in the diff', details: { reason: 'missing-blob-id' } }))
@@ -689,6 +693,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
       continue
     }
     totalBytes += result.bytes
+    seenBlobs?.add(section.newBlob)
     if (totalBytes > BINARY_AGGREGATE_MAX_BYTES) {
       diagnostics.push(incompleteDiagnostic({
         repo,
@@ -753,15 +758,15 @@ export function scanStagedRepository({
   }
 }
 
-function scanRevisionRange({ repoRoot, base, tip, rules, exceptions, repo, gitRunner }) {
+function scanRevisionRange({ repoRoot, base, tip, rules, exceptions, repo, gitRunner, seenBlobs = null }) {
   const acquired = gitOutputResult(repoRoot, canonicalDiffArgs([base, tip]), { runner: gitRunner })
-  if (!acquired.ok) return { acquired, sections: [], findings: [], diagnostics: [], bytes: 0 }
+  if (!acquired.ok) return { acquired, keyed: [], diagnostics: [], bytes: 0 }
   const sections = parseDiffSections(acquired.stdout)
-  const binary = readBinaryChanges({ repoRoot, revisions: [base, tip], sections, rules, exceptions, repo, gitRunner })
+  const binary = readBinaryChanges({ repoRoot, revisions: [base, tip], sections, rules, exceptions, repo, gitRunner, seenBlobs })
+  const findings = [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings]
   return {
     acquired,
-    sections,
-    findings: [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings],
+    keyed: findings.map((item) => [findingKey(item, sections), item]),
     diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
     bytes: acquired.bytes + binary.bytes,
   }
@@ -777,12 +782,37 @@ function findingKey(finding, sections) {
 }
 
 /**
+ * What one commit adds. A merge adds only what is new against every parent:
+ * a side parent's own commits are judged where they were made, and content the
+ * remote already holds is not judged again. A finding is dropped only when a
+ * fully read diff against another parent shows that parent already had it, and
+ * one fully read parent diff covers everything new against all parents.
+ */
+function scanCommit({ repoRoot, commit, parents, empty, rules, exceptions, repo, gitRunner, seenBlobs }) {
+  if (parents.length <= 1) return scanRevisionRange({ repoRoot, base: parents[0] ?? empty, tip: commit, rules, exceptions, repo, gitRunner, seenBlobs })
+  const scans = parents.map((parent) => {
+    const own = new Set(seenBlobs)
+    return { scan: scanRevisionRange({ repoRoot, base: parent, tip: commit, rules, exceptions, repo, gitRunner, seenBlobs: own }), own }
+  })
+  for (const { own } of scans) for (const blob of own) seenBlobs.add(blob)
+  const read = scans.map(({ scan }) => scan).filter((scan) => scan.acquired.ok)
+  const bytes = read.reduce((total, scan) => total + scan.bytes, 0)
+  if (read.length === 0) return scans[0].scan
+  const complete = read.filter((scan) => scan.diagnostics.length === 0)
+  const reference = complete[0] ?? read[0]
+  const keyed = reference.keyed.filter(([key]) => complete.every((scan) => scan === reference || scan.keyed.some(([other]) => other === key)))
+  const diagnostics = complete.length > 0 ? [] : read.flatMap((scan) => scan.diagnostics)
+  return { acquired: reference.acquired, keyed, diagnostics, bytes }
+}
+
+/**
  * Judge what one ref update publishes: the change from the remote's commit to
- * the pushed tip, and every commit the push carries that no remote-tracking
- * ref already has, each against its first parent. Content added and removed
- * again within the push is published in history, so it is judged too; such a
- * finding names its commit. A push carrying more than `maxCommits` new commits
- * is refused rather than judged only by its endpoints.
+ * the pushed tip, and every commit the push carries that the remote's tracking
+ * refs do not hold (any remote's, when the remote is not named), each against
+ * its parent. Content added and removed again within the push is published in
+ * history, so it is judged too; such a finding names its commit. A push carrying
+ * more than `maxCommits` such commits, or more than `maxBytes` of evidence, is
+ * refused rather than judged only by its endpoints.
  */
 export function scanPushUpdate({
   repoRoot,
@@ -790,11 +820,14 @@ export function scanPushUpdate({
   rules = DEFAULT_CONTENT_RULES,
   exceptions = [],
   repo = null,
+  remote = null,
   gitRunner = spawnSync,
   maxCommits = PUSH_COMMIT_SCAN_MAX,
+  maxBytes = CHECK_AGGREGATE_MAX_BYTES,
 } = {}) {
+  const seenBlobs = new Set()
   const base = pushRangeBase(repoRoot, update.remoteSha, { runner: gitRunner })
-  const net = scanRevisionRange({ repoRoot, base, tip: update.localSha, rules, exceptions, repo, gitRunner })
+  const net = scanRevisionRange({ repoRoot, base, tip: update.localSha, rules, exceptions, repo, gitRunner, seenBlobs })
   if (!net.acquired.ok) {
     return {
       findings: [],
@@ -802,10 +835,14 @@ export function scanPushUpdate({
       bytes: 0,
     }
   }
-  const findings = [...net.findings]
+  const reported = new Map(net.keyed)
+  const findings = net.keyed.map(([, item]) => item)
   const diagnostics = [...net.diagnostics]
   let bytes = net.bytes
-  const listed = gitOutputResult(repoRoot, ['rev-list', '--reverse', '--parents', update.localSha, '--not', ...(base === update.remoteSha ? [base] : []), '--remotes'], { runner: gitRunner })
+  // A plainly named remote limits the exclusion to its own tracking refs, so
+  // history held only by another remote is still judged on its way here.
+  const scope = typeof remote === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(remote) ? `--remotes=${remote}` : '--remotes'
+  const listed = gitOutputResult(repoRoot, ['rev-list', '--reverse', '--parents', `--max-count=${maxCommits + 1}`, update.localSha, '--not', ...(base === update.remoteSha ? [base] : []), scope], { runner: gitRunner })
   if (!listed.ok) {
     diagnostics.push(incompleteDiagnostic({ repo, message: 'the commits in this push could not be listed', details: { reason: listed.code } }))
     return { findings, diagnostics, bytes }
@@ -814,29 +851,42 @@ export function scanPushUpdate({
   if (commits.length > maxCommits) {
     diagnostics.push(incompleteDiagnostic({
       repo,
-      message: `this push carries ${commits.length} commits that no remote has, more than the ${maxCommits} judged one by one; push it in smaller parts`,
-      details: { reason: 'push-range-too-long', commits: commits.length, limit: maxCommits },
+      message: `this push carries more than ${maxCommits} commits that ${scope === '--remotes' ? 'no remote holds' : `${remote} does not hold`}, more than are judged one by one; push it in smaller parts, an earlier commit first (git push <remote> <commit>:<ref>)`,
+      details: { reason: 'push-range-too-long', limit: maxCommits },
     }))
     return { findings, diagnostics, bytes }
   }
   // One commit straight on the remote's tip is the endpoint change already judged.
-  if (commits.length === 1 && (commits[0][1] ?? null) === base) return { findings, diagnostics, bytes }
-  const reported = new Set(net.findings.map((item) => findingKey(item, net.sections)))
+  if (commits.length === 1 && commits[0].length === 2 && commits[0][1] === base) return { findings, diagnostics, bytes }
   const empty = emptyTreeFor(repoRoot, { runner: gitRunner })
-  for (const [commit, parent] of commits) {
-    const step = scanRevisionRange({ repoRoot, base: parent ?? empty, tip: commit, rules, exceptions, repo, gitRunner })
+  for (const [commit, ...parents] of commits) {
+    const step = scanCommit({ repoRoot, commit, parents, empty, rules, exceptions, repo, gitRunner, seenBlobs })
+    const short = commit.slice(0, 12)
     if (!step.acquired.ok) {
-      diagnostics.push(incompleteDiagnostic({ repo, message: `commit ${commit} could not be read`, details: { reason: step.acquired.code, commit } }))
+      diagnostics.push(incompleteDiagnostic({ repo, message: `commit ${short} could not be read`, details: { reason: step.acquired.code, commit } }))
       continue
     }
     bytes += step.bytes
-    for (const item of step.findings) {
-      const key = findingKey(item, step.sections)
-      if (reported.has(key)) continue
-      reported.add(key)
-      findings.push({ ...item, commit, message: `${item.message} (in commit ${commit.slice(0, 12)})` })
+    for (const [key, item] of step.keyed) {
+      const retained = reported.get(key)
+      if (retained) {
+        // Already reported: record where else it was published.
+        if (!retained.commit) retained.commits = [...(retained.commits ?? []), commit]
+        continue
+      }
+      const placed = { ...item, commit, message: `${item.message} (in commit ${short})` }
+      reported.set(key, placed)
+      findings.push(placed)
     }
-    diagnostics.push(...step.diagnostics.map((item) => ({ ...item, details: { ...item.details, commit } })))
+    diagnostics.push(...step.diagnostics.map((item) => ({ ...item, message: `${item.message} (in commit ${short})`, details: { ...item.details, commit } })))
+    if (bytes > maxBytes) {
+      diagnostics.push(incompleteDiagnostic({
+        repo,
+        message: `push evidence exceeds the ${maxBytes}-byte aggregate limit; push it in smaller parts`,
+        details: { reason: 'push-evidence-too-large', limitBytes: maxBytes, commit },
+      }))
+      break
+    }
   }
   return { findings, diagnostics, bytes }
 }

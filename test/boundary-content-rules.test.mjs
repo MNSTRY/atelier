@@ -269,6 +269,7 @@ test('the shared guard script contains no repo-specific paths', (t) => {
   const hook = fs.readFileSync(path.join(site, '.git/hooks/pre-push'), 'utf8')
 
   assert.match(hook, /boundary push-check/, 'pre-push must judge the pushed range')
+  assert.match(hook, /--remote="\$\{1:-\}"/, 'pre-push passes the remote Git names')
   assert.doesNotMatch(hook, /cart\.ts|localStorage|:!/, 'repo-specific carve-outs belong in policy, not in shared infrastructure')
   const preCommit = fs.readFileSync(path.join(site, '.git/hooks/pre-commit'), 'utf8')
   assert.match(preCommit, /boundary check --staged/)
@@ -947,6 +948,8 @@ test('content added and removed again within one push is judged in the commit th
   const keptReport = checkPushContent({ project: kept.project, policy: kept.policy, updates: pushUpdate(kept.site), cwd: kept.site })
   const keys = keptReport.errors.filter((item) => item.rule === 'secret-material')
   assert.deepEqual(keys.map((item) => [item.path, item.line, item.commit ?? null]), [['notes/key.txt', 1, null]])
+  // The report still says which commits carry it.
+  assert.deepEqual(keys[0].commits, [git(kept.site, ['rev-parse', 'HEAD~1'])])
 })
 
 test('a push judges each commit no remote has, once, and refuses one that carries too many', (t) => {
@@ -984,7 +987,107 @@ test('a push judges each commit no remote has, once, and refuses one that carrie
   // Past the limit the push is refused, not judged only by its endpoints.
   commit(site, 'e.txt', 'five\n', 'five')
   result = scan({ localRef: 'refs/heads/feature', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/feature', remoteSha: '0'.repeat(40) }, { maxCommits: 1 })
-  assert.deepEqual(result.diagnostics.map((item) => [item.code, item.details.reason, item.details.commits]), [['content-scan-incomplete', 'push-range-too-long', 2]])
+  assert.deepEqual(result.diagnostics.map((item) => [item.code, item.details.reason, item.details.limit]), [['content-scan-incomplete', 'push-range-too-long', 1]])
+  assert.match(result.diagnostics[0].message, /push it in smaller parts/)
+})
+
+test('a pull merge is not judged for what the remote already holds, but an evil merge is', (t) => {
+  const { root, site, policy, project } = makeWorkspace(t)
+  // A collaborator publishes a change the guard would refuse, without the hook.
+  const collaborator = path.join(root, 'collaborator')
+  execFileSync('git', ['clone', '--quiet', path.join(root, 'example-site.git'), collaborator])
+  git(collaborator, ['config', 'user.email', 'other@example.invalid'])
+  git(collaborator, ['config', 'user.name', 'Other'])
+  fs.appendFileSync(path.join(collaborator, CART), 'export const load = () => localStorage.getItem("cart")\n')
+  git(collaborator, ['commit', '--quiet', '-am', 'published without the hook'])
+  git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  commit(site, 'README.md', '# Site\n', 'readme')
+  git(site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
+  let report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.deepEqual(report.errors, [], 'content the remote already holds is not judged again')
+
+  // A key that only the merge introduces is new against every parent.
+  fs.appendFileSync(path.join(site, 'README.md'), `${KEY_MATERIAL}\n`)
+  git(site, ['add', 'README.md'])
+  git(site, ['commit', '--quiet', '--amend', '--no-edit'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  assert.equal(git(site, ['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ').length, 3)
+  // Removed again afterwards, so only the merge itself carries it.
+  fs.writeFileSync(path.join(site, 'README.md'), '# Site\n')
+  commit(site, 'README.md', '# Site\n', 'removes the key')
+  report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'README.md' && item.commit === merge), JSON.stringify(report.errors))
+  assert.ok(report.errors.every((item) => item.rule !== 'browser-persistence'), JSON.stringify(report.errors))
+})
+
+test('a key added and removed on a merged side branch is judged in its own commit', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  git(site, ['checkout', '--quiet', '-b', 'side'])
+  commit(site, 'side/key.txt', `${KEY_MATERIAL}\n`, 'adds a key on the side')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'side', 'key.txt'))
+  commit(site, 'side/readme.txt', 'nothing\n', 'removes it')
+  git(site, ['checkout', '--quiet', '-'])
+  commit(site, 'main.txt', 'main work\n', 'main work')
+  git(site, ['merge', '--quiet', '--no-ff', '--no-edit', 'side'])
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.commit === added), JSON.stringify(report.errors))
+})
+
+test('an intermediate commit the push check cannot read refuses the push and names the commit', (t) => {
+  // A binary over the per-file limit, added and removed again.
+  const big = makeWorkspace(t)
+  commit(big.site, 'assets/big.bin', Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL), Buffer.alloc(BINARY_FILE_MAX_BYTES + 1, 1)]), 'a large binary')
+  const bigCommit = git(big.site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(big.site, 'assets', 'big.bin'))
+  commit(big.site, 'assets/readme.txt', 'gone\n', 'removes it')
+  let report = checkPushContent({ project: big.project, policy: big.policy, updates: pushUpdate(big.site), cwd: big.site })
+  assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.details.commit === bigCommit && new RegExp(bigCommit.slice(0, 12)).test(item.message)), JSON.stringify(report.errors))
+
+  // A text change whose diff is over the limit, added and removed again.
+  const wide = makeWorkspace(t)
+  commit(wide.site, 'notes/huge.txt', `${KEY_MATERIAL}\n${'filler line of text\n'.repeat(900000)}`, 'a huge text file')
+  const wideCommit = git(wide.site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(wide.site, 'notes', 'huge.txt'))
+  commit(wide.site, 'notes/readme.txt', 'gone\n', 'removes it')
+  report = checkPushContent({ project: wide.project, policy: wide.policy, updates: pushUpdate(wide.site), cwd: wide.site })
+  assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.details?.commit === wideCommit), JSON.stringify(report.errors))
+  // Deleting it again is readable: a deletion's removed lines are not printed.
+  assert.deepEqual(report.errors.filter((item) => item.code === 'content-scan-incomplete').map((item) => item.details?.commit), [wideCommit])
+})
+
+test('the push check refuses when it cannot list the commits or the evidence grows past its budget', (t) => {
+  const { site } = makeWorkspace(t)
+  commit(site, 'a.txt', 'one\n', 'one')
+  commit(site, 'b.txt', 'two\n', 'two')
+  const update = pushUpdate(site)[0]
+  let result = scanPushUpdate({ repoRoot: site, update, repo: 'site', gitRunner: (exe, args, opts) => (args.includes('rev-list') ? { status: 128, stdout: '' } : spawnSync(exe, args, opts)) })
+  assert.ok(result.diagnostics.some((item) => item.code === 'content-scan-incomplete' && /could not be listed/.test(item.message)), JSON.stringify(result.diagnostics))
+  // Most of this push's evidence is in a commit that adds a large file and one that removes it.
+  commit(site, 'notes/large.txt', 'a line of filler text\n'.repeat(5000), 'a large file')
+  fs.rmSync(path.join(site, 'notes', 'large.txt'))
+  commit(site, 'notes/readme.txt', 'gone\n', 'removes it')
+  const wide = pushUpdate(site)[0]
+  const endpoints = scanPushUpdate({ repoRoot: site, update: wide, repo: 'site', maxCommits: 0 })
+  assert.ok(endpoints.bytes < 50000)
+  result = scanPushUpdate({ repoRoot: site, update: wide, repo: 'site', maxBytes: 50000 })
+  assert.ok(result.diagnostics.some((item) => item.details.reason === 'push-evidence-too-large'), JSON.stringify(result.diagnostics))
+  assert.ok(result.bytes > 50000)
+})
+
+test('history only another remote holds is judged on its way to a new one', (t) => {
+  const { root, site } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  // Published to origin earlier, without the hook.
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  execFileSync('git', ['init', '--quiet', '--bare', path.join(root, 'public.git')])
+  git(site, ['remote', 'add', 'public', path.join(root, 'public.git')])
+  const update = { localRef: 'refs/heads/main', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: '0'.repeat(40) }
+  const toPublic = scanPushUpdate({ repoRoot: site, update, repo: 'site', remote: 'public' })
+  assert.ok(toPublic.findings.some((item) => item.rule === 'secret-material' && item.commit === added), JSON.stringify(toPublic.findings))
 })
 
 test('a new branch in a SHA-256 repository is scanned from its empty tree', (t) => {
