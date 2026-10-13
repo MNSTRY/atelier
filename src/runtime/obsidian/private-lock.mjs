@@ -125,12 +125,24 @@ export async function acquirePrivateGenerationLock({ workspaceRoot, directory, w
   const ticket = validateTicket({ schema: LOCK_TICKET_SCHEMA, workspaceId, purpose, pid: process.pid, machine: machineDigest(), nonce: randomBytes(16).toString('hex'), acquiredAt, service }, workspaceId)
   const body = JSON.stringify(ticket)
   const file = path.join(contained, ticketName(generation, 'json'))
+  // A ticket published and then not handed to its caller, because a later step failed (the directory sync or the
+  // read-back of the publication, the listing that confirms it), is removed while it still holds these bytes: nobody
+  // would release it, and every later acquisition by this process would find it held by this process. One that does
+  // not hold them is another holder's and is left alone.
+  const withdraw = () => {
+    try { if (readRegularTextNoFollow(file) === body) fs.unlinkSync(file) } catch { /* gone, or not ours to remove */ }
+  }
   try { publishPrivateFile(file, body) } catch (error) {
     if (error.code === 'EEXIST') return { acquired: false, reason: 'lost-the-race-for-this-generation', holder: null }
+    withdraw()
     throw error
   }
   // Confirm: a decision made on an old listing finds the newer ticket here and withdraws.
-  const after = listGenerations(contained)
+  let after
+  try { after = listGenerations(contained) } catch (error) {
+    withdraw()
+    throw error
+  }
   if (after.highest !== generation) {
     try { fs.unlinkSync(file) } catch { /* a lower generation is ignored and pruned by the next holder */ }
     return { acquired: false, reason: 'a-newer-holder-exists', holder: null }
