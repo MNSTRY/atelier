@@ -1,0 +1,275 @@
+{
+  "upstreamCommit": "1cd9a36c0c57a661d2d2234bc3207e887e1ba104",
+  "upstreamTree": "0b2f8588510d58e128ac56264c96dfd1fb4dd22b",
+  "modules": {
+    "graphify": {
+      "relativePath": "__init__.py",
+      "sha256": "5afcd670aa65337ae49735582a9bc482a721abdfbfc063fcad1d0ccc90b0838a"
+    },
+    "graphify.google_workspace": {
+      "relativePath": "google_workspace.py",
+      "sha256": "f5563580450aea0830159ebed58316594161b6bcb9539cd97d161ff529ceae9a"
+    },
+    "graphify.paths": {
+      "relativePath": "paths.py",
+      "sha256": "ba3eea308b902e9b1ec55c61e6cd2bb703dae425da9bfc80ccf7f104556d619c"
+    },
+    "graphify.detect": {
+      "relativePath": "detect.py",
+      "sha256": "0c539db73e11b93b14c9ae2a61d6094a3aae13a9dbd49158e3d5164a28b426a6"
+    },
+    "graphify.ids": {
+      "relativePath": "ids.py",
+      "sha256": "d9befd67479a2e484e0fdb884cdbfd77ee0c96487970196abda68751d4e69e4e"
+    },
+    "graphify.manifest_ingest": {
+      "relativePath": "manifest_ingest.py",
+      "sha256": "f03522373429d0a8dd54ea41ffa2dd48939b1dc516098186058fd4d258c50ca0"
+    },
+    "graphify.cache": {
+      "relativePath": "cache.py",
+      "sha256": "b630ce0c29cf5c00e2a43a7196492b7531ed905ac48c86f5f42c13e2ce841dbc"
+    },
+    "graphify.security": {
+      "relativePath": "security.py",
+      "sha256": "92c4c6447c855195aa3ca0f50fde8810843d62028240aa4ec0f45be2eb0336a3"
+    },
+    "graphify.extractors.base": {
+      "relativePath": "extractors/base.py",
+      "sha256": "cd11628d3d4c05dcf0df002823712595ba2fac848fa146517a3bf41ff68cc2e8"
+    },
+    "graphify.extractors.apex": {
+      "relativePath": "extractors/apex.py",
+      "sha256": "4881d0e160d98d4045cda155cef7e4047d74dd46cd5f20288583bd2776d9ef03"
+    },
+    "graphify.extractors.bash": {
+      "relativePath": "extractors/bash.py",
+      "sha256": "1062a69a5bd696149672d95b9128296fe83c5acf8b2b2dccdb1a8fbe190d220d"
+    },
+    "graphify.extractors.blade": {
+      "relativePath": "extractors/blade.py",
+      "sha256": "14cf2475faf9d956c3fc33441421d072dc39085ac3c4bd38eebfd1bac28ed576"
+    },
+    "graphify.extractors.cobol": {
+      "relativePath": "extractors/cobol.py",
+      "sha256": "7807e29e9e7f4e345bf108fa5edd9a6b5468eaec743acb978b503252ce94fa0b"
+    },
+    "graphify.extractors.commonlisp": {
+      "relativePath": "extractors/commonlisp.py",
+      "sha256": "bb77c4e0f8c2269cee49ad6a8d7972492023ad4757f0605ad422e00e88a67a09"
+    },
+    "graphify.extractors.dart": {
+      "relativePath": "extractors/dart.py",
+      "sha256": "4c95d7f78cf9c27ad628f1abf44ad8045fb6b55d793c5bdbd6ae1be939105666"
+    },
+    "graphify.extractors.dm": {
+      "relativePath": "extractors/dm.py",
+      "sha256": "f3da427b091028052afb9a7986e9ed16e79c05d5f2cf1638c8a815d3438bf0a4"
+    },
+    "graphify.extractors.elixir": {
+      "relativePath": "extractors/elixir.py",
+      "sha256": "6d4aaa32dceb5105ac7d42f6e61ff06c8ee990c4e6e5b23958056b949db3e815"
+    },
+    "graphify.extractors.erlang": {
+      "relativePath": "extractors/erlang.py",
+      "sha256": "c9eb5f779ad04ecea9c02ca17219d2118fdb4207ef3c7f16ee2909a487377eb4"
+    },
+    "graphify.extractors.fortran": {
+      "relativePath": "extractors/fortran.py",
+      "sha256": "b151c1bf6ee7b285bf88b55aecf5c3a5f89564df1681cda9c034e18b8828ed35"
+    },
+    "graphify.extractors.go": {
+      "relativePath": "extractors/go.py",
+      "sha256": "3d78726e946904b4c450545d18a93f6f97acf3a1a1e66a6d514e05cf163dc77f"
+    },
+    "graphify.extractors.json_config": {
+      "relativePath": "extractors/json_config.py",
+      "sha256": "3099dff7f78e044380699138a4087729cca423f423c96fea7ea791fa4c25b599"
+    },
+    "graphify.extractors.models": {
+      "relativePath": "extractors/models.py",
+      "sha256": "038cbf04e17aec6dc71d8e6d886ab57fcfeffc36bf8d5d4fb0aeed88a6fc4719"
+    },
+    "graphify.extractors.resolution": {
+      "relativePath": "extractors/resolution.py",
+      "sha256": "fb1e337225b14d0c442a8ca01b08a1a536b54cb220e34bacc74eaf0a5b3d8455"
+    },
+    "graphify.extractors.engine": {
+      "relativePath": "extractors/engine.py",
+      "sha256": "a731d4fa5bb62cfa9b9943e4c39b26dc2244ebd81a11f1822f74787b6d78c958"
+    },
+    "graphify.extractors.julia": {
+      "relativePath": "extractors/julia.py",
+      "sha256": "f2b4232178b74e9873ad9a09cdd1eaafde018b9db176175c0028279ba99f603c"
+    },
+    "graphify.extractors.markdown": {
+      "relativePath": "extractors/markdown.py",
+      "sha256": "30c980898b946fd4c6290fe82eb42f4bb22a05237ab887bc89287ed6edd226f0"
+    },
+    "graphify.extractors.objc": {
+      "relativePath": "extractors/objc.py",
+      "sha256": "98e868e1d0a55186caa7dbce0f0af1d7aebb8ebaa8a26b8b544acbb91d1c6203"
+    },
+    "graphify.extractors.pascal": {
+      "relativePath": "extractors/pascal.py",
+      "sha256": "3eae81396a536251c58bcf96d89f33d1583a87a6f4bf55d79289ccccde17e77d"
+    },
+    "graphify.extractors.pascal_forms": {
+      "relativePath": "extractors/pascal_forms.py",
+      "sha256": "ad68d27b5d4680c1d6b172ae17245601910eadc3ccb2c90e581764ad76107013"
+    },
+    "graphify.extractors.powershell": {
+      "relativePath": "extractors/powershell.py",
+      "sha256": "67f9d1b56019a198ceb15ccfb722ee31f263f051124e496145dea82974b218f8"
+    },
+    "graphify.extractors.r": {
+      "relativePath": "extractors/r.py",
+      "sha256": "716047e57bb6689423eb0b0c3dffedd278330e778f7d0b4e12787a72278ad2c9"
+    },
+    "graphify.extractors.razor": {
+      "relativePath": "extractors/razor.py",
+      "sha256": "82cc29516d4951741d3f34397f5612c55be019607339b1f268c22f2a215061f0"
+    },
+    "graphify.extractors.rust": {
+      "relativePath": "extractors/rust.py",
+      "sha256": "0f79a21f9213ee29cf825971d0df4a0734b2d3c966786e0fec3a3f8ba936855f"
+    },
+    "graphify.extractors.sln": {
+      "relativePath": "extractors/sln.py",
+      "sha256": "9b5987dacc793277ba5db7de4187c89a9a83b6f2ba07a90a85734e597112470a"
+    },
+    "graphify.extractors.solidity": {
+      "relativePath": "extractors/solidity.py",
+      "sha256": "abe14c5784d02cc0d8b6b4533d66bb736e0b8e914ecc8baa5251b58fe90c9e16"
+    },
+    "graphify.extractors.sql": {
+      "relativePath": "extractors/sql.py",
+      "sha256": "8186f36b85970a5394b1692a76cb4f2e6f8ce186cc806bc8757368a1d04c349f"
+    },
+    "graphify.extractors.terraform": {
+      "relativePath": "extractors/terraform.py",
+      "sha256": "1516abe54b424300daee68bcbc9a07059948863aa257395946ef8081b9b14211"
+    },
+    "graphify.extractors.verilog": {
+      "relativePath": "extractors/verilog.py",
+      "sha256": "f3d8a6ef6fed7eade3b845ff91ec5a0e7100d0afe3794b864e08775868a7b9f4"
+    },
+    "graphify.extractors.vbnet": {
+      "relativePath": "extractors/vbnet.py",
+      "sha256": "6a8e93ffe4a47620fb66931c7f668f480b3119b3812e50c14e7a2b60c3a59e78"
+    },
+    "graphify.extractors.zig": {
+      "relativePath": "extractors/zig.py",
+      "sha256": "a1c7c9bb72277aee57a39fd97a55359a40cd17a4d61ec401fcd12b4796111111"
+    },
+    "graphify.extractors": {
+      "relativePath": "extractors/__init__.py",
+      "sha256": "9c809d014a2c90d2f3e442afc51cfa5b5c8b2eae78e169fe84843283eb51b69a"
+    },
+    "graphify.mcp_ingest": {
+      "relativePath": "mcp_ingest.py",
+      "sha256": "7553845a7cae7c310803bf37d992b695b27d21e1b827c1c33dbed2b15971be61"
+    },
+    "graphify.resolver_registry": {
+      "relativePath": "resolver_registry.py",
+      "sha256": "bd5904412417ead6104852c1d79c3e8d1aebb7ab3f80a13330f19be7c18f307b"
+    },
+    "graphify.validate": {
+      "relativePath": "validate.py",
+      "sha256": "be068c6b2ff4e514f31663e0155a9d63f35096d154b98ab6c9c467a23febd6f7"
+    },
+    "graphify.build": {
+      "relativePath": "build.py",
+      "sha256": "8f4b17391c60331de1875a47d697191d5ebe50011f36d204341f53e60c210eda"
+    },
+    "graphify.ruby_resolution": {
+      "relativePath": "ruby_resolution.py",
+      "sha256": "3a300b61def823f78d2305a072ea26f27c4f1dd8cf67bc060ab151213e9142a2"
+    },
+    "graphify.csharp_dispatch": {
+      "relativePath": "csharp_dispatch.py",
+      "sha256": "9c67537a297c676f7b736423f854b62a32c686c4cd63e3b1a357116b013ebb7a"
+    },
+    "graphify.pascal_resolution": {
+      "relativePath": "pascal_resolution.py",
+      "sha256": "e4e9400ee20e6b410e521ad24bfe4c7e09742590ba1b0964cc84b49158d9318f"
+    },
+    "graphify.markdown_resolution": {
+      "relativePath": "markdown_resolution.py",
+      "sha256": "e582a66581b5a4eca3951ddddf33ca891979671f40f088e00788bee4eb6e1ed8"
+    },
+    "graphify.extractors.csharp": {
+      "relativePath": "extractors/csharp.py",
+      "sha256": "6f75b10512d1f7bcc51ec24790c6973e2e9356bac92a289f633400f551fb2535"
+    },
+    "graphify.extractors.ocaml": {
+      "relativePath": "extractors/ocaml.py",
+      "sha256": "2f35fb60394b4a73752d99d4a852bba7cdd9d4014071c5bfeb603d21578508df"
+    },
+    "graphify.extractors.robot": {
+      "relativePath": "extractors/robot.py",
+      "sha256": "5d3adab1d61ee2af37d5c77ee88be399d9271060e72a36b5e332704b01e47980"
+    },
+    "graphify.symbol_resolution": {
+      "relativePath": "symbol_resolution.py",
+      "sha256": "2430b652840912a77f9a1a234fa27e6a51a269bc43f810c8574ea826ed1d27fb"
+    },
+    "graphify.extract": {
+      "relativePath": "extract.py",
+      "sha256": "2facca59e22f735f68abc188bab0fa519427f4dc4deb2a235ed0e7c50ebe9c84"
+    },
+    "graphify._minhash": {
+      "relativePath": "_minhash.py",
+      "sha256": "eea373a21d8f9c97beecb08ca06f0e2d273cd40e2e91dfbcaec4972bd45fdf0c"
+    },
+    "graphify.dedup": {
+      "relativePath": "dedup.py",
+      "sha256": "7e65caa8ebc393db375e49c89764e6b089a77e88c10b18ff5f37fd440c7d1dfc"
+    },
+    "graphify.analyze": {
+      "relativePath": "analyze.py",
+      "sha256": "e6011dcbb35144134d8ebef12d17ea869e73749e79722caa9527ed30500edd4a"
+    },
+    "graphify.exporters": {
+      "relativePath": "exporters/__init__.py",
+      "sha256": "0a1e96c29d7601843980a62a1069a95c05cb9f07d6f431a054feb8664abf21e1"
+    },
+    "graphify.exporters.graphdb": {
+      "relativePath": "exporters/graphdb.py",
+      "sha256": "e80bb1a706568f85d1e97d72a649c96bdac708c9aa3c1d9ee9a59ad7a2acd0be"
+    },
+    "graphify.exporters.base": {
+      "relativePath": "exporters/base.py",
+      "sha256": "225e77141d4f3d568c652d7ae3177bbcd4aa7749259bb77dcb4f1f0414249140"
+    },
+    "graphify.exporters.html": {
+      "relativePath": "exporters/html.py",
+      "sha256": "415d96c0563769b89acf02e20043998c64edb977cd5049fbe3d1e319b7e359f8"
+    },
+    "graphify.export": {
+      "relativePath": "export.py",
+      "sha256": "312f4658900e33360e6d23a005ee4ed227a30ae7737bfeba13318f7f16af5576"
+    },
+    "graphify.cluster": {
+      "relativePath": "cluster.py",
+      "sha256": "bfbfeac12c0a59cb7824d081e32a77e7cdcadd5530e9e6d1bf82264b08a1a78f"
+    },
+    "graphify.serve": {
+      "relativePath": "serve.py",
+      "sha256": "a6df71d1c6efd3281d2938f8c234d987ba61a92270db585490688d194b7f6bec"
+    },
+    "graphify.affected": {
+      "relativePath": "affected.py",
+      "sha256": "c679c7e7f8881973e449fd885dd0ccc096dcc074f4c93f43962b1ce957ef77a7"
+    },
+    "graphify.ingest": {
+      "relativePath": "ingest.py",
+      "sha256": "24b3f65ce30c977e245473c75b75e12c23b423a83dcb9a318ac72a49d3888df6"
+    },
+    "graphify.reflect": {
+      "relativePath": "reflect.py",
+      "sha256": "53d877f8009344cfc721d400444bbf2c7f7fcdcd3c4f97580a369c4f79b06db0"
+    }
+  },
+  "thirdPartyDependencyAuthority": "Host-owned pinned public wheel/dependency environment; this manifest binds Graphify Python source, not arbitrary third-party native extensions."
+}

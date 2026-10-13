@@ -717,6 +717,11 @@ class GraphifySupplier:
                 settings = {"parallel": False, "max_workers": 1, **settings}
                 require(type(settings["parallel"]) is bool and type(settings["max_workers"]) is int
                         and 1 <= settings["max_workers"] <= 32, "BUDGET_UNBOUNDED", "Finite native structural worker bound required")
+                # Parallel extraction starts worker processes that import Graphify through the
+                # ordinary import system, outside the pinned source loader, so they may run a
+                # cached pyc this supplier never attested. Only in-process extraction is admitted.
+                require(settings["parallel"] is False, "NATIVE_WORKERS_UNATTESTED",
+                        "Parallel native extraction runs worker processes outside the attested loader")
             if op == "cache-check":
                 require(settings.get("prompt") is None or isinstance(settings["prompt"], str), "PROMPT_SCOPE", "Prompt must be explicit text")
                 if settings.get("prompt_file") is not None:
