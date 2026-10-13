@@ -127,6 +127,8 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
     clock: () => new Date(nowMs),
     advance: (ms) => { nowMs += ms },
     calls: { buildGraph: 0, prepareView: 0, publishView: [] },
+    // Of the graphs counted in calls.buildGraph, those built through the cooperative seam.
+    cooperativeBuilds: 0,
     snapshots: [],
     watchers: [],
     source: (relative) => path.join(projectDir, relative),
@@ -165,9 +167,13 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
     engine({ primitives = ENGINE_PRIMITIVES, seams = {}, ...options } = {}) {
       const replacedPrepare = typeof seams.prepareView === 'function' && seams.prepareView !== DEFAULT.prepareView
         && (seams.prepareViewCooperatively === undefined || seams.prepareViewCooperatively === DEFAULT.prepareViewCooperatively)
+      // The same for the graph: a replaced buildGraph builds every graph, synchronously.
+      const replacedBuild = typeof seams.buildGraph === 'function' && seams.buildGraph !== DEFAULT.buildGraph
+        && (seams.buildGraphCooperatively === undefined || seams.buildGraphCooperatively === DEFAULT.buildGraphCooperatively)
       const counted = {
         ...seams,
         buildGraph: (input) => { world.calls.buildGraph += 1; return (seams.buildGraph ?? DEFAULT.buildGraph)(input) },
+        buildGraphCooperatively: replacedBuild ? null : (input) => { world.calls.buildGraph += 1; world.cooperativeBuilds += 1; return (seams.buildGraphCooperatively ?? DEFAULT.buildGraphCooperatively)(input) },
         prepareView: (input) => { world.calls.prepareView += 1; return (seams.prepareView ?? DEFAULT.prepareView)(input) },
         prepareViewCooperatively: replacedPrepare ? null : (input) => { world.calls.prepareView += 1; return (seams.prepareViewCooperatively ?? DEFAULT.prepareViewCooperatively)(input) },
         publishView: async (input) => { world.calls.publishView.push(input.recoveryStore.scopeId); return (seams.publishView ?? DEFAULT.publishView)(input) },
@@ -219,6 +225,82 @@ test('cooperative engine refuses changed scope and machine settings across a pre
     assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
     assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
     assert.equal(world.calls.publishView.length, 0)
+  })
+})
+
+test('the graph is built with the event loop given a turn between the Markdown sources of the census, and is the graph the build in one stretch gives', async (t) => {
+  const world = makeWorld(t)
+  for (let number = 0; number < 70; number += 1) fs.writeFileSync(world.source(`east-wing/notes/buoy-${String(number).padStart(2, '0')}.md`), note({ id: `east-wing:buoy-${number}`, title: `Buoy ${number}`, body: `Buoy ${number} marks the channel.` }))
+  const project = world.loadProject()
+  // The turns of the event loop: an immediate that queues itself again. No clock is read.
+  let turns = 0
+  let spinning = true
+  const spin = () => { if (!spinning) return; turns += 1; setImmediate(spin) }
+  setImmediate(spin)
+  t.after(() => { spinning = false })
+  const stretchesOf = async (scheduling) => {
+    const seen = new Set()
+    const graph = await DEFAULT.buildGraphCooperatively({ project, eligibility: DEFAULT_ELIGIBILITY, scheduling: { ...scheduling, onBurst: () => { seen.add(turns) } } })
+    return { graph, stretches: seen.size }
+  }
+  const once = DEFAULT.buildGraph({ project, eligibility: DEFAULT_ELIGIBILITY })
+  const cooperative = await stretchesOf({})
+  assert.deepEqual(cooperative.graph, once, 'the same graph')
+  assert.ok(cooperative.stretches >= 3, `the census of the Markdown sources ran in ${cooperative.stretches} stretch(es)`)
+  // Mutation control: a budget that never asks for a turn builds in one stretch.
+  const through = await stretchesOf({ maxUnits: 1_000_000, budgetMs: 1_000_000 })
+  assert.deepEqual(through.graph, once)
+  assert.ok(through.stretches <= 1, 'the oracle can fail')
+  // The settings are checked before the first source is read: a guard that refuses from the start refuses the build,
+  // even under a budget that never waits.
+  const refusal = new Error('the settings moved')
+  await assert.rejects(DEFAULT.buildGraphCooperatively({ project, eligibility: DEFAULT_ELIGIBILITY, scheduling: { maxUnits: 1_000_000, budgetMs: 1_000_000, guard: () => { throw refusal } } }), (error) => error === refusal)
+  // With the engine's file cache: filled by the first build, reused by the second. The observation index that spares
+  // the reads is the engine's; the engine test of a warm tick pins it.
+  const cache = DEFAULT.createGraphCache()
+  const filled = await DEFAULT.buildGraphCooperatively({ project, eligibility: DEFAULT_ELIGIBILITY, cache })
+  assert.deepEqual(filled, once)
+  assert.deepEqual(await DEFAULT.buildGraphCooperatively({ project, eligibility: DEFAULT_ELIGIBILITY, cache }), DEFAULT.buildGraph({ project, eligibility: DEFAULT_ELIGIBILITY, cache }))
+  spinning = false
+})
+
+test('cooperative engine builds the graph with turns of the event loop, and refuses changed settings across a wait of the build', needsExchange, async (t) => {
+  const plain = makeWorld(t)
+  const quiet = plain.engine()
+  assert.equal(plain.scope(await quiet.tick()).state, 'current')
+  assert.deepEqual([plain.calls.buildGraph, plain.cooperativeBuilds], [1, 1], 'the first tick builds through the cooperative seam')
+  // A replaced buildGraph builds its own way.
+  const replaced = makeWorld(t)
+  let replacements = 0
+  const own = replaced.engine({ seams: { buildGraph: (input) => { replacements += 1; return DEFAULT.buildGraph(input) } } })
+  assert.equal(replaced.scope(await own.tick()).state, 'current')
+  assert.deepEqual([replacements, replaced.cooperativeBuilds], [1, 0])
+  // A setting changed at a wait of the build: the build itself refuses at its next wait, so nothing is prepared from
+  // it, the view refuses as mixed-read, and the next tick publishes under the new setting.
+  for (const kind of ['scope', 'machine']) await t.test(kind, async (t) => {
+    const world = makeWorld(t)
+    let changed = false
+    let built = null
+    const engine = world.engine({ seams: { buildGraphCooperatively: (input) => DEFAULT.buildGraphCooperatively({
+      ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (changed || phase !== 'graph-census') return
+        changed = true
+        if (kind === 'scope') world.writeExt(settingsOf([EAST_SCOPE]))
+        else world.configureMachine({ maintenanceMode: 'manual', audienceAllow: ['public'] })
+      } },
+    }).then((graph) => { built = 'built'; return graph }, (error) => { built = error?.code ?? 'threw'; throw error }) } })
+    const report = await engine.tick()
+    assert.equal(changed, true)
+    assert.equal(built, 'mixed-read', 'the build refused at the wait after the change')
+    assert.equal(world.calls.prepareView, 0, 'nothing was prepared from it')
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+    assert.equal(world.calls.publishView.length, 0)
+    const next = await engine.tick()
+    assert.equal(next.state, 'ticked')
+    // Under the new scope settings the east view is published and the whole view, no longer configured, is disabled.
+    const expected = kind === 'scope' ? [EAST_SCOPE.scopeId] : [FULL_SCOPE.scopeId]
+    assert.deepEqual(next.scopes.filter((entry) => entry.state === 'current').map((entry) => entry.scopeId), expected)
+    assert.deepEqual(world.calls.publishView, expected, 'the next tick publishes under the new setting')
   })
 })
 
@@ -571,6 +653,37 @@ test('an engine handed the production seams with prepareView replaced prepares t
   t.after(() => engine.stop())
   const report = await engine.tick()
   assert.deepEqual([world.scope(report).state, replaced], ['current', 1], 'the cooperative preparation that ships does not stand in for a replaced prepareView')
+})
+
+test('an engine handed a replaced buildGraph builds every graph through it, whether it was handed that one member or the production seams with it replaced', needsExchange, async (t) => {
+  for (const handed of ['member', 'production']) await t.test(handed, async (t) => {
+    const world = makeWorld(t)
+    let replaced = 0
+    const buildGraph = (input) => { replaced += 1; return DEFAULT.buildGraph(input) }
+    // Built here rather than through the counting world, so the engine's own rule is what decides.
+    const engine = createMaintenanceEngineForOracleTests({
+      loadProject: world.loadProject, dataRoot: world.dataRoot, adapterFactory: absentAdapter, clock: world.clock, randomBytes: fixedRandom, quietPeriodMs: 0, watcherFactory: () => ({ close() {} }),
+      seams: handed === 'member' ? { buildGraph } : { ...createProductionSeams(), buildGraph },
+    })
+    t.after(() => engine.stop())
+    const report = await engine.tick()
+    assert.deepEqual([world.scope(report).state, replaced], ['current', 1], 'the cooperative build that ships does not stand in for a replaced buildGraph')
+  })
+})
+
+test('the graph built with turns of the event loop opens only the source that changed: every other source is known unchanged from the observation index', needsExchange, async (t) => {
+  const builds = []
+  const recordingBuild = async (input) => { const graph = await DEFAULT.buildGraphCooperatively(input); builds.push(graph.fileCensus); return graph }
+  const world = makeWorld(t)
+  const engine = world.engine({ seams: { buildGraphCooperatively: recordingBuild } })
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  assert.deepEqual(builds.splice(0), [{ reused: 0, derived: 3, read: 3 }], 'the first build reads every Markdown source')
+  fs.appendFileSync(world.source('east-wing/notes/compass.md'), '\nSouth is painted white.\n')
+  world.advance(1000)
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  assert.deepEqual(builds.splice(0), [{ reused: 2, derived: 1, read: 1 }], 'one source is opened and parsed again; the others are not opened')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+  assert.equal(world.cooperativeBuilds, 2, 'both ticks built through the cooperative seam')
 })
 
 test('a setting changed while candidates are being staged refuses the view as mixed-read, not as a staging failure', needsExchange, async (t) => {

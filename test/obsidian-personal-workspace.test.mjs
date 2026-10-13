@@ -768,6 +768,24 @@ test('the cached route: one load, a composition only when the validity key chang
   assert.equal(composed, 4, 'only the new engine\'s first full reconciliation asked; no caller composed')
 })
 
+test('the engine builds a bound project by its own route, with the composition off the event loop, not by the build that waits between sources', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const production = createProductionSeams()
+  const deferred = []
+  let cooperative = 0
+  // Both seams counted and passed through, so neither replaces the other.
+  const seams = {
+    buildGraph: (args) => { deferred.push(args.deferPersonalValidation); return production.buildGraph(args) },
+    buildGraphCooperatively: (args) => { cooperative += 1; return production.buildGraphCooperatively(args) },
+  }
+  const engine = ari.engine({ seams })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  assert.equal(cooperative, 0, 'the build that waits between sources is not asked for a bound project')
+  assert.ok(deferred.length > 0 && deferred.every((value) => value === true), 'every build of the bound project defers the composition\'s validation off the event loop')
+})
+
 test('mutation control: a cached build without the composition\'s link-target rule is caught', async (t) => {
   const { ari } = makeWorld(t, { people: ['ari'] })
   ari.bind(createPersonalWorkspaceBinderForOracleTests({ build: (project, options) => buildCanonicalGraph(project, options) }))

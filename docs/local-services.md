@@ -203,14 +203,18 @@ the child it created. If that proof never arrives it stops only that child, by
 its process handle, and reports the private operational log,
 `state/service/service.log`.
 
-Stretches of a tick are synchronous (reading sources and building the
-canonical graph, capturing the source snapshot, the publisher's restart
-recovery, its exchange probe, writing the journal, the look again at
-displaced files), so a healthy service in a long one may not answer health
-within the deadline; observing the vault and source files before a view is
-prepared, preparing and publishing a view, and reading it back after a
-commit yield between files and between publication units, and health is
-answered meanwhile. A service that does not answer in time is `busy`, not
+Stretches of a tick are synchronous (walking the directories, reading the
+HTML sources and the sidecars of PDF and Word documents, resolving links and
+assembling the canonical graph, building the whole graph of a project bound to
+a personal workspace, capturing the source snapshot, the
+publisher's restart recovery, its exchange probe, writing the journal, the
+look again at displaced files), so a healthy service in a long one may not
+answer health within the deadline; observing the vault and source files before
+a view is prepared, reading the Markdown sources into the canonical graph,
+preparing
+and publishing a view, and reading it back after a commit yield between files
+and between publication units, and health is answered meanwhile. A service
+that does not answer in time is `busy`, not
 `occupied`: it is
 never adopted, never stopped and never started over, and a `start` whose own
 child went straight into a long first tick reports it as started and busy

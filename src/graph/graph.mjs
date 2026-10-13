@@ -5,9 +5,10 @@ import { VALID_AUDIENCES as PROJECTION_AUDIENCES } from '../projection/policy.mj
 import {
   REPO_ACCESS_SCHEMA,
   VALID_RELATION_TYPES,
-  buildKnowledgeGraph,
+  buildKnowledgeGraphSteps,
   createGraphFileCache,
   parseYamlSubset,
+  runGraphSteps,
 } from './knowledge-graph.mjs'
 
 export { createGraphFileCache }
@@ -116,11 +117,12 @@ function externalRepos(project) {
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
 }
 
-function canonicalBuild(project, overrides = {}) {
+function* canonicalBuildSteps(project, overrides = {}) {
   const input = canonicalInput(project)
-  const result = buildKnowledgeGraph({ ...input.options, ...overrides })
+  const result = yield* buildKnowledgeGraphSteps({ ...input.options, ...overrides })
   return { input, result }
 }
+const canonicalBuild = (project, overrides = {}) => runGraphSteps(canonicalBuildSteps(project, overrides))
 
 // The supported project-to-options seam: the exact buildKnowledgeGraph options
 // every graph consumer derives from a loaded project, plus the configured
@@ -144,8 +146,14 @@ const canonicalEdgeId = (edge) => JSON.stringify([edge.source, edge.type, edge.t
 // bytes did not change; the result is the same as without it. `observedDigest`
 // (see createGraphFileCache) lets a caller that observes sources by digest
 // spare the read of a source it knows unchanged.
-export function buildCanonicalGraph(project, { isLinkTargetEligible, isAssetEligible, fileCache = null, observedDigest = null } = {}) {
-  const { input, result } = canonicalBuild(project, {
+// buildCanonicalGraphSteps is the same build as steps (see buildKnowledgeGraphSteps), for a caller that waits between
+// them; buildCanonicalGraph runs them through.
+export function buildCanonicalGraph(project, options = {}) {
+  return runGraphSteps(buildCanonicalGraphSteps(project, options))
+}
+
+export function* buildCanonicalGraphSteps(project, { isLinkTargetEligible, isAssetEligible, fileCache = null, observedDigest = null } = {}) {
+  const { input, result } = yield* canonicalBuildSteps(project, {
     ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}),
     ...(isAssetEligible ? { isAssetEligible } : {}),
     ...(fileCache ? { fileCache } : {}),

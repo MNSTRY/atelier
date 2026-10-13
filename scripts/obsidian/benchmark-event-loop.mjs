@@ -14,7 +14,7 @@ import { PLUGIN_DIRECTORY } from '../../src/projection/obsidian/plugin-bridge/ch
 import { createRecoveryStore } from '../../src/projection/obsidian/recovery/store.mjs'
 import { createMaintenanceEngine } from '../../src/runtime/obsidian/engine.mjs'
 import { protectedRoots } from '../../src/runtime/obsidian/machine-settings.mjs'
-import { buildGraph, captureSnapshot } from '../../src/runtime/obsidian/pipeline.mjs'
+import { buildGraph, buildGraphCooperatively, captureSnapshot } from '../../src/runtime/obsidian/pipeline.mjs'
 import { probeHealth } from '../../src/runtime/obsidian/service-client.mjs'
 import { readServiceRecord, writeServiceSettings } from '../../src/runtime/obsidian/service-record.mjs'
 import { runMaintenanceService } from '../../src/runtime/obsidian/service.mjs'
@@ -161,7 +161,7 @@ async function serviceChild() {
         quietPeriodMs: 0, watcherFactory: watchers ?? createNullWatcherFactory(),
         // Every tick after the first is a full reconciliation when the interval between two is a millisecond.
         ...(scenario === 'full-reconciliation' ? { fullReconciliationIntervalMs: 1 } : {}),
-        seams: { onPhase: phase => send({ type: 'phase', ...phase }), buildGraph: timing('build-graph', buildGraph), captureSnapshot: timing('capture-snapshot', captureSnapshot), prepareViewCooperatively: cooperativeTiming('prepare', prepareViewCooperatively), publishView: cooperativeTiming('publish', publishView) },
+        seams: { onPhase: phase => send({ type: 'phase', ...phase }), buildGraph: timing('build-graph', buildGraph), buildGraphCooperatively: cooperativeTiming('build-graph', buildGraphCooperatively), captureSnapshot: timing('capture-snapshot', captureSnapshot), prepareViewCooperatively: cooperativeTiming('prepare', prepareViewCooperatively), publishView: cooperativeTiming('publish', publishView) },
       },
       createEngine(options) {
         const engine = createMaintenanceEngine(options)
