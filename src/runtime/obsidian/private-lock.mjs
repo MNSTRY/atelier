@@ -89,6 +89,20 @@ function listGenerations(directory) {
 
 const ticketName = (generation, kind) => `${String(generation).padStart(12, '0')}.${kind}`
 
+// A ticket is removed only while it holds the given bytes: one that holds others is another holder's. Answers whether
+// nothing of these bytes is left at the path (removed now, or gone already); throws what reading or removing it threw.
+function removeIfStill(file, body) {
+  let current
+  try { current = readRegularTextNoFollow(file) } catch (error) { if (error.code === 'ENOENT') return true; throw error }
+  if (current !== body) return true
+  fs.unlinkSync(file)
+  return true
+}
+
+// Tickets this process published and could not remove after its acquisition failed, by lock directory. Each is
+// removed at this process's next acquisition in that directory, before the directory is looked at.
+const UNWITHDRAWN = new Map()
+
 // Read-only. { available, reason, generation, ticket }
 export async function inspectPrivateGenerationLock({ directory, workspaceId, proveAbandoned = createAbandonmentProof(), nowMs = Date.now() }) {
   const { names, highest, unknown } = listGenerations(directory)
@@ -116,6 +130,11 @@ export async function inspectPrivateGenerationLock({ directory, workspaceId, pro
 // Never waits and never throws for a lock that is merely held.
 export async function acquirePrivateGenerationLock({ workspaceRoot, directory, workspaceId, purpose, service = null, clock, proveAbandoned, randomBytes = cryptoRandomBytes }) {
   const contained = ensureContainedPrivateDirectory({ workspaceRoot, directory, label: 'private lock' })
+  const owed = UNWITHDRAWN.get(contained)
+  if (owed !== undefined) {
+    // Still failing: the ticket stays, and this acquisition finds it as held by this process, as before.
+    try { if (removeIfStill(owed.file, owed.body)) UNWITHDRAWN.delete(contained) } catch { /* tried again at the next acquisition */ }
+  }
   const acquiredAt = isoTime(clock)
   const status = await inspectPrivateGenerationLock({ directory: contained, workspaceId, proveAbandoned, nowMs: Date.parse(acquiredAt) })
   const holder = status.ticket ? { pid: status.ticket.pid, purpose: status.ticket.purpose, runtimeId: status.ticket.service?.runtimeId ?? null } : null
@@ -128,9 +147,10 @@ export async function acquirePrivateGenerationLock({ workspaceRoot, directory, w
   // A ticket published and then not handed to its caller, because a later step failed (the directory sync or the
   // read-back of the publication, the listing that confirms it), is removed while it still holds these bytes: nobody
   // would release it, and every later acquisition by this process would find it held by this process. One that does
-  // not hold them is another holder's and is left alone.
+  // not hold them is another holder's and is left alone. A removal that fails too (the same fault, say) is owed, and
+  // made at the next acquisition in this directory.
   const withdraw = () => {
-    try { if (readRegularTextNoFollow(file) === body) fs.unlinkSync(file) } catch { /* gone, or not ours to remove */ }
+    try { removeIfStill(file, body) } catch { UNWITHDRAWN.set(contained, { file, body }) }
   }
   try { publishPrivateFile(file, body) } catch (error) {
     if (error.code === 'EEXIST') return { acquired: false, reason: 'lost-the-race-for-this-generation', holder: null }

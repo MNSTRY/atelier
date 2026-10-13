@@ -2321,6 +2321,41 @@ test('the engine lock: an acquisition that fails after its ticket is in place le
   next.release()
 })
 
+test('the engine lock: a ticket whose removal after a failed acquisition fails too is removed at the next acquisition, and another holder\'s ticket is never removed', { skip: syncsDirectoriesByDescriptor }, async (t) => {
+  // The directory sync after the link fails, and so does the first removal of the ticket.
+  const lock = lockWorld(t)
+  const first = await lock.acquire()
+  first.release()
+  const ticketPath = (generation) => path.join(lock.directory, `${String(generation).padStart(12, '0')}.json`)
+  const restoreSync = failDirectorySyncAfterTicketLink()
+  const { unlinkSync } = fs
+  fs.unlinkSync = function (target, ...rest) {
+    if (/[\\/]\d{12}\.json$/.test(String(target))) { fs.unlinkSync = unlinkSync; throw Object.assign(new Error('input/output error'), { code: 'EIO' }) }
+    return unlinkSync.call(this, target, ...rest)
+  }
+  try { await assert.rejects(lock.acquire(), (error) => error.code === 'EIO') } finally { restoreSync(); fs.unlinkSync = unlinkSync }
+  assert.equal(fs.existsSync(ticketPath(first.generation + 1)), true, 'the ticket stays while it cannot be removed')
+  const next = await lock.acquire()
+  assert.deepEqual([next.acquired, next.generation], [true, first.generation + 1], 'it is removed before the next acquisition looks')
+  next.release()
+
+  // Another holder wins the generation this acquisition tries (its link meets that holder's ticket), and the
+  // comparison of the two then fails: the acquisition fails, and the other holder's ticket is left.
+  const other = JSON.stringify(lock.ticket({ pid: process.pid + 1 }))
+  const { linkSync, readFileSync } = fs
+  let compareFails = false
+  fs.linkSync = function (existing, target, ...rest) {
+    if (/[\\/]\d{12}\.json$/.test(String(target))) { fs.linkSync = linkSync; fs.writeFileSync(target, other); compareFails = true }
+    return linkSync.call(this, existing, target, ...rest)
+  }
+  fs.readFileSync = function (source, ...rest) {
+    if (compareFails && typeof source === 'number') { compareFails = false; fs.readFileSync = readFileSync; throw Object.assign(new Error('permission denied'), { code: 'EACCES' }) }
+    return readFileSync.call(this, source, ...rest)
+  }
+  try { await assert.rejects(lock.acquire(), (error) => error.code === 'EACCES') } finally { fs.linkSync = linkSync; fs.readFileSync = readFileSync }
+  assert.equal(fs.readFileSync(ticketPath(next.generation + 1), 'utf8'), other, 'the other holder\'s ticket is left as it was')
+})
+
 test('an engine whose acquisition of its lock failed after the ticket was in place takes the lock at the next tick and goes on maintaining', { ...needsExchange, skip: needsExchange.skip ?? syncsDirectoriesByDescriptor }, async (t) => {
   const world = makeWorld(t)
   const engine = world.engine()
