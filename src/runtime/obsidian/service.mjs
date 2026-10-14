@@ -127,8 +127,8 @@ export async function runMaintenanceService(options = {}) {
   // no repositories); its answer is let go unread. A located project names its folder, or is refused.
   const project = locateProject === null ? loadProject() : locateProject()
   if (typeof project?.then === 'function') {
-    // Let go without calling a `then` of its own, which a promise of this realm's `Promise` may carry and which may
-    // throw; any other thenable is adopted, its `then` called once.
+    // Let go without calling a `then` of its own, which a promise whose `constructor` reads as this realm's `Promise`
+    // may carry and which may throw; any other thenable is adopted, its `then` called once.
     Promise.prototype.then.call(Promise.resolve(project), undefined, () => {})
     refuse('service-loader-not-synchronous', 'the service resolves its workspace from a project its loader answers at once; a loader that answers a promise is not supported when the service starts')
   }
@@ -303,8 +303,7 @@ export async function runMaintenanceService(options = {}) {
   const healthStatus = () => (stopping ? 'stopped' : consecutiveFailures > 0 ? 'degraded' : 'healthy')
 
   // What is stored about a view is not permission to tell it: the project is asked as it is now (view-permission.mjs).
-  // Its loads are counted for the status document; the log gets a line only for one that failed, was given up or held
-  // the event loop, and for the first that answered after a failure.
+  // Its loads are counted for the status document; the log gets a line for those somebody has to see (createLoadReport).
   const statusLoads = createLoadReport({ write: (entry) => log({ at: isoTime(clock), ...entry }) })
   const viewPermitted = createViewPermission({
     loadProject, resolveWorkspace: (loaded) => resolveServiceWorkspace({ project: loaded, dataRoot, env, platform }), workspaceInputsOf: serviceWorkspaceInputs,
