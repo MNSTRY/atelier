@@ -288,6 +288,27 @@ The lock stays this service's, and the next tick gives it back before it takes
 it again, instead of finding its own ticket and answering `busy` until the
 service is started again.
 
+A view refused for a file-system error does not fail the tick. Examples are
+a vault folder that could not be allocated or placed (`vault-location-unusable`),
+a configuration file that could not be read again during the tick, a source
+removed while it was read (both `mixed-read`) and candidates that could not be
+staged (`staging-failed`). The view's freshness names only the refusal, so the
+service writes a `view-refused` line to its private log for each such view
+whose refusal carries a file-system error's code, at most 64 a tick: the view,
+the refusal's code and the error's code (`EACCES`, `EIO`, `ENOENT`, `ENOSPC`).
+Only codes shaped as a file-system error's are written, never a message. A view
+the next tick names for the same reason is not written again, so a folder that
+stays unwritable (tried at every tick) is written once. It is written again when
+its reason changes, or after a tick that failed or did not name it: a tick that
+did not refuse it, refused it for no file-system error, or had named 64 other
+views first. When removing the staged candidates afterwards fails
+too, the line also names that error's code as `cleanupCause`, and a line is
+written for that alone when the refusal names no error of its own. That failure
+does not replace the refusal. What could not be removed stays where it was: in
+`staging/`, or at its exchange path under `recovery/` once the publication's
+journal is written. The restart recovery of the next publication removes the
+latter.
+
 ### Cases that need a person
 
 - a record that does not validate, or that belongs to another workspace;

@@ -198,6 +198,9 @@ function uncoordinatedAdapter(refusal) {
 }
 // Views a tick may be asked to prepare again, at most, before it runs.
 const MAX_PREPARATION_REQUESTS = 64
+// At most this many views a tick refuses for a file-system error are named with that error's code (`refusalCauses`); the
+// others of that tick are not named.
+const MAX_REFUSAL_CAUSES = 64
 
 function journalTime(journalId) {
   const match = /^journal-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{3})-/.exec(journalId)
@@ -477,6 +480,27 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }
+    // A view refused for a file-system error (a vault folder that could not be allocated or placed, a configuration
+    // file that could not be read again, a source removed while it was read, candidates that could not be staged) is
+    // settled under the refusal's code alone, and such a tick ends without a failure. The error's code (`EACCES`, `EIO`,
+    // `ENOENT`), and that of a cleanup after it that failed too, are reported beside it for the service's log. Only
+    // codes shaped as a file-system error's are kept: never a message, which may name a path.
+    const refusalCauses = []
+    const errnoOf = (value) => (typeof value === 'string' && /^E[A-Z]+$/.test(value) ? value : null)
+    const noteRefusalCause = (scopeId, refusal) => {
+      const cause = errnoOf(refusal?.detail?.cause)
+      const cleanupCause = errnoOf(refusal?.detail?.cleanupCause)
+      if ((cause === null && cleanupCause === null) || refusalCauses.length >= MAX_REFUSAL_CAUSES) return
+      refusalCauses.push({ scopeId, code: refusal.code, ...(cause === null ? {} : { cause }), ...(cleanupCause === null ? {} : { cleanupCause }) })
+    }
+    // A view whose own vault cannot be placed: a typed refusal's code and detail, or `vault-location-unusable` for a
+    // file-system error there, whose code is its cause.
+    const refuseViewAlone = (scopeId, error) => {
+      const code = viewRefusalCode(error)
+      if (code === null) throw error
+      allocationRefusals.set(scopeId, code)
+      noteRefusalCause(scopeId, isTypedRefusal(error) ? error : { code, detail: { cause: error.code } })
+    }
     // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never
     // published under the data root (vault-location.mjs). A view whose folder cannot be allocated is not prepared on
     // this tick, and its freshness says why; the other views go on.
@@ -508,11 +532,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             vaults = known.vaults
           }
           ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId, location: machine.decisions.location, projectName: projectDisplayName(project), repositoryRoots, vaults, allocatedPaths, now })
-        } catch (error) {
-          const code = viewRefusalCode(error)
-          if (code === null) throw error
-          allocationRefusals.set(scope.scopeId, code)
-        }
+        } catch (error) { refuseViewAlone(scope.scopeId, error) }
       }
     }
     // Each view's store, on its own: one whose vault cannot be placed (a record naming a folder inside a repository,
@@ -520,11 +540,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const scopes = []
     for (const scope of enablement.scopes) {
       if (allocationRefusals.has(scope.scopeId)) continue
-      try { scopes.push({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }) } catch (error) {
-        const code = viewRefusalCode(error)
-        if (code === null) throw error
-        allocationRefusals.set(scope.scopeId, code)
-      }
+      try { scopes.push({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }) } catch (error) { refuseViewAlone(scope.scopeId, error) }
     }
 
     watch([
@@ -820,7 +836,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         }
       } catch (error) {
         if (!isTypedRefusal(error)) throw error
-        for (const scopeId of attempt.keys()) entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now))
+        for (const scopeId of attempt.keys()) { entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now)); noteRefusalCause(scopeId, error) }
         if (REREAD_CODES.has(error.code)) forceFull = true
         // The personal workspace refused the bound generation: the project is loaded again at the next tick, so a
         // loader that now binds another generation is followed.
@@ -905,6 +921,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const common = { generationId: pointerNow?.generationId ?? null, preparedGenerationId, retainedEdits: pointerNow?.retained?.length ?? 0 }
           if (result.state === 'refused') {
             settle(CONFLICT_REFUSALS.has(result.refusal.code) ? 'publisher-conflict' : 'stale', result.refusal.code, { ...common, heldNotes: held })
+            noteRefusalCause(scopeId, result.refusal)
           } else if (result.state === 'updating') {
             const blocking = result.notes.filter((note) => note.blocking)
             const byEdit = blocking.length > 0 && blocking.every((note) => EDIT_OUTCOMES.has(note.outcome))
@@ -938,6 +955,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const where = error.code === 'redaction-failure' ? error.detail ?? {} : {}
           diagnostics = typeof where.rule === 'string' ? [{ code: error.code, rule: where.rule, ...(typeof where.notePath === 'string' ? { notePath: where.notePath } : {}), ...(typeof where.filePath === 'string' ? { filePath: where.filePath } : {}) }] : []
           settle('stale', error.code)
+          noteRefusalCause(scopeId, error)
           if (REREAD_CODES.has(error.code)) forceFull = true
         }
       }
@@ -956,7 +974,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       state: 'ticked', full, workspaceId, maintenanceMode: machine.maintenanceMode,
       changes: changes.map((change) => ({ ...change })), scopes: [...entries.values()].sort((left, right) => compareText(left.scopeId, right.scopeId)),
       pendingEdits: edits.filter((edit) => edit.closedAt === null).map(({ editId, scopeId, path: notePath, state }) => ({ editId, scopeId, path: notePath, state })),
-      dispatched, lateWriters, ...(observed === null ? {} : { observed }), ...(proposals === null ? {} : { proposals }),
+      dispatched, lateWriters, ...(observed === null ? {} : { observed }), ...(proposals === null ? {} : { proposals }), ...(refusalCauses.length === 0 ? {} : { refusalCauses }),
     }
   }
 

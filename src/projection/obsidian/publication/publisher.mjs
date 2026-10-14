@@ -318,6 +318,17 @@ export function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = 
   return units
 }
 
+// The code of a failure met while candidates were being cleaned up after a staging that did not complete, for the detail
+// of what ended it. Nothing else of the failure is kept: its message may name a path.
+const cleanupCauseOf = (failure) => (failure === null ? {} : { cleanupCause: typeof failure?.code === 'string' && failure.code !== '' ? failure.code.slice(0, 64) : 'unknown' })
+// The stop or refusal itself is handed on, so the caller can still tell it by identity: its `detail` is replaced by a
+// copy that adds `cleanupCause`, and an object shared as its detail is left as it was. A caller that throws the same
+// error object again keeps that field on it.
+function withCleanupCause(error, failure) {
+  if (failure !== null) try { error.detail = { ...(error.detail ?? {}), ...cleanupCauseOf(failure) } } catch { /* an error that cannot be extended is handed on as it is */ }
+  return error
+}
+
 // The rules the oracle tests are sensitive to. Production always uses these; the tests substitute a deliberately
 // broken one through publishViewForOracleTests to prove the oracle can fail.
 export const PUBLICATION_PRIMITIVES = Object.freeze({
@@ -485,16 +496,22 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       // candidates. In staging they are removed by name. In recovery a file is removed only when its bytes are
       // the candidate's; anything else stays for restart recovery, which the journal header points at it. Only
       // empty directories are removed, so a failed staging leaves nothing that looks like an unfinished unit.
+      // Each file is cleaned up on its own, so one that cannot be removed (EBUSY, EPERM, a volume gone) leaves the
+      // others removed; the first such failure is kept.
+      let cleanupFailure = null
+      const cleanUp = (operation) => { try { operation() } catch (failure) { cleanupFailure ??= failure } }
       for (const unit of moved) {
-        if (readFileDigest(unit.stagedPath) === unit.candidateDigest) fs.rmSync(unit.stagedPath, { force: true })
+        cleanUp(() => { if (readFileDigest(unit.stagedPath) === unit.candidateDigest) fs.rmSync(unit.stagedPath, { force: true }) })
         try { fs.rmdirSync(path.dirname(unit.stagedPath)) } catch { /* not empty: left for restart recovery */ }
       }
-      for (const file of created) fs.rmSync(file, { force: true })
+      for (const file of created) cleanUp(() => fs.rmSync(file, { force: true }))
       for (const directory of [stagingDir, store.unitsRoot(journalId)]) if (directory) try { fs.rmdirSync(directory) } catch { /* absent, or not empty */ }
       // The caller stopped the publication between two candidates: nothing failed to stage, and its reason (a
       // setting that changed during the tick, `mixed-read`, or a cancellation) is the one reported. So is a refusal's.
-      if (stopped || refused) throw error
-      refuse('staging-failed', 'the candidates could not be staged; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
+      // A cleanup that failed does not replace either: it is named in their detail as `cleanupCause`, and what it could
+      // not remove stays where it is.
+      if (stopped || refused) throw withCleanupCause(error, cleanupFailure)
+      refuse('staging-failed', 'the candidates could not be staged; nothing in the vault was touched', { cause: error.code ?? String(error.message), ...cleanupCauseOf(cleanupFailure) })
     }
     await budget.checkpoint('journal-and-moves-complete', true)
     store.checkAllocatedVault?.()

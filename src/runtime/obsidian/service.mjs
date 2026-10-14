@@ -159,6 +159,10 @@ export async function runMaintenanceService(options = {}) {
   let stopping = false
   let consecutiveFailures = 0
   let lastTick = null
+  // What the last tick that did not fail named each refused view for (refusalCauses). A view the next tick names for the
+  // same reason is not written to the log again: a refusal that lasts (a folder that stays unwritable is tried again at
+  // every tick) is written once, and again when its reason changes or after a tick that failed or did not name it.
+  let refusedLastTick = new Map()
   let settleDone
   const done = new Promise((resolve) => { settleDone = resolve })
 
@@ -223,11 +227,20 @@ export async function runMaintenanceService(options = {}) {
     consecutiveFailures = outcome.consecutiveFailures
     if (outcome.ok) {
       lastTick = { at, state: outcome.report.state, reason: outcome.report.reason ?? outcome.report.refusal?.code ?? null }
+      // A view the tick refused for a file-system error: the view's freshness names the refusal, and this line the error.
+      const refused = new Map()
+      for (const item of outcome.report.refusalCauses ?? []) {
+        const reason = JSON.stringify([item.code, item.cause ?? null, item.cleanupCause ?? null])
+        refused.set(item.scopeId, reason)
+        if (refusedLastTick.get(item.scopeId) !== reason) log({ at, event: 'view-refused', scopeId: item.scopeId, code: item.code, ...(item.cause ? { cause: item.cause } : {}), ...(item.cleanupCause ? { cleanupCause: item.cleanupCause } : {}) })
+      }
+      refusedLastTick = refused
       const previous = readLastServiceError({ workspaceRoot, workspaceId })
       if (previous && previous.resolvedAt === null) writeLastServiceError({ workspaceRoot, workspaceId, document: { ...previous, consecutiveFailures: 0, resolvedAt: at } })
       return
     }
     lastTick = { at, state: 'failed', reason: errorCode(outcome.error) }
+    refusedLastTick = new Map()
     // The message may carry a path or a title: it goes to the private log and nowhere else.
     log({ at, event: 'tick-failed', code: errorCode(outcome.error), name: errorName(outcome.error), message: String(outcome.error?.message ?? outcome.error), consecutiveFailures })
     let previous = null
