@@ -521,12 +521,13 @@ function isInitializationDefault(field, value) {
 
 /** Diff sections with their hunks, read by the same parser as the content scan. */
 export function diffFileSections(diff) {
-  return parseDiffSections(diff, { detail: true }).map((section) => ({
-    path: section.path,
-    hunks: section.hunks,
-    lines: section.lines,
-    incomplete: section.incomplete,
-  }))
+  return parseDiffSections(diff, { detail: true }).map((section) => {
+    const file = { path: section.path, hunks: section.hunks, lines: section.lines, incomplete: section.incomplete }
+    for (const [key, value] of Object.entries({ deleted: section.deleted, pathBytes: section.pathBytes, pathEncodingUnsupported: section.pathEncodingUnsupported })) {
+      Object.defineProperty(file, key, { value })
+    }
+    return file
+  })
 }
 
 export function semanticChangesInFile(file) {
@@ -576,15 +577,40 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
         }))
         continue
       }
+      if (file.pathEncodingUnsupported && !file.deleted) {
+        findings.push(finding({ severity, code: 'semantic-field-scan-incomplete', repo: repo.name, path: file.path,
+          message: `${repo.name}/${file.path}: a non-UTF-8 filename cannot be admitted or edited through this guard; retire the whole file or rename it to a UTF-8 name`,
+          details: { reason: 'unsupported-non-utf8-path' } }))
+        continue
+      }
       // Retiring a whole source leaves no live classification to broaden. Git
       // history remains durable. A sidecar still protects any retained asset.
       if (file.lines.some((line) => line.startsWith('deleted file mode '))) {
         if (!file.path.endsWith('.kg.json')) continue
-        const asset = file.path.slice(0, -'.kg.json'.length)
-        const retained = gitOutputResult(target.root, ['ls-files', '--stage', '-z', '--', `:(literal)${asset}`], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES })
-        if (!retained.ok) {
+        const asset = (file.pathBytes ?? Buffer.from(file.path)).subarray(0, (file.pathBytes ?? Buffer.from(file.path)).length - Buffer.byteLength('.kg.json'))
+        const retained = gitOutputResult(target.root, ['-c', 'core.precomposeUnicode=false', 'ls-files', '--stage', '-z'], {
+          gitExecutable, indexFile: target.indexFile, encoding: 'buffer', maxBuffer: CHECK_AGGREGATE_MAX_BYTES,
+        })
+        const bytes = retained.stdout
+        let malformed = !retained.ok || !Buffer.isBuffer(bytes) || (bytes.length > 0 && bytes.at(-1) !== 0)
+        let present = false
+        if (!malformed) {
+          let offset = 0
+          while (offset < bytes.length) {
+            const end = bytes.indexOf(0, offset)
+            const entry = bytes.subarray(offset, end)
+            const tab = entry.indexOf(9)
+            if (tab < 0 || !/^\d{6} (?:[a-f0-9]{40}|[a-f0-9]{64}) [0-3]$/.test(entry.subarray(0, tab).toString('ascii')) || tab === entry.length - 1) {
+              malformed = true
+              break
+            }
+            if (entry.subarray(tab + 1).equals(asset)) present = true
+            offset = end + 1
+          }
+        }
+        if (malformed) {
           findings.push(unscannableRepoFinding(repo, 'sidecar retirement asset evidence could not be acquired'))
-        } else if (retained.stdout) {
+        } else if (present) {
           findings.push(finding({ severity, code: 'sidecar-retirement-needs-asset-review', repo: repo.name, path: file.path,
             message: `${repo.name}/${file.path}: retain an explicit reviewed sidecar while its asset remains staged; retire both together when removing the asset` }))
         }

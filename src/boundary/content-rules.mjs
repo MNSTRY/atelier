@@ -223,11 +223,14 @@ function readQuotedToken(text, start) {
   for (let index = start + 1; index < text.length; index += 1) {
     const char = String.fromCodePoint(text.codePointAt(index))
     if (char === '"') {
+      const pathBytes = Buffer.from(bytes)
       try {
         // In a filename, a leading BOM is data rather than a text-stream signature.
-        return { value: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(bytes)), end: index + 1 }
+        return { value: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(pathBytes), pathBytes, end: index + 1, encodingUnsupported: false }
       } catch {
-        return null
+        // Well-formed quoting can name bytes a JS filesystem string cannot
+        // represent. Keep identity bytes; the display value never grants access.
+        return { value: pathBytes.toString('utf8'), pathBytes, end: index + 1, encodingUnsupported: true }
       }
     }
     if (char !== '\\') {
@@ -254,13 +257,23 @@ function readQuotedToken(text, start) {
 }
 
 /** A path as it appears after a fixed prefix in a header line, quoted or bare. */
-function prefixedPath(token, prefix) {
+function prefixedPathToken(token, prefix) {
   if (token.startsWith('"')) {
     const quoted = readQuotedToken(token, 0)
     if (!quoted || quoted.end !== token.length || !quoted.value.startsWith(prefix)) return null
-    return quoted.value.slice(prefix.length)
+    return { ...quoted, value: quoted.value.slice(prefix.length), pathBytes: quoted.pathBytes.subarray(Buffer.byteLength(prefix)) }
   }
-  return token.startsWith(prefix) ? token.slice(prefix.length) : null
+  if (!token.startsWith(prefix)) return null
+  const value = token.slice(prefix.length)
+  return { value, pathBytes: Buffer.from(value), encodingUnsupported: false }
+}
+
+function assignSectionPath(section, named) {
+  section.path = named?.value || null
+  // Internal byte evidence does not widen the serialized parser result/API.
+  for (const [key, value] of Object.entries({ pathBytes: named?.pathBytes ?? null, pathEncodingUnsupported: named?.encodingUnsupported ?? false })) {
+    Object.defineProperty(section, key, { value, writable: true, configurable: true })
+  }
 }
 
 /**
@@ -269,22 +282,26 @@ function prefixedPath(token, prefix) {
  * path, which is every case except a rename or copy; those are resolved from the
  * `rename to` / `copy to` lines that follow.
  */
-export function diffHeaderPath(line) {
+function diffHeaderToken(line) {
   if (!line.startsWith('diff --git ')) return null
   const rest = line.slice('diff --git '.length)
   if (rest.startsWith('"')) {
     const first = readQuotedToken(rest, 0)
     if (!first || rest[first.end] !== ' ') return null
-    return prefixedPath(rest.slice(first.end + 1), 'b/')
+    return prefixedPathToken(rest.slice(first.end + 1), 'b/')
   }
   if (rest.endsWith('"')) {
     const open = rest.lastIndexOf(' "')
-    return open < 0 ? null : prefixedPath(rest.slice(open + 1), 'b/')
+    return open < 0 ? null : prefixedPathToken(rest.slice(open + 1), 'b/')
   }
   if (rest.length < 5 || (rest.length - 5) % 2 !== 0) return null
   const half = (rest.length - 5) / 2
   const candidate = rest.slice(2, 2 + half)
-  return half > 0 && rest === `a/${candidate} b/${candidate}` ? candidate : null
+  return half > 0 && rest === `a/${candidate} b/${candidate}` ? { value: candidate, pathBytes: Buffer.from(candidate), encodingUnsupported: false } : null
+}
+
+export function diffHeaderPath(line) {
+  return diffHeaderToken(line)?.value ?? null
 }
 
 const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
@@ -334,9 +351,9 @@ export function parseDiffSections(diff, { detail = false } = {}) {
       pendingRemoved = 0
     }
     if (raw.startsWith('diff --git ')) {
-      const headerPath = diffHeaderPath(raw)
+      const headerPath = diffHeaderToken(raw)
       current = {
-        path: headerPath === null || headerPath === '' ? null : headerPath,
+        path: headerPath?.value || null,
         added: false,
         deleted: false,
         binary: false,
@@ -347,6 +364,7 @@ export function parseDiffSections(diff, { detail = false } = {}) {
         inHeader: true,
         ...(detail ? { hunks: [], lines: [] } : {}),
       }
+      assignSectionPath(current, headerPath)
       sections.push(current)
       continue
     }
@@ -402,14 +420,14 @@ export function parseDiffSections(diff, { detail = false } = {}) {
       else current.incomplete ??= 'unreadable-rename-source'
     } else if (raw.startsWith('rename to ') || raw.startsWith('copy to ')) {
       const target = raw.slice(raw.indexOf(' to ') + 4)
-      const named = target.startsWith('"') ? readQuotedToken(target, 0) : { value: target, end: target.length }
-      if (named && named.end === target.length && named.value !== '') current.path = named.value
+      const named = target.startsWith('"') ? readQuotedToken(target, 0) : { value: target, pathBytes: Buffer.from(target), end: target.length, encodingUnsupported: false }
+      if (named && named.end === target.length && named.value !== '') assignSectionPath(current, named)
       else current.incomplete ??= 'unreadable-rename-target'
     } else if (raw.startsWith('+++ ')) {
       const target = raw.slice(4)
       if (target !== '/dev/null' && current.path === null) {
-        const named = prefixedPath(target, 'b/')
-        if (named !== null && named !== '') current.path = named
+        const named = prefixedPathToken(target, 'b/')
+        if (named?.value) assignSectionPath(current, named)
       }
     }
   }
@@ -501,7 +519,7 @@ export function pushRangeBase(repoRoot, remoteSha) {
   return result.status === 0 ? remoteSha : EMPTY_TREE
 }
 
-export const canonicalDiffArgs = (revisions, extra = []) => ['diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
+export const canonicalDiffArgs = (revisions, extra = []) => ['-c', 'core.quotePath=true', 'diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
 
 export function diffForPushRange(repoRoot, { localSha, remoteSha }, options = {}) {
   const base = pushRangeBase(repoRoot, remoteSha)
@@ -528,17 +546,17 @@ function incompleteDiagnostic({ repo, path: filePath = null, message, details = 
 
 function unreadableSectionDiagnostics(sections, repo) {
   return sections
-    .filter((section) => section.incomplete)
+    .filter((section) => section.incomplete || (section.pathEncodingUnsupported && !section.deleted))
     .map((section) => incompleteDiagnostic({
       repo,
       path: section.path,
       message: 'a changed file could not be read from the diff, so its content was not scanned',
-      details: { reason: section.incomplete },
+      details: { reason: section.incomplete ?? 'unsupported-non-utf8-path' },
     }))
 }
 
 const addedFilesFrom = (sections) => sections
-  .filter((section) => section.path !== null)
+  .filter((section) => section.path !== null && !section.deleted && !section.pathEncodingUnsupported)
   .map(({ path: filePath, added, addedLines }) => ({ path: filePath, added, addedLines }))
 
 function isBinaryBuffer(buffer) {
@@ -656,7 +674,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
   // A deleted path is absent from the revision being scanned, so there is nothing
   // to read: the blob it had is already in history and is not being introduced.
   for (const section of sections) {
-    if (!section.binary || section.deleted || section.path === null || seen.has(section.path)) continue
+    if (!section.binary || section.deleted || section.pathEncodingUnsupported || section.path === null || seen.has(section.path)) continue
     seen.add(section.path)
     const filePath = section.path
     if (!section.newBlob) {

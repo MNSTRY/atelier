@@ -75,6 +75,14 @@ It distinguishes three cases:
   classification could widen access. Retirement does not erase Git history or
   recall copies already disclosed.
 
+Git paths are acquired with quoting pinned and exact index bytes retained. Asset
+retirement compares those bytes in the actual committing index, including
+decomposed Unicode names. A well-formed filename containing non-UTF-8 bytes can
+be retired as a whole file; deleting only its sidecar still requires the asset
+to be absent. Introducing or editing such a name is refused because the current
+string-based authoring surface cannot represent it safely. Rename it to a UTF-8
+name or retire it through the guarded path; neither action needs a hook bypass.
+
 To approve a change, put a review marker in the diff:
 
 ```

@@ -988,3 +988,82 @@ test('forbidden paths remain visible when a tracked file changes type', (t) => {
   const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
   assert.ok(report.errors.some(item => item.code === 'forbidden-path-staged' && item.path === name))
 })
+
+test('sidecar retirement retains an NFD-stored asset with Unicode precomposition enabled', { skip: process.platform === 'win32' && 'POSIX filename/index fixture' }, () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  const name = 're\u0301sume\u0301.txt'
+  fs.writeFileSync(path.join(privateRepo, name), 'ordinary asset\n')
+  fs.writeFileSync(path.join(privateRepo, name + '.kg.json'), '{"audience":"private"}\n')
+  git(privateRepo, ['-c', 'core.precomposeUnicode=false', 'add', '.'])
+  git(privateRepo, ['commit', '-m', 'synthetic decomposed asset'])
+  git(privateRepo, ['config', 'core.precomposeUnicode', 'true'])
+  git(privateRepo, ['-c', 'core.precomposeUnicode=false', 'rm', name + '.kg.json'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some(item => item.code === 'sidecar-retirement-needs-asset-review'), JSON.stringify(report.errors))
+})
+
+test('sidecar retirement compares opaque asset name bytes with quoting disabled', { skip: process.platform === 'win32' && 'POSIX byte filename fixture' }, () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  const raw = Buffer.concat([Buffer.from([255]), Buffer.from('.txt')])
+  const sidecar = Buffer.concat([raw, Buffer.from('.kg.json')])
+  setByteIndexEntry(privateRepo, raw, 'ordinary asset\n')
+  setByteIndexEntry(privateRepo, sidecar, '{"audience":"private"}\n')
+  git(privateRepo, ['commit', '-m', 'synthetic byte named asset'])
+  git(privateRepo, ['config', 'core.quotePath', 'false'])
+  setByteIndexEntry(privateRepo, sidecar)
+  let report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some(item => item.code === 'sidecar-retirement-needs-asset-review'), JSON.stringify(report.errors))
+  setByteIndexEntry(privateRepo, raw)
+  report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, true, JSON.stringify(report.errors))
+})
+
+for (const extension of ['md', 'txt']) {
+  test(`opaque ${extension} filename additions refuse but whole-file retirement remains guarded`, { skip: process.platform === 'win32' && 'POSIX byte filename fixture' }, () => {
+    const { project: cfg, policy, privateRepo } = makeWorkspace()
+    const raw = Buffer.concat([Buffer.from([255]), Buffer.from('.' + extension)])
+    setByteIndexEntry(privateRepo, raw, extension === 'md' ? 'audience: private\n' : 'ordinary\n')
+    git(privateRepo, ['config', 'core.quotePath', 'false'])
+    const added = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+    assert.equal(added.ok, false, JSON.stringify(added.errors))
+    git(privateRepo, ['commit', '-m', 'synthetic historical byte name'])
+    setByteIndexEntry(privateRepo, raw)
+    const retired = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+    assert.equal(retired.ok, true, JSON.stringify(retired.errors))
+  })
+}
+
+function setByteIndexEntry(repoRoot, nameBytes, content = null) {
+  const oid = content === null ? '0'.repeat(40) : execFileSync('git', ['-C', repoRoot, 'hash-object', '-w', '--stdin'], { input: content }).toString().trim()
+  execFileSync('git', ['-C', repoRoot, 'update-index', '-z', '--index-info'], {
+    input: Buffer.concat([Buffer.from(`${content === null ? '0' : '100644'} ${oid}\t`), nameBytes, Buffer.from([0])]),
+  })
+}
+
+for (const mode of ['failure', 'oversized', 'unterminated']) {
+  test(`sidecar asset index evidence ${mode} fails closed`, { skip: process.platform === 'win32' && 'POSIX synthetic Git executable' }, () => {
+    const { root, project: cfg, policy, privateRepo } = makeWorkspace()
+    fs.writeFileSync(path.join(privateRepo, 'asset.txt'), 'ordinary\n')
+    fs.writeFileSync(path.join(privateRepo, 'asset.txt.kg.json'), '{"audience":"private"}\n')
+    git(privateRepo, ['add', '.'])
+    git(privateRepo, ['commit', '-m', 'synthetic sidecar evidence'])
+    git(privateRepo, ['rm', 'asset.txt.kg.json'])
+    const executable = path.join(root, 'asset-evidence-git')
+    const action = mode === 'failure' ? 'process.exit(1)' : mode === 'oversized' ? "process.stdout.write('x'.repeat(65*1024*1024))" : "process.stdout.write('unfinished')"
+    fs.writeFileSync(executable, `#!${process.execPath}\nconst {spawnSync}=require('node:child_process');\nif(process.argv.includes('ls-files')) {${action};} else {const r=spawnSync('git',process.argv.slice(2),{stdio:'inherit'});process.exit(r.status??1);}\n`, { mode: 0o755 })
+    const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true, gitExecutable: executable })
+    assert.ok(report.errors.some(item => item.code === 'repo-unscannable' && item.message.includes('sidecar retirement asset evidence')), JSON.stringify(report.errors))
+  })
+}
+
+test('an opaque historical name can be renamed to a UTF-8 document through the guard', { skip: process.platform === 'win32' && 'POSIX byte filename fixture' }, () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  const raw = Buffer.concat([Buffer.from([255]), Buffer.from('.md')])
+  setByteIndexEntry(privateRepo, raw, 'audience: private\n')
+  git(privateRepo, ['commit', '-m', 'synthetic historical name'])
+  setByteIndexEntry(privateRepo, raw)
+  fs.writeFileSync(path.join(privateRepo, 'ordinary.md'), 'audience: private\n')
+  git(privateRepo, ['add', 'ordinary.md'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, true, JSON.stringify(report.errors))
+})

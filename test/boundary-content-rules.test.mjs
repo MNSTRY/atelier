@@ -1129,7 +1129,7 @@ for (const name of ['café.txt', 'quoted"name.txt', 'notes b/odd.txt']) {
 }
 
 test('malformed quoted diff paths fail closed', () => {
-  for (const header of ['diff --git "a/x" "b/x', 'diff --git "a/\\377" "b/\\377"', 'diff --git a/a b/b b/c']) {
+  for (const header of ['diff --git "a/x" "b/x', 'diff --git a/a b/b b/c']) {
     const diff = `${header}\n@@ -0,0 +1 @@\n+ordinary\n`
     assert.ok(parseDiffSections(diff).some(section => section.incomplete === 'unreadable-file-path'))
     const report = scanStagedRepository({ repoRoot: '.', gitRunner: () => ({ status: 0, stdout: diff }) })
@@ -1177,3 +1177,28 @@ test('staged and pushed scans acquire an edited rename with leading-BOM filename
   assert.ok(pushed.errors.some(item => item.rule === 'secret-material' && item.path === newName), JSON.stringify(pushed.errors))
   assert.equal(pushed.errors.some(item => item.code === 'content-scan-incomplete'), false)
 })
+
+test('push scanning permits complete retirement of an opaque filename without admitting new opaque content', { skip: !POSIX_NAMES && 'POSIX byte filename fixture' }, (t) => {
+  const { site, project, policy } = makeWorkspace(t)
+  const raw = Buffer.concat([Buffer.from([255]), Buffer.from('.txt')])
+  setByteIndexEntry(site, raw, 'ordinary synthetic note\n')
+  git(site, ['config', 'core.quotePath', 'false'])
+  git(site, ['commit', '--quiet', '-m', 'synthetic historical byte name'])
+  const prior = git(site, ['rev-parse', 'HEAD'])
+  const addition = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(addition.ok, false, JSON.stringify(addition.errors))
+  setByteIndexEntry(site, raw)
+  const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(staged.ok, true, JSON.stringify(staged.errors))
+  git(site, ['commit', '--quiet', '-m', 'retire synthetic byte name'])
+  const update = { localRef: 'refs/heads/main', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: prior }
+  const retired = checkPushContent({ project, policy, updates: [update], cwd: site })
+  assert.equal(retired.ok, true, JSON.stringify(retired.errors))
+})
+
+function setByteIndexEntry(repoRoot, nameBytes, content = null) {
+  const oid = content === null ? '0'.repeat(40) : execFileSync('git', ['-C', repoRoot, 'hash-object', '-w', '--stdin'], { input: content }).toString().trim()
+  execFileSync('git', ['-C', repoRoot, 'update-index', '-z', '--index-info'], {
+    input: Buffer.concat([Buffer.from(`${content === null ? '0' : '100644'} ${oid}\t`), nameBytes, Buffer.from([0])]),
+  })
+}
