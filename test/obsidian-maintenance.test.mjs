@@ -328,8 +328,8 @@ test('a selected source removed while its view is being prepared, before the pre
   const removedDuringPreparation = async (primitives) => {
     const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, WEST_SCOPE]) })
     // Views are prepared in the order they are declared: the whole view, then the west view, which selects neither of
-    // two notes of the east wing nothing links to. Both are removed at the whole view's first wait as it emits notes;
-    // it reads each when it emits it, and at most one of the two before the removal.
+    // two notes of the east wing nothing links to. Both are removed at the whole view's first wait as it emits notes,
+    // which comes before it reads either; it reads each when it emits it.
     const removable = ['bell', 'whistle'].map((name) => world.source(`east-wing/notes/${name}.md`))
     for (const file of removable) fs.writeFileSync(file, note({ id: `east-wing:${path.basename(file, '.md')}`, title: path.basename(file, '.md'), body: 'Sounded in fog.' }))
     let removed = false

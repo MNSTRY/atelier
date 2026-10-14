@@ -143,12 +143,12 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   guardReadFailed: (error) => typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code),
   // Whether an error met when the graph build, a view's preparation or the look again before its commit reads a
   // source is a source, or a folder of sources, removed after this tick observed it: no such file (or a parent that is
-  // no longer a folder), at a path that is gone now and that this tick's walk over the sources recorded with a digest (a
-  // source of a repository the project observes), or a folder that held such a source. The look again at the sources
-  // after the build refuses that change as `mixed-read`; a read that could not find the file refuses the same, and the
-  // next tick reads everything again. Anything else stops the tick, as before: a path still there, a path the walk
-  // listed and could not read (it was recorded without a digest), or one it never listed, so a path that can never be
-  // read still fails every tick.
+  // no longer a folder), at a path that is gone now and that this tick's walks over the sources (before the build, and
+  // the look again after it) recorded with a digest (a source of a repository the project observes), or a folder that
+  // held such a source. A source changed during the tick is refused as `mixed-read`; one removed is refused the same,
+  // and the next tick reads everything again. Anything else stops the tick, as before: a path still there, a path the
+  // walk listed and could not read (it was recorded without a digest), or one it never listed, so a path that can never
+  // be read still fails every tick.
   sourceRemovedSinceObserved(error, { project, index }) {
     if ((error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') || typeof error.path !== 'string' || !(index instanceof Map)) return false
     const missing = path.resolve(error.path)

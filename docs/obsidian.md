@@ -1057,9 +1057,9 @@ unit and loader is what it was.
   confirmed, it would publish that restore. The service notes the highest
   record number at every read of the history's end (a load's first read, its
   read once the generation is loaded, the recheck at a full reconciliation,
-  and a read made when a tick stops a view as `mixed-read` because an observed
-  file changed or could not be read, once for views stopped one after another),
-  whether or not the
+  and a read made when a tick stops a view as `mixed-read` because the tick's
+  settings changed or could not be read, once for views stopped one after
+  another), whether or not the
   record's generation could be used, and whichever part of the service read
   it. A history that ends earlier refuses `selection-history-shortened` at a
   load and at a recheck, and nothing is loaded from it while it is shorter; at
