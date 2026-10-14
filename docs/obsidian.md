@@ -1257,8 +1257,8 @@ named by `--project` none of those loads is taken off the loop. For a bound
 personal home they compose in a worker, as the engine's loads do, and the read
 starts each one on the loop by reading the selection history. A load that holds the loop
 for a second or more is logged (`status-project-loaded`), and so is a load at
-every request (see "What the service shows of these loads" in
-[obsidian-plugin.md](obsidian-plugin.md)).
+every request that names the files it started over (see "What the service
+shows of these loads" in [obsidian-plugin.md](obsidian-plugin.md)).
 
 What the waits cost. The waits of observation and routing are taken at
 every boundary between two edits or two operations and before each

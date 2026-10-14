@@ -831,27 +831,34 @@ test('a load at every request is written to the log: while a file vouches for no
     for (let request = 0; request < 10; request += 1) { permits(VIEW); w.advance(500) }
     return { lines, report, permits }
   }
-  for (const [name, setUp, vouched, skip] of [
+  const atEvenRow = (vouched, rows) => rows.map((row) => [true, row, vouched])
+  for (const [name, setUp, expected, notKept, skip] of [
     ['a file that vouches for nothing', (w) => {
       const kept = path.join(w.dir, 'dotfiles', 'atelier.project.json')
       fs.mkdirSync(path.dirname(kept), { recursive: true })
       fs.renameSync(w.configPath, kept)
       w.link(w.configPath, kept)
       return { realpath: refusingRealpath }
-    }, false, noLinks],
+    }, atEvenRow(false, [2, 4, 8]), 9, noLinks],
     ['loads that never agree', (w) => {
       // Every load names the same files, and the views of one load are never those of the one before.
       let flip = false
       return { loadProject: () => { w.loads += 1; flip = !flip; const project = w.load(); return flip ? project : { ...project, config: { ...project.config, ext: {} } } } }
-    }, true, false],
+    }, atEvenRow(true, [2, 4, 8]), 9, false],
+    ['loads that name one set of files twice, then another twice', (w) => {
+      // A, A, B, B, ...: a load that names other files than it started over (A to B) neither counts nor ends the row,
+      // even when it keeps a project, which the next request drops; every other load is one more in the row.
+      const names = ['access-a.json', 'access-a.json', 'access-b.json', 'access-b.json']
+      return { loadProject: () => { const name = names[w.loads % names.length]; w.loads += 1; return { ...w.load(), repoAccessPath: path.join(w.projectDir, name) } } }
+    }, atEvenRow(true, [2, 4]), 5, false],
   ]) await t.test(name, { skip }, (t) => {
     const w = world(t)
     const { lines, report } = tenRequests(w, setUp(w))
     assert.equal(w.loads, 10, 'never kept: a load at every request')
-    // The first load started over no files; the nine after it named the files they started over, kept nothing, and
-    // are one row.
-    assert.deepEqual(lines.map(({ notKept, notKeptInARow, vouched: line }) => [notKept, notKeptInARow, line]), [[true, 2, vouched], [true, 4, vouched], [true, 8, vouched]])
-    assert.equal(report.counts().notKept, 9)
+    // The first load started over no files; the others that named the files they started over kept nothing, and are
+    // one row.
+    assert.deepEqual(lines.map(({ notKept: flag, notKeptInARow, vouched }) => [flag, notKeptInARow, vouched]), expected)
+    assert.equal(report.counts().notKept, notKept)
   })
   await t.test('a change that names other files than the project was loaded from', (t) => {
     const w = world(t)

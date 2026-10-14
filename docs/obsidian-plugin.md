@@ -438,24 +438,30 @@ every two seconds for every open vault, so the project is kept:
     while a file vouches for nothing): a load at every request. A load that
     named other files than it started over (the first, which started over
     none, or the one after a change that names other files, such as a new
-    confirmed selection) neither counts nor ends that row. A start and a
-    change each have one load that names the files it started over and has
+    confirmed selection) neither counts nor ends that row, so loads that
+    each name other files than the one before are never counted. A start and
+    a change each have one load that names the files it started over and has
     nothing to agree with yet, so neither writes such a line; each is
     counted, so a healthy service shows one `notKept` at its start and one
-    after each change.
+    after each change. A change that lands while a load reads the files makes
+    that load keep nothing as well, and so writes one line and counts two.
 
   A row of failures goes on through loads that answer between them, and ends
   at the first load that answers a minute or more after its last failure; a
-  line is written then (`afterFailures`). That line comes with the next load
-  after the minute, which under a kept project is the next reload, up to two
-  and a half minutes later, and none comes if no load follows. A row of slow
+  line is written then (`afterFailures`). That line comes with the first load
+  after the minute, which under a kept project is the next reload, two and a
+  half minutes after the load that kept it, and none comes if no load
+  follows. A row of slow
   loads ends the same way, at a load that answers in time a minute or more
   after the last slow one. So, while loads come less than a minute apart (a
   load at every request, or the retries after a failure), a loader that
   fails, or is slow, every other load or every third keeps one row, written
   less and less often, instead of a line per load. While a project is kept it
-  is loaded again every two and a half minutes, so there each failure and the
-  load that ends its row, and each slow load, are written, as before. A row
+  is loaded again every two and a half minutes, so there a row of failures
+  ends at the next reload that answers: a loader that answers at least one
+  reload between two failures writes each failure and the load that ends its
+  row, as before, and one that fails at every reload and answers only at its
+  retry keeps one row. Each slow load is written there, as before. A row
   of loads after which nothing is kept ends at the next load that keeps the
   project and named the files it started over. A healthy service writes none
   of these lines. The log is cut over only when it is opened, so a line per

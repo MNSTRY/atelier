@@ -162,12 +162,14 @@ export const DEFAULT_ROW_ENDS_AFTER_MS = 60 * 1000
 // slow loads at a load that answers in time that long after its last slow one. While loads come closer together than
 // that (a load at every request, or the retries after a failure), a loader that fails, or is slow, every other load or
 // every third keeps one row, written less and less often, not a line per load. A kept project is loaded again only
-// every half of its keep time, so there a row ends at the next reload, as it did at the next load before. A row of
-// loads after which nothing is kept ends at the next that keeps a project. A load that named other files than it
-// started over (the first, or one after a change that names other files) neither counts nor ends that row, so a start
-// and a change, each with one load that has nothing to agree with yet, write none of these. Any other load that
-// answered and kept the project, slow or not, writes nothing unless it ends a row of failures: that is every load of
-// a healthy service. A line holds the event, milliseconds, the outcome, flags and counts; never a path, a view or a
+// every half of its keep time, so there a row of failures ends at the next reload that answers: a loader that answers
+// at least one reload between two failures writes each failure and the load that ends its row, as before, and one that
+// fails at every reload and answers only at its retry keeps one row. A row of loads after which nothing is kept ends
+// at the next that keeps a project. A load that named other files than it started over (the first, or one after a
+// change that names other files) neither counts nor ends that row, so a start and a change, each with one load that
+// has nothing to agree with yet, write none of these, unless the change lands while a load reads the files. Any other
+// load that answered in time and kept the project writes nothing unless it ends a row of failures: that is every load
+// of a healthy service. A line holds the event, milliseconds, the outcome, flags and counts; never a path, a view or a
 // message.
 export function createLoadReport({ write, slowMs = DEFAULT_SLOW_LOAD_MS, rowEndsAfterMs = DEFAULT_ROW_ENDS_AFTER_MS }) {
   if (typeof write !== 'function') throw new TypeError('a load report needs somewhere to write')
