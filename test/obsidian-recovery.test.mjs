@@ -445,7 +445,7 @@ test('a cleanup that fails after a caller stopped the staging does not replace t
   assert.equal(thrown, stop, 'the stop itself is handed on')
   assert.deepEqual(stop.detail, { cause: 'EIO', cleanupCause: 'EBUSY' }, 'its own detail is kept, and the cleanup failure is added')
   assert.deepEqual([stop.detail === shared, shared], [false, { cause: 'EIO' }], 'in a copy: the object it shared as its detail is left as it was')
-  assert.equal(filesUnder(world.store.stagingRoot).length, 1)
+  assert.deepEqual(filesUnder(world.store.stagingRoot).map((file) => fs.readFileSync(file, 'utf8')), [CANDIDATE], 'the candidate whose removal failed is left, and the other one was removed')
   assert.deepEqual([world.read(NOTE), world.read(OTHER)], [BASE, BASE])
 })
 

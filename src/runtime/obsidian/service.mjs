@@ -159,6 +159,11 @@ export async function runMaintenanceService(options = {}) {
   let stopping = false
   let consecutiveFailures = 0
   let lastTick = null
+  // What the last tick that did not fail refused each view for, as it named it (refusalCauses). A view refused again for
+  // the same reason at the next tick is not written to the log again: a refusal that lasts (a folder that stays
+  // unwritable is tried again at every tick) is written once, and again when its reason changes or after a tick that
+  // did not name it.
+  let refusedLastTick = new Map()
   let settleDone
   const done = new Promise((resolve) => { settleDone = resolve })
 
@@ -224,12 +229,19 @@ export async function runMaintenanceService(options = {}) {
     if (outcome.ok) {
       lastTick = { at, state: outcome.report.state, reason: outcome.report.reason ?? outcome.report.refusal?.code ?? null }
       // A view the tick refused for a file-system error: the view's freshness names the refusal, and this line the error.
-      for (const item of outcome.report.refusalCauses ?? []) log({ at, event: 'view-refused', scopeId: item.scopeId, code: item.code, ...(item.cause ? { cause: item.cause } : {}), ...(item.cleanupCause ? { cleanupCause: item.cleanupCause } : {}) })
+      const refused = new Map()
+      for (const item of outcome.report.refusalCauses ?? []) {
+        const reason = JSON.stringify([item.code, item.cause ?? null, item.cleanupCause ?? null])
+        refused.set(item.scopeId, reason)
+        if (refusedLastTick.get(item.scopeId) !== reason) log({ at, event: 'view-refused', scopeId: item.scopeId, code: item.code, ...(item.cause ? { cause: item.cause } : {}), ...(item.cleanupCause ? { cleanupCause: item.cleanupCause } : {}) })
+      }
+      refusedLastTick = refused
       const previous = readLastServiceError({ workspaceRoot, workspaceId })
       if (previous && previous.resolvedAt === null) writeLastServiceError({ workspaceRoot, workspaceId, document: { ...previous, consecutiveFailures: 0, resolvedAt: at } })
       return
     }
     lastTick = { at, state: 'failed', reason: errorCode(outcome.error) }
+    refusedLastTick = new Map()
     // The message may carry a path or a title: it goes to the private log and nowhere else.
     log({ at, event: 'tick-failed', code: errorCode(outcome.error), name: errorName(outcome.error), message: String(outcome.error?.message ?? outcome.error), consecutiveFailures })
     let previous = null

@@ -480,9 +480,6 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }
-    // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never
-    // published under the data root (vault-location.mjs). A view whose folder cannot be allocated is not prepared on
-    // this tick, and its freshness says why; the other views go on.
     // A view refused for a file-system error (a vault folder that could not be allocated or placed, a configuration
     // file that could not be read again, a source removed while it was read, candidates that could not be staged) is
     // settled under the refusal's code alone, and such a tick ends without a failure. The error's code (`EACCES`, `EIO`,
@@ -504,6 +501,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       allocationRefusals.set(scopeId, code)
       noteRefusalCause(scopeId, isTypedRefusal(error) ? error : { code, detail: { cause: error.code } })
     }
+    // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never
+    // published under the data root (vault-location.mjs). A view whose folder cannot be allocated is not prepared on
+    // this tick, and its freshness says why; the other views go on.
     const allocationRefusals = new Map()
     if (machine.decisions.location !== null) {
       // The app's list, read once per tick and only when a view is about to be allocated. An engine given no reader

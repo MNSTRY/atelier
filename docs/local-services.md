@@ -293,10 +293,14 @@ a vault folder that could not be allocated or placed (`vault-location-unusable`)
 a configuration file that could not be read again during the tick, a source
 removed while it was read (both `mixed-read`) and candidates that could not be
 staged (`staging-failed`). The view's freshness names only the refusal, so the
-service writes a `view-refused` line to its private log for each such view, at
-most 64 a tick: the view, the refusal's code and the error's code (`EACCES`,
-`EIO`, `ENOENT`, `ENOSPC`). Only codes shaped as a file-system error's are
-written, never a message. When removing the staged candidates afterwards fails
+service writes a `view-refused` line to its private log for each such view
+whose refusal carries a file-system error's code, at most 64 a tick: the view,
+the refusal's code and the error's code (`EACCES`, `EIO`, `ENOENT`, `ENOSPC`).
+Only codes shaped as a file-system error's are written, never a message. A view
+refused again for the same reason at the next tick is not written again, so a
+folder that stays unwritable (tried at every tick) is written once; it is
+written again when the reason changes, or after a tick that did not refuse it
+or failed. When removing the staged candidates afterwards fails
 too, the line also names that error's code as `cleanupCause`, and a line is
 written for that alone when the refusal names no error of its own. That failure
 does not replace the refusal. What could not be removed stays where it was: in

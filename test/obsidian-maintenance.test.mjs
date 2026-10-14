@@ -994,6 +994,16 @@ test('views whose vault folders cannot be allocated for a file-system error are 
   assert.deepEqual(report.refusalCauses, [FULL_SCOPE, EAST_SCOPE].map(({ scopeId }) => ({ scopeId, code: 'vault-location-unusable', cause: 'EACCES' })))
 })
 
+test('a view whose store cannot be made for a file-system error is refused as vault-location-unusable and named with that error\'s code, never its message, and the other view is published', needsExchange, async (t) => {
+  const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, EAST_SCOPE]) })
+  const where = path.join(world.dir, 'somewhere', 'state')
+  const raw = Object.assign(new Error(`EIO: i/o error, open '${where}'`), { code: 'EIO', syscall: 'open', path: where })
+  const report = await world.engine({ seams: { createRecoveryStore: (input) => { if (input.scopeId === EAST_SCOPE.scopeId) throw raw; return DEFAULT.createRecoveryStore(input) } } }).tick()
+  assert.deepEqual([world.scope(report, EAST_SCOPE.scopeId).state, world.scope(report, EAST_SCOPE.scopeId).reason, world.scope(report).state], ['stale', 'vault-location-unusable', 'current'])
+  assert.deepEqual(report.refusalCauses, [{ scopeId: EAST_SCOPE.scopeId, code: 'vault-location-unusable', cause: 'EIO' }])
+  assert.equal(JSON.stringify(report).includes(where), false, 'the message, which names a path, is in no report')
+})
+
 test('a refused view is named beside the tick by the codes of file-system errors only: a cleanup failure alone is named, and a cause that is a message, another kind of code or unknown is not', needsExchange, async (t) => {
   const refusedWith = (code, detail) => ({ state: 'refused', refusal: { code, message: 'stub', detail }, notes: [], retainedEdits: [], lateWriters: [] })
   const cases = [
@@ -3123,6 +3133,33 @@ test('a view the tick refused for a file-system error is named in the private lo
   assert.equal(logged.length, refusals, 'one line for each time the view was refused')
   for (const line of logged) assert.deepEqual(line, { event: 'view-refused', scopeId: FULL_SCOPE.scopeId, code: 'staging-failed', cause: 'ENOSPC', cleanupCause: 'EBUSY' })
   assert.equal(lines.some((line) => line.event === 'tick-failed'), false)
+})
+
+test('a view refused for the same reason at tick after tick is written to the log once, and again when the reason changes or after a tick that did not name it or failed', async (t) => {
+  const world = makeWorld(t)
+  const lines = []
+  const unwritable = (cause) => [{ scopeId: FULL_SCOPE.scopeId, code: 'vault-location-unusable', cause }]
+  // What each tick names, in order: the same reason three times, another, none, the first again; then a tick that fails
+  // and the same reason after it.
+  const sequence = [unwritable('EACCES'), unwritable('EACCES'), unwritable('EACCES'), unwritable('EROFS'), [], unwritable('EACCES'), 'fails', unwritable('EACCES')]
+  let ticks = 0
+  const createEngine = (options) => {
+    const engine = createMaintenanceEngine(options)
+    return { ...engine, tick: async () => {
+      const { refusalCauses: _own, ...report } = await engine.tick()
+      const named = sequence[ticks] ?? []
+      ticks += 1
+      if (named === 'fails') throw Object.assign(new Error('a synthetic failure'), { code: 'ESYNTHETIC' })
+      return named.length === 0 ? report : { ...report, refusalCauses: named }
+    } }
+  }
+  const { service, record } = await inProcessService(t, world, { engineOptions: { seams: { publishView: async () => REFUSED_PUBLICATION } }, log: (entry) => lines.push(entry), createEngine })
+  await waitFor(async () => { const { body } = await callService(record, 'GET', '/status'); return body.loop.ticks >= 1 && body.loop.ticking === false ? body : null }, { label: 'the first tick' })
+  while (ticks < sequence.length) await service.tickNow()
+  assert.equal(ticks, sequence.length)
+  const logged = lines.filter((line) => line.event === 'view-refused').map((line) => line.cause)
+  assert.deepEqual(logged, ['EACCES', 'EROFS', 'EACCES', 'EACCES'])
+  assert.ok(lines.some((line) => line.event === 'tick-failed' && line.code === 'ESYNTHETIC'))
 })
 
 test('mutation control: an engine that a thrown error poisons fails the tick-error oracle', async (t) => {
