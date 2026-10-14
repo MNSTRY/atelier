@@ -32,8 +32,7 @@ now judge work they used to miss, so a commit or push that passed on
   remote is judged on its way to a new one. The push check judges every commit
   the remote's tracking refs do not hold, each against its parent, binaries
   included. A push carrying more than 1000 such commits or more than the
-  evidence budget is refused with `content-scan-incomplete` (for one ref,
-  reason `push-range-too-long` or `push-evidence-too-large`); push it in
+  evidence budget is refused with `content-scan-incomplete`; push it in
   smaller parts.
 - The pre-commit check reads the index and work tree Git names, so
   `git commit -a`, `git commit <paths>` and commits from a linked worktree are
