@@ -49,12 +49,14 @@ now judge work they used to miss, so a commit or push that passed on
 - Knowledge Health regenerates its rule identity for the two graph files: the
   `check` each assessment carries names a new `version`, `sourceTree` and
   `graphBlob`. The rule it applies is unchanged. A workshop contribution
-  completed on 0.2.0-alpha.13 cannot start Review on this release (`finding
-  changed; refresh before selecting a new draft`); start Review before
-  upgrading, or record a new contribution.
+  started on 0.2.0-alpha.13, completed or not, cannot start Review on this
+  release (`finding changed; refresh before selecting a new draft`); start
+  Review before upgrading, or record a new contribution.
 - `runMaintenanceService` from `@mnstry/atelier/obsidian` refuses a project
-  loader that answers with a promise (`service-loader-not-synchronous`); on
-  0.2.0-alpha.13 such a service protected no repository.
+  loader that answers with a promise when no `locateProject` is given
+  (`service-loader-not-synchronous`); on 0.2.0-alpha.13 such a service
+  protected no repository. Pass a synchronous `locateProject` to keep an
+  asynchronous loader.
 
 A package update supplies no interpretation approval, source-write permission,
 publication authority or runtime activation. Rehearse this exact installed
