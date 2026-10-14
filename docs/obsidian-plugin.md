@@ -443,10 +443,11 @@ every two seconds for every open vault, so the project is kept:
     a change each have one load that names the files it started over and has
     nothing to agree with yet, so neither writes such a line; each is
     counted, so a healthy service shows one `notKept` at its start and one
-    after each change. A change that lands while a load reads the files, and
-    changes the views or what the workspace is resolved from, makes that load
-    keep nothing as well, and so writes one line and counts two. Any other
-    change that lands then counts one, as a change does, and writes nothing.
+    after each change. A change that lands while a load reads the files,
+    names the same files, and changes the views or what the workspace is
+    resolved from, makes that load keep nothing as well, and so writes one
+    line and counts two. Any other change that lands then counts one, as a
+    change does, and writes nothing.
 
   A row of failures goes on through loads that answer between them, and ends
   at the first load that answers a minute or more after its last failure; a
