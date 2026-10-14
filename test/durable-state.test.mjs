@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync, spawn } from 'node:child_process';
-import { publishPrivateFile, acquirePrivateLock, createVerifiedFileSequence } from '../src/project/durable-state.mjs';
+import { publishPrivateFile, publishPrivateFileAsync, acquirePrivateLock, createVerifiedFileSequence, isPendingPrivateWrite } from '../src/project/durable-state.mjs';
 import { createCollaborationEventLedger } from '../src/collaboration/event-ledger.mjs';
 
 function fixture(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'durable-fixture-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return fs.realpathSync(dir); }
@@ -14,6 +14,36 @@ test('immutable publication preserves old file and binary readback', t => {
   publishPrivateFile(file, bytes); publishPrivateFile(file, bytes);
   assert.throws(() => publishPrivateFile(file, 'different'));
   assert.deepEqual(fs.readFileSync(file), bytes);
+});
+test('the asynchronous publication publishes the same bytes, keeps an identical file, refuses different bytes and leaves no pending write', async t => {
+  const dir = fixture(t), file = path.join(dir, 'value');
+  const bytes = Buffer.from([0, 255, 128, 42]);
+  await publishPrivateFileAsync(file, bytes); await publishPrivateFileAsync(file, bytes);
+  await assert.rejects(publishPrivateFileAsync(file, 'different'), error => error.code === 'EEXIST');
+  assert.deepEqual(fs.readFileSync(file), bytes);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(dir).filter(isPendingPrivateWrite), []);
+  // Both forms make the same file from the same text.
+  const other = path.join(dir, 'text');
+  await publishPrivateFileAsync(other, 'invented text\n'); publishPrivateFile(other, 'invented text\n');
+  assert.equal(fs.readFileSync(other, 'utf8'), 'invented text\n');
+});
+test('the asynchronous publication lets the event loop turn while it writes and syncs', async t => {
+  const dir = fixture(t);
+  let turns = 0, stopped = false;
+  const spin = () => { if (stopped) return; turns += 1; setImmediate(spin); };
+  setImmediate(spin);
+  t.after(() => { stopped = true; });
+  for (let index = 0; index < 4; index += 1) await publishPrivateFileAsync(path.join(dir, `entry-${index}`), `invented entry ${index}\n`);
+  stopped = true;
+  assert.ok(turns >= 4, `only ${turns} turns`);
+});
+test('a link that sits where the asynchronous publication would write is refused, and its target is untouched', async t => {
+  const dir = fixture(t), target = path.join(dir, 'target'), file = path.join(dir, 'value');
+  fs.writeFileSync(target, 'invented target\n'); fs.symlinkSync(target, file);
+  await assert.rejects(publishPrivateFileAsync(file, 'invented value\n'));
+  assert.equal(fs.readFileSync(target, 'utf8'), 'invented target\n');
+  assert.deepEqual(fs.readdirSync(dir).filter(isPendingPrivateWrite), []);
 });
 test('interruption before final publication leaves no partial committed file', t => {
   const dir = fixture(t), file = path.join(dir, 'value');

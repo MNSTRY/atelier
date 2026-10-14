@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { isPendingPrivateWrite, publishPrivateFile } from '../../../project/durable-state.mjs'
+import { isPendingPrivateWrite, publishPrivateFile, publishPrivateFileAsync } from '../../../project/durable-state.mjs'
 import { readRegularTextNoFollow } from '../../../project/private-state.mjs'
 import { OBSIDIAN_EXT_KEY, assertObsidianContract } from '../contracts.mjs'
 import { refuse } from './store.mjs'
@@ -63,31 +63,56 @@ function handle(store, directory, clock) {
   // One writer at a time extends a journal (the publisher holds the view's
   // lock), so the entries read once stay the entries on disk.
   let cached = null
+  // An awaited append in flight: no other append may start until it has
+  // landed, or two entries would take the same sequence number.
+  let appending = false
   const current = () => (cached ??= load(directory))
+  // detail lands under the entry's ext container; the rest are schema fields.
+  const next = ({ step, outcome, state, notePath, beforeDigest, afterDigest, recoveryRef, detail }) => {
+    if (appending) throw new Error('a journal entry is still being written')
+    const loaded = current()
+    const entry = {
+      seq: loaded.records.length,
+      at: isoTime(clock),
+      step,
+      outcome,
+      ...(notePath === undefined ? {} : { notePath }),
+      ...(beforeDigest ? { beforeDigest } : {}),
+      ...(afterDigest ? { afterDigest } : {}),
+      ...(recoveryRef ? { recoveryRef } : {}),
+      ...(detail ? { ext: { [OBSIDIAN_EXT_KEY]: detail } } : {}),
+    }
+    const record = { entry, state: state ?? (loaded.records.at(-1)?.state ?? 'prepared') }
+    assemble({ header: loaded.header, records: [record] })
+    return { loaded, entry, record, file: path.join(directory, 'entries', `${String(entry.seq).padStart(8, '0')}.json`), text: `${JSON.stringify(record, null, 2)}\n` }
+  }
   const journal = {
     directory,
     document: () => assemble(current()),
-    // detail lands under the entry's ext container; the rest are schema fields.
-    append({ step, outcome, state, notePath, beforeDigest, afterDigest, recoveryRef, detail }) {
-      const loaded = current()
-      const entry = {
-        seq: loaded.records.length,
-        at: isoTime(clock),
-        step,
-        outcome,
-        ...(notePath === undefined ? {} : { notePath }),
-        ...(beforeDigest ? { beforeDigest } : {}),
-        ...(afterDigest ? { afterDigest } : {}),
-        ...(recoveryRef ? { recoveryRef } : {}),
-        ...(detail ? { ext: { [OBSIDIAN_EXT_KEY]: detail } } : {}),
-      }
-      const record = { entry, state: state ?? (loaded.records.at(-1)?.state ?? 'prepared') }
-      assemble({ header: loaded.header, records: [record] })
+    append(fields) {
+      const { loaded, entry, record, file, text } = next(fields)
       try {
-        publishPrivateFile(path.join(directory, 'entries', `${String(entry.seq).padStart(8, '0')}.json`), `${JSON.stringify(record, null, 2)}\n`)
+        publishPrivateFile(file, text)
       } catch (error) {
         cached = null
         throw error
+      }
+      loaded.records.push(record)
+      return entry
+    },
+    // The same entry, its file written and synced on the thread pool so that
+    // the event loop is free meanwhile. The publisher awaits it inside a unit,
+    // in the order it would have called append.
+    async appendDurably(fields) {
+      const { loaded, entry, record, file, text } = next(fields)
+      appending = true
+      try {
+        await publishPrivateFileAsync(file, text)
+      } catch (error) {
+        cached = null
+        throw error
+      } finally {
+        appending = false
       }
       loaded.records.push(record)
       return entry

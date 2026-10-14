@@ -1,14 +1,15 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { hostname } from 'node:os';
-import { ensureContainedPrivateDirectory, openRegularFileNoFollow, readRegularTextNoFollow, syncPrivateDirectory } from './private-state.mjs';
+import { ensureContainedPrivateDirectory, openRegularFileNoFollow, openRegularFileNoFollowAsync, readRegularTextNoFollow, syncPrivateDirectory, syncPrivateDirectoryAsync } from './private-state.mjs';
 
 const host = createHash('sha256').update(hostname()).digest('hex');
 const pendingPattern = /^\.atelier-write-[a-f0-9-]{36}\.tmp$/;
 export const isPendingPrivateWrite = name => pendingPattern.test(name);
 
-export { syncPrivateDirectory };
+export { syncPrivateDirectory, syncPrivateDirectoryAsync };
 
 // Publish a complete immutable file with an atomic, non-overwriting hard link.
 // A process interruption can leave a private staging file, never a partial final.
@@ -33,6 +34,33 @@ export function publishPrivateFile(file, bytes) {
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
     try { fs.unlinkSync(pending); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+}
+
+// publishPrivateFile with its writes, syncs and read-back on the thread pool, so
+// the event loop is free while they run. Same steps in the same order, same
+// outcome; a caller awaits it where it would have called publishPrivateFile.
+export async function publishPrivateFileAsync(file, bytes) {
+  const directory = path.dirname(file);
+  const pending = path.join(directory, `.atelier-write-${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await openRegularFileNoFollowAsync(pending, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = undefined;
+    try { await fsp.link(pending, file); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const existing = await openRegularFileNoFollowAsync(file);
+      try { if (!(await existing.readFile()).equals(Buffer.from(bytes))) throw error; }
+      finally { await existing.close(); }
+    }
+    await syncPrivateDirectoryAsync(directory);
+    const actual = await openRegularFileNoFollowAsync(file);
+    try { if (!(await actual.readFile()).equals(Buffer.from(bytes))) throw new Error('published file readback mismatch'); }
+    finally { await actual.close(); }
+  } finally {
+    if (handle !== undefined) await handle.close();
+    try { await fsp.unlink(pending); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
 }
 

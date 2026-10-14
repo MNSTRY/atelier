@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -10,6 +11,15 @@ function escapes(root, candidate) {
 function lstatIfPresent(file) {
   try {
     return fs.lstatSync(file)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+async function lstatIfPresentAsync(file) {
+  try {
+    return await fsp.lstat(file)
   } catch (error) {
     if (error?.code === 'ENOENT') return null
     throw error
@@ -71,6 +81,27 @@ export function openRegularFileNoFollow(file, flags = fs.constants.O_RDONLY, mod
   }
 }
 
+// openRegularFileNoFollow through the thread pool: the same checks in the same
+// order, and a FileHandle instead of a descriptor.
+export async function openRegularFileNoFollowAsync(file, flags = fs.constants.O_RDONLY, mode) {
+  const before = await lstatIfPresentAsync(file)
+  if (before && (before.isSymbolicLink() || !before.isFile())) {
+    throw new Error('state leaf is not a regular file')
+  }
+  const handle = await fsp.open(file, flags | (fs.constants.O_NOFOLLOW ?? 0), mode)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile()) throw new Error('state leaf is not a regular file')
+    if (before && before.ino !== 0 && (before.dev !== opened.dev || before.ino !== opened.ino)) {
+      throw Object.assign(new Error('state leaf changed while opening'), { code: 'ELEAFCHANGED' })
+    }
+    return handle
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
 export function readRegularTextNoFollow(file) {
   const descriptor = openRegularFileNoFollow(file)
   try {
@@ -95,6 +126,15 @@ export function syncPrivateDirectory(directory) {
   catch (error) {
     if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EINVAL', 'EISDIR'].includes(error.code)) throw error;
   } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+// syncPrivateDirectory through the thread pool, with the same Windows allowance.
+export async function syncPrivateDirectoryAsync(directory) {
+  let handle;
+  try { handle = await fsp.open(directory, fs.constants.O_RDONLY); await handle.sync(); }
+  catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EINVAL', 'EISDIR'].includes(error.code)) throw error;
+  } finally { if (handle !== undefined) await handle.close(); }
 }
 
 export function atomicReplacePrivateText(file, text, mode = 0o600) {

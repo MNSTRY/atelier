@@ -1234,7 +1234,15 @@ process does: it loads the project again and looks at every view, so a view
 whose note is missing reads `vault-note-missing` instead of staying `current`,
 and a changed source or view is published.
 The comparison of kept notes with their candidates reads asynchronously,
-sixteen at a time, and does not hold the listener. Observing pending edits
+sixteen at a time, and does not hold the listener.
+Within a unit of a publication, its journal entries (`capture`,
+`conditional-update`, `verify`), the folder sync after a created note and,
+before the units, each candidate's stage are written and synced on the thread
+pool, so the listener answers while they are made durable. Nothing else in the
+unit runs until each has landed, and nothing is checked at those waits: a stop
+or a refusal still comes only between units. The rest of a unit still runs in
+one stretch: reading the note, the exchange or link in the vault and its
+syncs, keeping a copy of displaced or edited bytes, and retiring a candidate. Observing pending edits
 and routing proposals wait between two edits and between two operations, so
 a burst of edits does not hold the listener for its whole length. One edit,
 or one operation, is still one stretch. The first edit an observation looks

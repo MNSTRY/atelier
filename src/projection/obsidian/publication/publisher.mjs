@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { acquirePrivateLock, publishPrivateFile, syncPrivateDirectory } from '../../../project/durable-state.mjs'
+import { acquirePrivateLock, publishPrivateFile, syncPrivateDirectory, syncPrivateDirectoryAsync } from '../../../project/durable-state.mjs'
+import { openRegularFileNoFollowAsync } from '../../../project/private-state.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract, manifestLayoutVersion } from '../contracts.mjs'
 import { isPluginOwnedPath, isPolicySettingsPath, isUserOwnedSettingsPath, preparePolicySettingsFile } from '../materialize/settings.mjs'
 import { PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_SOURCE_MODE } from '../plugin-bridge/channel.mjs'
@@ -158,18 +159,23 @@ function ensureParents(vaultRoot, relativePath) {
 }
 
 // `created` receives the path once this call has created the file, and not before: cleanup removes only those.
-function stageCandidate(file, bytes, mode, created = [], crash = () => {}) {
-  const descriptor = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, mode)
+// The write, the sync and the read-back run on the thread pool, so the event loop is free while a candidate is made
+// durable; the steps and their order are those of a synchronous stage.
+async function stageCandidate(file, bytes, mode, created = [], crash = () => {}) {
+  const handle = await fsp.open(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, mode)
   created.push(file)
   try {
     crash('after-late-candidate-open')
-    fs.writeFileSync(descriptor, bytes)
-    fs.fchmodSync(descriptor, mode)
-    fs.fsyncSync(descriptor)
+    await handle.writeFile(bytes)
+    await handle.chmod(mode)
+    await handle.sync()
   } finally {
-    fs.closeSync(descriptor)
+    await handle.close()
   }
-  if (sha256Digest(readFileBytes(file)) !== sha256Digest(bytes)) throw Object.assign(new Error('staged bytes differ from the candidate'), { code: 'ESTAGE' })
+  const staged = await openRegularFileNoFollowAsync(file)
+  let read
+  try { read = await staged.readFile() } finally { await staged.close() }
+  if (sha256Digest(read) !== sha256Digest(bytes)) throw Object.assign(new Error('staged bytes differ from the candidate'), { code: 'ESTAGE' })
 }
 
 // Keep units, compared ahead of the per-unit loop: each vault file is read
@@ -462,7 +468,7 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
         store.checkAllocatedVault?.()
         const existing = fs.lstatSync(path.join(store.vaultRoot, unit.path), { throwIfNoEntry: false })
         unit.preparedPath = store.preparedPath(journalId, unit.unit)
-        stageCandidate(unit.preparedPath, unit.bytes, unit.mode ?? (existing?.isFile() ? existing.mode & 0o777 : 0o644), created)
+        await stageCandidate(unit.preparedPath, unit.bytes, unit.mode ?? (existing?.isFile() ? existing.mode & 0o777 : 0o644), created)
         // A replacement is exchanged, and the exchange leaves the displaced bytes at this path: it is in recovery.
         unit.stagedPath = unit.op === 'replace' ? store.exchangeCandidatePath(journalId, unit.unit) : unit.preparedPath
       }
@@ -683,7 +689,7 @@ async function publishOneUnit(unit, context) {
 
   let plan = unit
   if (unit.op === 'settings') {
-    plan = planSettings(unit, context)
+    plan = await planSettings(unit, context)
     if (plan.outcome) return plan
   }
   let current
@@ -694,7 +700,7 @@ async function publishOneUnit(unit, context) {
     if (currentDigest === plan.candidateDigest) return outcome('unchanged')
     if (current === null) {
       let stagedPath
-      try { stagedPath = stageLate(plan, context) } catch (error) {
+      try { stagedPath = await stageLate(plan, context) } catch (error) {
         return outcome('staging-failed', { blocking: true, errorCode: error.code ?? null })
       }
       plan = { ...plan, op: 'create', stagedPath }
@@ -728,10 +734,12 @@ async function publishOneUnit(unit, context) {
   const operationId = `${journalId}:${unit.unit}`
   const displaced = plan.op === 'create' ? null : store.displacedPath(journalId, unit.unit)
   // The journal state never goes backwards: once a note has been published the transition is `updating`.
-  const capture = (result, code, extra = {}) => journal.append({ step: 'capture', outcome: result, state: context.updating ? 'updating' : 'captured', notePath: unit.path,
+  // Each entry is awaited where it is written: its file is made durable on the thread pool, and nothing else in this
+  // unit runs until it has landed.
+  const capture = (result, code, extra = {}) => journal.appendDurably({ step: 'capture', outcome: result, state: context.updating ? 'updating' : 'captured', notePath: unit.path,
     ...(extra.beforeDigest ? { beforeDigest: extra.beforeDigest } : {}), ...(result === 'ok' && plan.candidateDigest ? { afterDigest: plan.candidateDigest } : {}),
     ...(extra.recoveryRef ? { recoveryRef: extra.recoveryRef } : {}), detail: { unit: unit.unit, op: plan.op, kind: unit.kind, code, ...(extra.detail ?? {}) } })
-  const settle = (result, code, extra = {}) => journal.append({ step: 'conditional-update', outcome: result, state: (context.updating ||= result === 'ok') ? 'updating' : 'captured', notePath: unit.path,
+  const settle = (result, code, extra = {}) => journal.appendDurably({ step: 'conditional-update', outcome: result, state: (context.updating ||= result === 'ok') ? 'updating' : 'captured', notePath: unit.path,
     ...(plan.baseDigest ? { beforeDigest: plan.baseDigest } : {}), ...(result === 'ok' && plan.candidateDigest ? { afterDigest: plan.candidateDigest } : {}),
     ...(extra.recoveryRef ? { recoveryRef: extra.recoveryRef } : {}), detail: { unit: unit.unit, op: plan.op, kind: unit.kind, code, ...(extra.externalCaptured ? { externalCaptured: true } : {}) } })
 
@@ -739,31 +747,31 @@ async function publishOneUnit(unit, context) {
     if (current !== null) {
       // A file appeared where a new note would go. It is not ours: keep it.
       const object = observe(current)
-      capture('conflict', 'create-conflict', { beforeDigest: currentDigest, recoveryRef: object.ref })
+      await capture('conflict', 'create-conflict', { beforeDigest: currentDigest, recoveryRef: object.ref })
       retire(plan, context)
       return outcome('create-conflict', { blocking: true, observedDigest: currentDigest, objectRef: object.ref })
     }
-    capture('ok', 'intent', { detail: { intent: true, operationId, stagedRef: store.ref(plan.stagedPath) } })
+    await capture('ok', 'intent', { detail: { intent: true, operationId, stagedRef: store.ref(plan.stagedPath) } })
     context.crash('after-capture')
     try {
       // Exclusive create: a hard link either makes the complete file appear or fails because something is there.
       fs.linkSync(plan.stagedPath, note)
     } catch (error) {
       retire(plan, context)
-      settle(error.code === 'EEXIST' ? 'conflict' : 'failed', error.code === 'EEXIST' ? 'create-conflict' : 'create-failed')
+      await settle(error.code === 'EEXIST' ? 'conflict' : 'failed', error.code === 'EEXIST' ? 'create-conflict' : 'create-failed')
       return outcome(error.code === 'EEXIST' ? 'create-conflict' : 'create-failed', { blocking: true, errorCode: error.code })
     }
     context.crash('after-publish')
     fs.unlinkSync(plan.stagedPath)
-    syncPrivateDirectory(path.dirname(note))
-    settle('ok', 'created')
+    await syncPrivateDirectoryAsync(path.dirname(note))
+    await settle('ok', 'created')
     return verify(unit, plan, context, outcome('created'))
   }
 
   // replace and remove: the comparison baseline is retained before anything moves.
   if (currentDigest !== plan.baseDigest) {
     const object = observe(current)
-    capture('conflict', 'disk-changed', { beforeDigest: currentDigest, recoveryRef: object.ref })
+    await capture('conflict', 'disk-changed', { beforeDigest: currentDigest, recoveryRef: object.ref })
     if (plan.stagedPath) retire(plan, context)
     const retained = { path: unit.path, priorDigest: plan.baseDigest, observedDigest: currentDigest, objectRef: object.ref }
     // An edited note that left the scope is never deleted. It stays in the vault and stays surfaced.
@@ -773,16 +781,16 @@ async function publishOneUnit(unit, context) {
   const baseObject = observe(current)
   const inspected = await context.channel.inspect({ vaultRoot: store.vaultRoot, path: unit.path })
   if (inspected.status !== 'inspected') {
-    capture('failed', inspected.status, { beforeDigest: currentDigest })
+    await capture('failed', inspected.status, { beforeDigest: currentDigest })
     if (plan.stagedPath) retire(plan, context)
     return outcome(inspected.status, { blocking: true })
   }
   if (inspected.views.some((view) => view.dirty || view.bufferSha256 !== hex(plan.baseDigest))) {
-    capture('conflict', 'editor-edit', { beforeDigest: currentDigest, recoveryRef: baseObject.ref })
+    await capture('conflict', 'editor-edit', { beforeDigest: currentDigest, recoveryRef: baseObject.ref })
     if (plan.stagedPath) retire(plan, context)
     return outcome('editor-edit', { blocking: true, openViews: inspected.views.length })
   }
-  capture('ok', 'intent', { beforeDigest: plan.baseDigest, recoveryRef: store.ref(displaced),
+  await capture('ok', 'intent', { beforeDigest: plan.baseDigest, recoveryRef: store.ref(displaced),
     detail: { intent: true, operationId, baseObjectRef: baseObject.ref, openViews: inspected.views.length, ...(plan.stagedPath ? { stagedRef: store.ref(plan.stagedPath) } : {}) } })
   context.crash('after-capture')
 
@@ -792,11 +800,11 @@ async function publishOneUnit(unit, context) {
   context.crash('after-publish')
 
   if (reply.status === 'published' || reply.status === 'published-external-captured' || reply.status === 'removed' || reply.status === 'removed-external-captured') {
-    syncPrivateDirectory(path.dirname(displaced))
+    await syncPrivateDirectoryAsync(path.dirname(displaced))
     const recorded = recordDisplaced({ store, journalId, unit: unit.unit, notePath: unit.path, displacedPath: displaced, baseDigest: plan.baseDigest, at: iso(clock),
       digestAtMove: /^[0-9a-f]{64}$/.test(reply.recoveredSha256 ?? '') ? `sha256:${reply.recoveredSha256}` : null })
     const code = plan.op === 'remove' ? (recorded.externalCaptured ? 'removed-external-captured' : 'removed') : (recorded.externalCaptured ? 'published-external-captured' : 'published')
-    settle('ok', code, { recoveryRef: recorded.displacedRef, externalCaptured: recorded.externalCaptured })
+    await settle('ok', code, { recoveryRef: recorded.displacedRef, externalCaptured: recorded.externalCaptured })
     const result = outcome(code, { recoveryRef: recorded.displacedRef, externalCaptured: recorded.externalCaptured, openViews: reply.openViews ?? 0, replyLost: reply.replyLost === true,
       ...(plan.op === 'remove' && recorded.externalCaptured ? { retained: { path: unit.path, priorDigest: plan.baseDigest, observedDigest: recorded.digestAtMove, recoveryRef: recorded.displacedRef, movedToRecovery: true } } : {}) })
     return plan.op === 'remove' ? result : verify(unit, plan, context, result)
@@ -806,7 +814,7 @@ async function publishOneUnit(unit, context) {
     // No reply and no recorded outcome. The files say what happened; the publish is not sent again.
     const captureEntry = journal.document().entries.findLast((entry) => entry.step === 'capture' && entry.notePath === unit.path)
     const entry = reconcileUnit({ store, journalId, capture: captureEntry, at: iso(clock) })
-    journal.append({ ...entry, state: (context.updating ||= entry.outcome === 'ok') ? 'updating' : 'captured' })
+    await journal.appendDurably({ ...entry, state: (context.updating ||= entry.outcome === 'ok') ? 'updating' : 'captured' })
     if (entry.outcome === 'ok') {
       const result = outcome(entry.detail.code, { recoveryRef: entry.recoveryRef, externalCaptured: entry.detail.externalCaptured === true, replyLost: true })
       return plan.op === 'remove' ? result : verify(unit, plan, context, result)
@@ -820,20 +828,20 @@ async function publishOneUnit(unit, context) {
     // receipt, and it is removed here when it still is that very file.
     const [live, left] = [fs.lstatSync(note, { throwIfNoEntry: false }), fs.lstatSync(displaced, { throwIfNoEntry: false })]
     if (live && left && live.ino === left.ino && live.dev === left.dev) try { fs.unlinkSync(displaced) } catch { /* the late-writer check skips a name that is the live note */ }
-    settle('conflict', 'remove-reverted')
+    await settle('conflict', 'remove-reverted')
     const bytes = readNote(note)
     const object = bytes === null ? null : observe(bytes)
     return outcome('retained-edit', { retained: { path: unit.path, priorDigest: plan.baseDigest, observedDigest: bytes === null ? null : sha256Digest(bytes), ...(object ? { objectRef: object.ref } : {}) } })
   }
   if (reply.status === 'note-missing' && plan.op === 'remove') {
-    settle('ok', 'already-absent')
+    await settle('ok', 'already-absent')
     return outcome('already-absent')
   }
   const conflict = REFUSED_BY_EDIT.has(reply.status) || reply.status === 'note-missing'
   // Whatever is at the path now is somebody's edit: keep a copy before reporting the refusal.
   const seen = REFUSED_BY_EDIT.has(reply.status) ? readNote(note) : null
   const seenObject = seen === null || sha256Digest(seen) === plan.baseDigest ? null : observe(seen)
-  settle(conflict ? 'conflict' : 'failed', reply.status, seenObject ? { recoveryRef: seenObject.ref } : {})
+  await settle(conflict ? 'conflict' : 'failed', reply.status, seenObject ? { recoveryRef: seenObject.ref } : {})
   return outcome(reply.status, { blocking: true, ...(seenObject ? { observedDigest: seenObject.digest, objectRef: seenObject.ref } : {}), ...(reply.exitStatus === undefined ? {} : { exitStatus: reply.exitStatus }) })
 }
 
@@ -858,16 +866,16 @@ function retire(plan, { store, journalId, crash }) {
 // restart recovery can then tell this generated file from displaced bytes.
 // A late candidate that fails part-way is removed before the failure is
 // reported: nothing names it, so nothing would ever clean it up.
-function stageLate(plan, { store, journal, journalId, crash, updating }) {
+async function stageLate(plan, { store, journal, journalId, crash, updating }) {
   const preparedPath = store.preparedPath(journalId, plan.unit, { late: true })
   const created = []
-  try { stageCandidate(preparedPath, plan.bytes, plan.mode ?? 0o644, created, crash) } catch (error) {
+  try { await stageCandidate(preparedPath, plan.bytes, plan.mode ?? 0o644, created, crash) } catch (error) {
     for (const file of created) fs.rmSync(file, { force: true })
     throw error
   }
   if (plan.op !== 'replace') return preparedPath
   const unit = { unit: plan.unit, preparedPath, stagedPath: store.exchangeCandidatePath(journalId, plan.unit, { late: true }) }
-  journal.append({ step: 'capture', outcome: 'ok', state: updating ? 'updating' : 'captured', notePath: plan.path, afterDigest: plan.candidateDigest,
+  await journal.appendDurably({ step: 'capture', outcome: 'ok', state: updating ? 'updating' : 'captured', notePath: plan.path, afterDigest: plan.candidateDigest,
     detail: { unit: plan.unit, op: plan.op, kind: plan.kind, code: 'late-candidate', intent: false, stagedRef: store.ref(unit.stagedPath), preparedRef: store.ref(preparedPath) } })
   crash('after-late-write-ahead')
   moveToExchangePath(store, journalId, unit)
@@ -878,7 +886,7 @@ function stageLate(plan, { store, journal, journalId, crash, updating }) {
 // disk now with only what Atelier owns set; the base is that same file. A file
 // whose shape the policy does not know is the person's to repair and is left
 // alone.
-function planSettings(unit, context) {
+async function planSettings(unit, context) {
   const note = path.join(context.store.vaultRoot, unit.path)
   let existing
   try { existing = readNote(note) } catch (error) {
@@ -903,7 +911,7 @@ function planSettings(unit, context) {
   if (existing !== null && file.bytes.equals(existing)) return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'policy-satisfied', blocking: false }
   const plan = { ...unit, op: existing === null ? 'create' : 'replace', baseDigest: existing === null ? null : sha256Digest(existing), candidateDigest: file.digest, bytes: file.bytes,
     mode: existing === null ? 0o644 : fs.lstatSync(note).mode & 0o777 }
-  try { plan.stagedPath = stageLate(plan, context) } catch (error) {
+  try { plan.stagedPath = await stageLate(plan, context) } catch (error) {
     return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'staging-failed', blocking: true, errorCode: error.code }
   }
   return plan
@@ -916,16 +924,16 @@ function holdsPolicy(settingsPath, bytes) {
   }
 }
 
-function verify(unit, plan, { store, journal }, result) {
+async function verify(unit, plan, { store, journal }, result) {
   const bytes = readNote(path.join(store.vaultRoot, unit.path))
   const digest = bytes === null ? null : sha256Digest(bytes)
   if (digest === plan.candidateDigest) {
-    journal.append({ step: 'verify', outcome: 'ok', state: 'updating', notePath: unit.path, afterDigest: digest, detail: { unit: unit.unit, code: 'verified' } })
+    await journal.appendDurably({ step: 'verify', outcome: 'ok', state: 'updating', notePath: unit.path, afterDigest: digest, detail: { unit: unit.unit, code: 'verified' } })
     return result
   }
   // Published, then changed by someone else. That is an edit on top of this generation, kept where it is.
   const object = bytes === null ? null : store.retainObject(bytes)
-  journal.append({ step: 'verify', outcome: 'conflict', state: 'updating', notePath: unit.path, ...(digest ? { afterDigest: digest } : {}), ...(object ? { recoveryRef: object.ref } : {}),
+  await journal.appendDurably({ step: 'verify', outcome: 'conflict', state: 'updating', notePath: unit.path, ...(digest ? { afterDigest: digest } : {}), ...(object ? { recoveryRef: object.ref } : {}),
     detail: { unit: unit.unit, code: 'changed-after-publication' } })
   return { ...result, changedAfterPublication: true, observedDigest: digest, ...(object ? { objectRef: object.ref } : {}) }
 }

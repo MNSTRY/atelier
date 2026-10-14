@@ -38,7 +38,7 @@ import { PUBLICATION_PRIMITIVES, publishViewForOracleTests } from '../src/projec
 // native refusal itself is asserted on every platform further down.
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which is asserted separately' }
-import { EXCHANGE_CANDIDATE_NAME, LATE_EXCHANGE_CANDIDATE_NAME, VAULT_LOCK_DIRECTORY, acquireVaultLock, classifyCandidateFile, createRecoveryStore, listJournals, namedCandidates, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
+import { EXCHANGE_CANDIDATE_NAME, LATE_EXCHANGE_CANDIDATE_NAME, VAULT_LOCK_DIRECTORY, acquireVaultLock, classifyCandidateFile, createJournal, createRecoveryStore, listJournals, namedCandidates, newJournalId, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
 import { createQualifiedAdapterFactory } from '../src/runtime/obsidian/app-capability.mjs'
 
 // Every G00 interleaving, replayed against the production publisher on a real
@@ -272,6 +272,62 @@ test('cooperative publication lets the event loop turn at every unit boundary, a
   const defaults = await plain.publish(viewOf('gen-default-budget', { notes }), absentAdapter(), { scheduling: { onBurst: ({ phase }) => phases.push(phase) } })
   assert.equal(defaults.state, 'committed')
   assert.ok(phases.includes('stage-candidate') && phases.includes('publish-unit'), JSON.stringify([...new Set(phases)]))
+})
+
+// A candidate's stage and a unit's journal entries are made durable on the thread pool: the loop turns while they are
+// written, not only at the boundaries. The budget here never yields by itself, so a turn seen between two boundaries
+// can only be one of those writes. Each created note writes three entries (capture, conditional-update, verify), so a
+// count of entries that is not a multiple of three was seen inside a unit; a count of staged candidates other than
+// none or all, before the journal begins, was seen inside the staging loop.
+test('a publication lets the event loop turn while a candidate is staged and while a unit writes its journal entries', needsExchange, async (t) => {
+  const notes = inventedNotes(12)
+  const world = makeWorld(t)
+  const seen = { entries: new Set(), staged: new Set() }
+  let stopped = false
+  const count = (directory) => { try { return fs.readdirSync(directory).filter((name) => !name.startsWith('.')).length } catch (error) { if (error.code === 'ENOENT') return null; throw error } }
+  // The journal's header is written once every candidate is staged; until then the staging loop is running. (After it,
+  // created notes take their candidates out of staging one by one, which says nothing about the staging loop.)
+  const watch = () => {
+    if (stopped) return
+    const journals = (count(world.store.journalsRoot) === null ? [] : fs.readdirSync(world.store.journalsRoot))
+      .filter((journal) => fs.existsSync(path.join(world.store.journalsRoot, journal, 'header.json')))
+    for (const journal of journals) {
+      const entries = count(path.join(world.store.journalsRoot, journal, 'entries'))
+      if (entries !== null) seen.entries.add(entries)
+    }
+    if (journals.length === 0) seen.staged.add(filesUnder(path.join(world.root, 'staging')).filter((file) => !path.basename(file).startsWith('.')).length)
+    setImmediate(watch)
+  }
+  setImmediate(watch)
+  t.after(() => { stopped = true })
+  const result = await world.publish(viewOf('gen-durable-turns', { notes }), absentAdapter(), { scheduling: { budgetMs: 1e9, maxUnits: 1e6 } })
+  stopped = true
+  assert.equal(result.state, 'committed', JSON.stringify(result).slice(0, 400))
+  // Below 36 entries the units are still running; the commit's own entries come after. An entry's file is in place
+  // before it is synced and read back. With the entries written on the loop, a turn inside a unit (at the folder sync)
+  // sees one entry of it; seeing two as well needs a turn while an entry is being written.
+  const inside = [...seen.entries].filter((entries) => entries < 36).map((entries) => entries % 3)
+  assert.ok(inside.includes(1) && inside.includes(2), `the loop did not turn while a unit wrote its entries: ${JSON.stringify([...seen.entries])}`)
+  assert.ok([...seen.staged].some((staged) => staged > 0 && staged < 12), `the loop never turned inside the staging loop: ${JSON.stringify([...seen.staged])}`)
+  for (const notePath of Object.keys(notes)) assert.equal(world.read(notePath), notes[notePath])
+  assertJournalsValid(world)
+})
+
+test('an awaited journal entry lands as a written one does, and no other entry may start while one is being written', async (t) => {
+  const world = makeWorld(t)
+  const journal = createJournal(world.store, { journalId: newJournalId(clock), protocolId: PROTOCOL_ID, expectedGeneration: null, targetGeneration: 'gen-awaited', clock })
+  const first = await journal.appendDurably({ step: 'capture', outcome: 'ok', state: 'captured', notePath: NOTE, detail: { unit: 0, code: 'intent' } })
+  assert.equal(first.seq, 0)
+  const pending = journal.appendDurably({ step: 'conditional-update', outcome: 'ok', state: 'updating', notePath: NOTE, detail: { unit: 0, code: 'created' } })
+  assert.throws(() => journal.append({ step: 'verify', outcome: 'ok', state: 'updating', notePath: NOTE }), /still being written/)
+  await assert.rejects(journal.appendDurably({ step: 'verify', outcome: 'ok', state: 'updating', notePath: NOTE }), /still being written/)
+  assert.equal((await pending).seq, 1)
+  const third = journal.append({ step: 'verify', outcome: 'ok', state: 'updating', notePath: NOTE, detail: { unit: 0, code: 'verified' } })
+  assert.equal(third.seq, 2)
+  // Read again from disk, the three entries are there in order, each as its own file.
+  const [reread] = listJournals(world.store)
+  assert.deepEqual(reread.document().entries.map((entry) => [entry.seq, entry.step]), [[0, 'capture'], [1, 'conditional-update'], [2, 'verify']])
+  assertJournalsValid(world)
 })
 
 // The caller stops a publication between two candidates: its settings check refuses (a setting that selected the view
