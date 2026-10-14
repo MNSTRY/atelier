@@ -799,6 +799,20 @@ test('started by a login item on a personal home with nothing confirmed, the ser
   assert.deepEqual([startup?.outcome, startup?.code], ['refused', 'service-settings-absent'])
 })
 
+for (const [kind, expected] of [['thenable', { status: 0, code: 'service-loader-not-synchronous', thenCalls: 1 }], ['throws-undefined', { status: 1, code: 'untyped-error', thenCalls: 0 }]]) {
+  test(`started by a login item on a personal home whose locator ${kind === 'thenable' ? 'answers a thenable' : 'throws `undefined`'}, the service asks it once and ends as for a loader that does the same`, (t) => {
+    const ari = makePerson(t)
+    const entry = fileURLToPath(new URL('./support/obsidian-maintenance/service-entry.mjs', import.meta.url))
+    const child = childProcess.spawnSync(process.execPath, [entry, `--personal-home=${ari.home}`, `--data-root=${ari.dataRoot}`, '--startup', `--locator-answers=${kind}`], { env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }, encoding: 'utf8', timeout: 120_000 })
+    assert.equal(child.status, expected.status, `${child.stdout}${child.stderr}`)
+    assert.equal(/unhandled|rejection/i.test(child.stderr), false, child.stderr)
+    // No workspace is named, and the locator led to none: the refusal is printed into the unit's output only.
+    const lines = child.stdout.split('\n').filter((line) => line.startsWith('{')).map((line) => JSON.parse(line))
+    assert.deepEqual(lines.filter((line) => line.event === 'refused').map((line) => line.code), [expected.code])
+    assert.deepEqual(lines.filter((line) => line.event === 'loader-calls').map(({ locatorCalls, thenCalls }) => ({ locatorCalls, thenCalls })), [{ locatorCalls: 1, thenCalls: expected.thenCalls }])
+  })
+}
+
 test('the plugin status read permits a bound view once two loads of the confirmed selection agree, nothing while none is confirmed, and follows a new confirmation', async (t) => {
   const ari = makePerson(t)
   let time = 0

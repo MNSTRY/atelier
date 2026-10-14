@@ -791,7 +791,7 @@ test('where the system resolves no path, a link still vouches for nothing: nobod
 })
 
 const SERVICE_ENTRY = fileURLToPath(new URL('./support/obsidian-maintenance/service-entry.mjs', import.meta.url))
-for (const kind of ['promise', 'refused-promise', 'thenable']) {
+for (const kind of ['promise', 'refused-promise', 'thenable', 'promise-with-own-then']) {
   test(`started by a login item on a loader that answers a ${kind}, the service asks the loader once, records its typed refusal and ends cleanly`, (t) => {
     const w = world(t)
     const child = childProcess.spawnSync(process.execPath, [SERVICE_ENTRY, `--project=${w.configPath}`, `--data-root=${w.dataRoot}`, `--workspace-id=${WORKSPACE_ID}`, '--startup', `--loader-answers=${kind}`], { env: w.env, encoding: 'utf8', windowsHide: true, timeout: 120_000 })
@@ -802,11 +802,12 @@ for (const kind of ['promise', 'refused-promise', 'thenable']) {
     const calls = child.stdout.split('\n').filter((line) => line.includes('loader-calls')).map((line) => JSON.parse(line))
     assert.deepEqual(calls.map((line) => line.count), [1], 'one call serves the lookup of the workspace and the service\'s start')
     if (kind === 'thenable') assert.equal(calls[0].thenCalls, 1, 'the thenable is adopted once: its `then` is called once in all')
+    if (kind === 'promise-with-own-then') assert.equal(calls[0].thenCalls, 0, 'a promise is let go without calling the `then` of its own, which throws')
     assert.equal(readServiceRecord({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null)
   })
 }
 
-for (const [kind, what] of [['unreadable-then', 'answers a project whose `then` cannot be read'], ['throws-undefined', 'throws `undefined`']]) {
+for (const [kind, what] of [['unreadable-then', 'answers a project whose `then` cannot be read'], ['throws-undefined', 'throws `undefined`'], ['throws-bare', 'throws a value with no prototype']]) {
   test(`started by a login item on a loader that ${what}, the service ends as on any failure of its loader: logged as refused, untyped, and a crash`, (t) => {
     const w = world(t)
     const child = childProcess.spawnSync(process.execPath, [SERVICE_ENTRY, `--project=${w.configPath}`, `--data-root=${w.dataRoot}`, `--workspace-id=${WORKSPACE_ID}`, '--startup', `--loader-answers=${kind}`], { env: w.env, encoding: 'utf8', windowsHide: true, timeout: 120_000 })

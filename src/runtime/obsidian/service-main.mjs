@@ -82,22 +82,27 @@ export const EXIT_REFUSED = 2
 // manager restarts it (a non-zero exit), on the release now installed. EX_TEMPFAIL.
 export const EXIT_RELEASE_CHANGED = 75
 
+const readOr = (read, otherwise) => { try { return read() } catch { return otherwise } }
 const printed = (entry) => { try { process.stdout.write(`${JSON.stringify(entry)}\n`) } catch { /* a closed log never ends the service */ } }
 
-// The loader's first answer, asked for once and handed to both who need it at a start under a login item: the lookup
-// of the workspace below, and the service's own start, which takes it as the answer to its first call. A loader that
-// answers a promise or another thenable is not waited for by either. Its answer is adopted here, once, as a native
-// promise (so the `then` of a thenable is called once in all), and that promise is let go: a refusal of it never goes
-// unhandled and ends the process with an error where the service's typed refusal should end it cleanly. The service
-// is handed that promise. Whatever the loader throws, `undefined` included, and a `then` that cannot be read, is
-// thrown again at the service's first call, so it ends the start as the loader's own failure would.
+// The first answer of the loader, or of the locator of a personal home, asked for once and handed to both who need it
+// at a start under a login item: the lookup of the workspace below, and the service's own start, which takes it as the
+// answer to its first call. One that answers a promise or another thenable is not waited for by either. A thenable is
+// adopted here, once, as a native promise (so its `then` is called once in all), and that promise is let go, handled
+// without calling a `then` of its own: a refusal of it never goes unhandled and ends the process with an error where
+// the service's typed refusal should end it cleanly. The service is handed that promise. Whatever is thrown,
+// `undefined` included, and a `then` that cannot be read, is thrown again at the service's first call, so it ends the
+// start as a failure of the loader would.
 function firstAnswerOf(loadProject) {
   let first
   try {
     const project = loadProject()
-    first = typeof project?.then === 'function' ? { promised: Promise.resolve(project) } : { project }
+    if (typeof project?.then === 'function') {
+      const promised = Promise.resolve(project)
+      Promise.prototype.then.call(promised, undefined, () => {})
+      first = { promised }
+    } else first = { project }
   } catch (error) { first = { threw: true, error } }
-  first.promised?.catch(() => {})
   let taken = false
   return {
     // The project, when the loader answered one at once; null when it threw or answered a promise.
@@ -167,8 +172,9 @@ export async function runServiceProcess(options) {
     process.exit(reason === RELEASE_CHANGED ? EXIT_RELEASE_CHANGED : 0)
   } catch (error) {
     const at = new Date().toISOString()
-    const code = typeof error?.code === 'string' ? error.code : null
-    log({ at, event: 'refused', code: code ?? 'untyped-error', message: String(error?.message ?? error) })
+    // What was thrown is read without trusting it: a value with no prototype, or a getter that throws, is still logged.
+    const code = readOr(() => (typeof error?.code === 'string' ? error.code : null), null)
+    log({ at, event: 'refused', code: code ?? 'untyped-error', message: readOr(() => String(error?.message ?? error), 'unprintable') })
     if (startup && code !== null) { recordStartup(workspace, { at, outcome: 'refused', code }); process.exitCode = 0; return }
     process.exitCode = code !== null ? EXIT_REFUSED : 1
   }

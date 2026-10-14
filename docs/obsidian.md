@@ -1164,15 +1164,16 @@ other thenable, such as `loadBoundProjectOffThread`, with
 `service-loader-not-synchronous`, before it reads anything from it, listens or
 records anything; a promise it was handed is let go, and its refusal, if it
 is refused, does not go unhandled. Started by a login item (`--startup`), the
-service asks its loader once for both the lookup of its workspace and its own
-start. A loader that answers a promise there is never handed to the workspace
-resolution: its answer is adopted once (the `then` of another thenable is called
-once in all), the refusal is recorded in the workspace the unit names, when that
-exists, and the process ends with 0, so the service manager does not start it
-again at once. A loader that throws there, whatever it throws (`undefined`
-too), or answers a project whose `then` cannot be read, ends the start as a
-failure of the loader does anywhere else: it is logged, and an error without a
-code is a crash.
+service asks its loader (or, under `--personal-home`, its locator) once for both
+the lookup of its workspace and its own start. One that answers a promise there
+is never handed to the workspace resolution: a thenable that is no promise is
+adopted once (its `then` is called once in all), a promise is let go without
+calling a `then` of its own, the refusal is recorded in the workspace the unit
+names, when that exists, and the process ends with 0, so the service manager
+does not start it again at once. One that throws there, whatever it throws
+(`undefined` too, or a value with no prototype), or answers a project whose
+`then` cannot be read, ends the start as a failure of the loader does anywhere
+else: it is logged, and what carries no code is a crash.
 A service bound through `--personal-home` is given a locator as well, and starts
 from it (see "A confirmed selection"). The plugin's status read allows for such
 a loader without waiting for it (see "The channel" in
