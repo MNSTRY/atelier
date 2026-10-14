@@ -1840,7 +1840,7 @@ test('a view the project turns off or no longer declares is told nothing the ser
   const document = await world.statusDocument()
   assert.deepEqual(document.plugins.scopes.map(({ present, sessions }) => ({ present, sessions })), [{ present: true, sessions: 1 }])
   // The loads behind those answers are counted in the service's status: numbers only, and none of them failed.
-  assert.deepEqual(Object.keys(document.statusLoads).sort(), ['answered', 'failed', 'givenUp', 'longestMs', 'slow'])
+  assert.deepEqual(Object.keys(document.statusLoads).sort(), ['answered', 'failed', 'givenUp', 'longestMs', 'notKept', 'slow'])
   assert.ok(Object.values(document.statusLoads).every((count) => Number.isInteger(count) && count >= 0) && document.statusLoads.answered >= 2, JSON.stringify(document.statusLoads))
   assert.deepEqual([document.statusLoads.failed, document.statusLoads.givenUp], [0, 0])
 

@@ -13,7 +13,7 @@ import { readLastStartup, readServiceRecord, servicePaths } from '../src/runtime
 import { runServiceProcess } from '../src/runtime/obsidian/service-main.mjs'
 import { resolveServiceWorkspace, runMaintenanceService, serviceWorkspaceInputs } from '../src/runtime/obsidian/service.mjs'
 import {
-  DEFAULT_KEEP_FOR_MS, DEFAULT_LOAD_DEADLINE_MS, DEFAULT_RETRY_AFTER_MS, DEFAULT_SLOW_LOAD_MS, STATUS_LOAD_EVENT, createLoadReport, createViewPermission,
+  DEFAULT_KEEP_FOR_MS, DEFAULT_LOAD_DEADLINE_MS, DEFAULT_RETRY_AFTER_MS, DEFAULT_ROW_ENDS_AFTER_MS, DEFAULT_SLOW_LOAD_MS, STATUS_LOAD_EVENT, createLoadReport, createViewPermission,
 } from '../src/runtime/obsidian/view-permission.mjs'
 
 // Whether the project allows a view right now (view-permission.mjs), asked the
@@ -628,7 +628,11 @@ test('each load is told with how long it took and how it ended: times and codes 
   failing = true
   w.write(settings({ enabled: false }))
   assert.equal(permits(VIEW), false)
-  assert.deepEqual(told, [{ durationMs: 120, outcome: 'answered', promised: false }, { durationMs: 120, outcome: 'failed', promised: false }])
+  // The first load knew no files; the second knew them, and they vouched. Neither left a project kept.
+  assert.deepEqual(told, [
+    { durationMs: 120, outcome: 'answered', promised: false, kept: false, known: false, vouched: false, at: 120 },
+    { durationMs: 120, outcome: 'failed', promised: false, kept: false, known: true, vouched: true, at: 240 },
+  ])
 
   const promisedTold = []
   const loader = deferredLoader(w)
@@ -644,12 +648,13 @@ test('each load is told with how long it took and how it ended: times and codes 
   promised(VIEW)
   w.advance(DEFAULT_LOAD_DEADLINE_MS)
   promised(VIEW)
-  assert.deepEqual(promisedTold, [
-    { durationMs: 900, outcome: 'answered', promised: true },
-    { durationMs: 400, outcome: 'failed', promised: true },
-    { durationMs: DEFAULT_LOAD_DEADLINE_MS, outcome: 'given-up', promised: true },
+  assert.deepEqual(promisedTold.map(({ at: _at, ...entry }) => entry), [
+    { durationMs: 900, outcome: 'answered', promised: true, kept: false, known: false, vouched: false },
+    { durationMs: 400, outcome: 'failed', promised: true, kept: false, known: true, vouched: true },
+    { durationMs: DEFAULT_LOAD_DEADLINE_MS, outcome: 'given-up', promised: true, kept: false, known: true, vouched: true },
   ])
-  assert.deepEqual(Object.keys(promisedTold[0]).sort(), ['durationMs', 'outcome', 'promised'])
+  assert.ok(promisedTold.every((entry) => typeof entry.at === 'number'), 'and when it ended, by the permission\'s clock')
+  assert.deepEqual(Object.keys(promisedTold[0]).sort(), ['at', 'durationMs', 'kept', 'known', 'outcome', 'promised', 'vouched'])
 })
 
 test('a promised load that answers, or is refused, only after its deadline with no request in between is told as given up, once, and counts as one failure', async (t) => {
@@ -674,36 +679,67 @@ test('a promised load that answers, or is refused, only after its deadline with 
   }
 })
 
-test('the load report writes a line for a load that failed, was given up or held the event loop, and for the first that answered after a failure; never one per load', () => {
+test('the load report writes a line for a load that failed, was given up or held the event loop, for the one that ends a row of failures, and for loads after which nothing is kept; never one per load', () => {
   const lines = []
   const report = createLoadReport({ write: (line) => lines.push(line) })
-  const load = (outcome, durationMs = 120, promised = false) => report.onLoad({ durationMs, outcome, promised })
-  // A healthy service: every load answers in time. Nothing is written, however many there are.
+  let at = 0
+  // Each load ends a second after the one before, unless it says otherwise.
+  const load = (outcome, { durationMs = 120, promised = false, kept = true, known = true, vouched = true, after = 1000 } = {}) => { at += after; report.onLoad({ durationMs, outcome, promised, kept, known, vouched, at }) }
+  // A healthy service: every load answers in time and keeps the project. Nothing is written, however many there are.
   for (let index = 0; index < 500; index += 1) load('answered')
   assert.deepEqual(lines, [])
   // A loader that keeps failing: the first, then when the row is 2, 4, 8, ... long.
-  for (let index = 0; index < 100; index += 1) load(index % 10 === 9 ? 'given-up' : 'failed', 30, index % 10 === 9)
+  for (let index = 0; index < 100; index += 1) load(index % 10 === 9 ? 'given-up' : 'failed', { durationMs: 30, promised: index % 10 === 9 })
   assert.deepEqual(lines.map((line) => line.inARow), [1, 2, 4, 8, 16, 32, 64])
   assert.deepEqual(lines[0], { event: 'status-project-loaded', durationMs: 30, outcome: 'failed', promised: false, inARow: 1 })
   assert.equal(STATUS_LOAD_EVENT, 'status-project-loaded')
-  // The first that answers after it, once.
+  // A load that answers soon after does not end the row; the first to answer a minute or more after the last failure
+  // does, once.
   lines.length = 0
+  load('answered')
+  load('answered', { after: DEFAULT_ROW_ENDS_AFTER_MS - 1001 })
+  assert.deepEqual(lines, [])
   load('answered')
   load('answered')
   assert.deepEqual(lines, [{ event: 'status-project-loaded', durationMs: 120, outcome: 'answered', promised: false, afterFailures: 100 }])
+  // A loader that fails every other load, or every third, keeps one row: written less and less often, never a line per load.
+  for (const period of [2, 3]) {
+    lines.length = 0
+    for (let index = 0; index < 200; index += 1) load(index % period === 0 ? 'failed' : 'answered')
+    const failures = Math.ceil(200 / period)
+    assert.deepEqual(lines.map((line) => line.inARow), [1, 2, 4, 8, 16, 32, 64].filter((row) => row <= failures), `one failure in ${period}`)
+    load('answered', { after: DEFAULT_ROW_ENDS_AFTER_MS })
+    assert.deepEqual(lines.at(-1), { event: 'status-project-loaded', durationMs: 120, outcome: 'answered', promised: false, afterFailures: failures })
+  }
   // A load that answered at once and took a second or more held the listener's event loop that long; a promised one
-  // held nothing. Slow loads in a row are written on the same doubling row.
+  // held nothing. Slow loads are written on the same doubling row, which loads in time between them do not end.
   lines.length = 0
-  load('answered', DEFAULT_SLOW_LOAD_MS - 1)
-  load('answered', 60_000, true)
+  load('answered', { durationMs: DEFAULT_SLOW_LOAD_MS - 1 })
+  load('answered', { durationMs: 60_000, promised: true })
   assert.deepEqual(lines, [])
-  for (let index = 0; index < 40; index += 1) load('answered', DEFAULT_SLOW_LOAD_MS + index)
+  for (let index = 0; index < 40; index += 1) {
+    load('answered', { durationMs: DEFAULT_SLOW_LOAD_MS + index })
+    load('answered')
+  }
   assert.deepEqual(lines.map(({ slow, inARow, durationMs }) => [slow, inARow, durationMs]), [[true, 1, 1000], [true, 2, 1001], [true, 4, 1003], [true, 8, 1007], [true, 16, 1015], [true, 32, 1031]])
+  load('answered', { after: DEFAULT_ROW_ENDS_AFTER_MS })
+  load('answered', { durationMs: DEFAULT_SLOW_LOAD_MS })
+  assert.equal(lines.at(-1).inARow, 1, 'a load in time a minute or more after the last slow one ends the row')
+  // Loads after which nothing is kept, though the files were known: a load at every request. The first in a row writes
+  // nothing (a load after a change keeps nothing either); from the second, on the doubling row. One that keeps ends it,
+  // and a first load, which knows no files, neither counts nor ends it.
+  lines.length = 0
+  for (let index = 0; index < 15; index += 1) load('answered', { kept: false, vouched: index % 2 === 0 })
+  assert.deepEqual(lines.map(({ notKept, notKeptInARow, vouched }) => [notKept, notKeptInARow, vouched]), [[true, 2, false], [true, 4, false], [true, 8, false]])
+  lines.length = 0
+  // Fifteen in the row: a sixteenth would be written. A first load in between neither counts nor ends the row; one that
+  // keeps the project ends it, so the next is the first of a new row.
+  load('answered', { kept: false, known: false })
   load('answered')
-  load('answered', DEFAULT_SLOW_LOAD_MS)
-  assert.equal(lines.at(-1).inARow, 1, 'a load in time ends the row')
+  load('answered', { kept: false })
+  assert.deepEqual(lines, [], 'a kept project ended the row')
   // Every load is counted, written or not.
-  assert.deepEqual(report.counts(), { answered: 546, failed: 90, givenUp: 10, slow: 41, longestMs: 60_000 })
+  assert.deepEqual(report.counts(), { answered: 841, failed: 257, givenUp: 10, slow: 41, notKept: 16, longestMs: 60_000 })
   assert.throws(() => createLoadReport({}), TypeError)
 })
 
@@ -723,10 +759,12 @@ test('what the service logs of a status load names the event and holds times, co
   assert.equal(permits(VIEW), false)
   failing = false
   w.write(settings())
+  // A minute on: the load that answers then ends the row of failures.
+  w.advance(DEFAULT_ROW_ENDS_AFTER_MS)
   assert.equal(permits(VIEW), true)
   assert.deepEqual(lines.map((line) => [line.event, line.outcome]), [['status-project-loaded', 'failed'], ['status-project-loaded', 'answered']])
   for (const line of lines) {
-    assert.deepEqual(Object.keys(line).filter((key) => !['event', 'durationMs', 'outcome', 'promised', 'inARow', 'afterFailures', 'slow'].includes(key)), [])
+    assert.deepEqual(Object.keys(line).filter((key) => !['event', 'durationMs', 'outcome', 'promised', 'inARow', 'afterFailures', 'slow', 'notKept', 'notKeptInARow', 'vouched'].includes(key)), [])
     for (const [key, value] of Object.entries(line)) assert.ok(key === 'event' || key === 'outcome' ? /^[a-z-]+$/.test(value) : typeof value === 'number' || typeof value === 'boolean', `${key} is a code, a number or a flag`)
   }
   const written = JSON.stringify(lines)
@@ -777,6 +815,33 @@ test('where the system resolves no path for a regular file that is there, the fi
   fs.mkdirSync(path.join(w.projectDir, 'repo-access.v1.json'))
   assert.deepEqual(answers(permits, 5), [true])
   assert.equal(w.loads, 13, 'loaded at every request')
+})
+
+test('a load at every request is written to the log: while a file vouches for nothing, and while loads never agree', { skip: noLinks }, async (t) => {
+  for (const [name, setUp, vouched] of [
+    ['a file that vouches for nothing', (w) => {
+      const kept = path.join(w.dir, 'dotfiles', 'atelier.project.json')
+      fs.mkdirSync(path.dirname(kept), { recursive: true })
+      fs.renameSync(w.configPath, kept)
+      w.link(w.configPath, kept)
+      return { realpath: refusingRealpath }
+    }, false],
+    ['loads that never agree', (w) => {
+      // Every load names the same files, and the views of one load are never those of the one before.
+      let flip = false
+      return { loadProject: () => { w.loads += 1; flip = !flip; const project = w.load(); return flip ? project : { ...project, config: { ...project.config, ext: {} } } } }
+    }, true],
+  ]) await t.test(name, (t) => {
+    const w = world(t)
+    const lines = []
+    const report = createLoadReport({ write: (line) => lines.push(line) })
+    const permits = w.permission({ ...setUp(w), onLoad: report.onLoad })
+    for (let request = 0; request < 10; request += 1) { permits(VIEW); w.advance(500) }
+    assert.equal(w.loads, 10, 'never kept: a load at every request')
+    // The first load knew no files; the nine after it knew them, kept nothing, and are one row.
+    assert.deepEqual(lines.map(({ notKept, notKeptInARow, vouched: line }) => [notKept, notKeptInARow, line]), [[true, 2, vouched], [true, 4, vouched], [true, 8, vouched]])
+    assert.equal(report.counts().notKept, 9)
+  })
 })
 
 test('where the system resolves no path, a link still vouches for nothing: nobody can say where it leads', { skip: noLinks }, (t) => {

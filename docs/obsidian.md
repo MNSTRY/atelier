@@ -1166,10 +1166,10 @@ records anything; a promise it was handed is let go, and its refusal, if it
 is refused, does not go unhandled. Started by a login item (`--startup`), the
 service asks its loader (or, under `--personal-home`, its locator) once for both
 the lookup of its workspace and its own start. One that answers a promise there
-is never handed to the workspace resolution: a promise of this realm's
-`Promise` is let go without calling a `then` of its own, any other thenable
-(another realm's promise or a subclass's too) is adopted once (its `then` is
-called once in all), the refusal is recorded in the workspace the unit names,
+is never handed to the workspace resolution: a promise whose `constructor`
+reads as this realm's `Promise` is let go without calling a `then` of its
+own, any other thenable (as a rule another realm's promise or a subclass's)
+is adopted once (its `then` is called once in all), the refusal is recorded in the workspace the unit names,
 when that exists, and the process ends with 0, so the service manager
 does not start it again at once. One that throws there, whatever it throws
 (`undefined` too, a value with no prototype, or one whose `code` cannot be
@@ -1249,12 +1249,16 @@ that repository's proposal lock still held, as a crash can. A service in one
 of those stretches does not answer until it ends, and is `busy` if that
 outlasts the probe. A request can
 hold the listener too: the plugin's status read loads the project on the event
-loop when a configuration file changed, every two and a half minutes, and at
-every request while one of those files vouches for nothing. For a project
+loop at its first requests after the service starts (until two loads agree),
+when a configuration file changed, every two and a half minutes, again two to
+thirty seconds after a load that failed, and at every request while one of
+those files vouches for nothing. For a project
 named by `--project` none of those loads is taken off the loop. For a bound
 personal home they compose in a worker, as the engine's loads do, and the read
 starts each one on the loop by reading the selection history. A load that holds the loop
-for a second or more is logged (`status-project-loaded`).
+for a second or more is logged (`status-project-loaded`), on a row written
+less and less often while such loads go on (see "What the service shows of
+these loads" in [obsidian-plugin.md](obsidian-plugin.md)).
 
 What the waits cost. The waits of observation and routing are taken at
 every boundary between two edits or two operations and before each
