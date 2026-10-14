@@ -281,7 +281,12 @@ machine for weeks.
   one. A brand-new branch is diffed against the empty tree, in SHA-1 and SHA-256
   repositories alike, so nothing slips through unscanned. A push carrying more
   than 1000 such commits, or more evidence than the aggregate budget, is
-  refused; push it in smaller parts, an earlier commit first.
+  refused; push it in smaller parts, an earlier commit first. Each diff reads
+  what it needs, so a history that swaps large binaries back and forth makes
+  the hook slow, within the commit cap and per-diff limits. The remote's
+  tracking refs are found by name: a remote whose fetch refspec writes into
+  another remote's namespace, or two remote names that differ only in case on
+  a case-insensitive file system, can blur which history the remote holds.
 - `atelier boundary audit` scans the current working tree by default and
   **reports without blocking**, listing matches, incomplete-read diagnostics,
   and declared exceptions with their reasons. Use `--head` for a committed
