@@ -59,7 +59,7 @@ The staged guard (`atelier boundary check --staged`) inspects every staged
 `*.md` and `*.kg.json` diff for changes to boundary fields — `kg.audience`,
 `audience`, `handling`, `sensitivity`, `data_boundary`.
 
-It distinguishes two cases:
+It distinguishes three cases:
 
 - **Initialization.** A boundary field added with no prior value, set to a
   value that discloses nothing (`private` or `sensitive` for `audience`), is
@@ -68,6 +68,20 @@ It distinguishes two cases:
   front matter, so kit-generated metadata never needs a human to unjam it.
 - **Change.** Anything else — widening, narrowing, removing an existing value,
   or introducing a field already set to a disclosing value — needs a human.
+- **Retirement.** Removing a whole Markdown document removes its live content
+  and needs no marker in that deleted file. A deleted `.kg.json` sidecar is
+  allowed only when its associated asset is also absent from the staged index.
+  If the asset remains, retain an explicit reviewed sidecar; deleting its
+  classification could widen access. Retirement does not erase Git history or
+  recall copies already disclosed.
+
+Git paths are acquired with quoting pinned and exact index bytes retained. Asset
+retirement compares those bytes in the actual committing index, including
+decomposed Unicode names. A well-formed filename containing non-UTF-8 bytes can
+be retired as a whole file; deleting only its sidecar still requires the asset
+to be absent. Introducing or editing such a name is refused because the current
+string-based authoring surface cannot represent it safely. Rename it to a UTF-8
+name or retire it through the guarded path; neither action needs a hook bypass.
 
 To approve a change, put a review marker in the diff:
 
@@ -75,10 +89,17 @@ To approve a change, put a review marker in the diff:
 <!-- Atelier-Boundary-Review: approved — why this exposure is correct -->
 ```
 
-The marker must travel **in the same file's diff** as the change it approves.
-A marker committed in a sibling file, or already sitting elsewhere in a file
-that this commit does not touch, approves nothing — the guard reads the diff,
+The marker must travel **in newly added content in the same file's diff** as
+the change it approves. Removed markers, filenames, hunk headings, sibling
+files and unchanged content approve nothing. The guard reads the staged diff,
 not the working tree.
+
+Diff hunks cannot establish a line's initial quote or comment state. Literal
+boundary assignments inside examples therefore remain conservatively
+reviewable; ordinary mentions without an assignment do not. Quoted and
+non-ASCII Git paths are decoded, and incomplete path or diff evidence refuses
+the check. The semantic scan inspects renames as removal plus addition so rewritten content
+and newly introduced paths remain visible.
 
 ## Owner-signed operator delegation
 

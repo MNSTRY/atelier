@@ -422,11 +422,14 @@ function stagedPathsResult(targets, { gitExecutable = 'git' } = {}) {
   const paths = []
   const failures = []
   for (const [repo, target] of targets) {
-    if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) continue
+    if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) {
+      failures.push({ repo, reason: 'configured-path-absent-or-not-git' })
+      continue
+    }
     // NUL-separated names are exact: a quoted name could never match a forbidden-path glob.
-    const result = gitOutputResult(target.root, ['diff', '--cached', '--name-only', '-z', '--no-relative', '--diff-filter=ACMR'], { gitExecutable, indexFile: target.indexFile })
-    if (!result.ok) {
-      failures.push({ repo, reason: result.code })
+    const result = gitOutputResult(target.root, ['diff', '--cached', '--name-only', '-z', '--no-relative', '--no-renames', '--diff-filter=ACMRT'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES })
+    if (!result.ok || (result.stdout && !result.stdout.endsWith('\0'))) {
+      failures.push({ repo, reason: result.code ?? 'unterminated-staged-path-evidence' })
       continue
     }
     for (const rel of result.stdout.split('\0').filter(Boolean)) {
@@ -436,8 +439,16 @@ function stagedPathsResult(targets, { gitExecutable = 'git' } = {}) {
   return { paths, failures }
 }
 
-export function stagedPathsForProject(project, { gitExecutable = 'git', hookIndex = null } = {}) {
-  return stagedPathsResult(stagedTargets(project, hookIndex, gitExecutable).targets, { gitExecutable }).paths
+export function stagedPathsForProject(project, { gitExecutable = 'git', hookIndex = null, diagnostics = null } = {}) {
+  const { targets, unresolved } = stagedTargets(project, hookIndex, gitExecutable)
+  const result = stagedPathsResult(targets, { gitExecutable })
+  const findings = result.failures.map(({ repo, reason }) => unscannableRepoFinding(repo, `staged paths could not be listed (${reason})`))
+  if (unresolved) findings.push(finding({ code: 'pre-commit-repo-unresolved', message: `${unresolved}: the committing repository could not be resolved` }))
+  if (findings.length) {
+    if (diagnostics) diagnostics.push(...findings)
+    else throw new Error(findings[0].message)
+  }
+  return result.paths
 }
 
 function forbiddenPathFindings({ policy, stagedPaths }) {
@@ -462,6 +473,35 @@ function unquoteValue(value) {
   return quoted ? quoted[2] : text
 }
 
+// A hunk cannot establish the starting quote/comment state of a line. Require
+// review for every explicit boundary assignment, including literal examples in
+// quoted text. Plain mentions without an assignment do not carry this signal.
+// Keep the entire value suffix: guessing where an incomplete value ends could
+// incorrectly turn it into the private initialization default.
+// One literal signal covers the whole suffix, including later fields; bounding
+// the result avoids making a separate large suffix for every field on a line.
+function semanticFieldsOnLine(line) {
+  const raw = String(line).trim()
+  const values = []
+  const match = raw.match(/(?:^|[^\w.])["']?(kg\.audience|audience|handling|sensitivity|data_boundary)["']?\s*:/i)
+  if (match) {
+    values.push({ field: match[1].toLowerCase().replace(/^kg\./, ''), value: unquoteValue(raw.slice(match.index + match[0].length)), raw })
+  }
+  // JSON permits escaped property names. Decode only complete quoted key
+  // lexemes; this adds conservative signals without asserting document context.
+  for (const match of raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)) {
+    if (!match[1].includes('\\')) continue
+    try {
+      const field = JSON.parse(match[1]).toLowerCase().replace(/^kg\./, '')
+      if (['audience', 'handling', 'sensitivity', 'data_boundary'].includes(field)) {
+        values.push({ field, value: unquoteValue(raw.slice(match.index + match[0].length)), raw })
+        break
+      }
+    } catch { /* Invalid JSON key text conveys no decoded identity. */ }
+  }
+  return values
+}
+
 export function semanticFieldOnLine(line) {
   if (!SEMANTIC_FIELD_RE.test(line)) return null
   const assignment = line.match(SEMANTIC_ASSIGNMENT_RE)
@@ -481,19 +521,20 @@ function isInitializationDefault(field, value) {
 
 /** Diff sections with their hunks, read by the same parser as the content scan. */
 export function diffFileSections(diff) {
-  return parseDiffSections(diff, { detail: true }).map((section) => ({
-    path: section.path,
-    hunks: section.hunks,
-    lines: section.lines,
-    incomplete: section.incomplete,
-  }))
+  return parseDiffSections(diff, { detail: true }).map((section) => {
+    const file = { path: section.path, hunks: section.hunks, lines: section.lines, incomplete: section.incomplete }
+    for (const [key, value] of Object.entries({ deleted: section.deleted, pathBytes: section.pathBytes, pathEncodingUnsupported: section.pathEncodingUnsupported })) {
+      Object.defineProperty(file, key, { value })
+    }
+    return file
+  })
 }
 
 export function semanticChangesInFile(file) {
   const changes = []
   for (const hunk of file.hunks ?? []) {
-    const pending = hunk.removed.map(semanticFieldOnLine).filter(Boolean)
-    for (const entry of hunk.added.map(semanticFieldOnLine).filter(Boolean)) {
+    const pending = hunk.removed.flatMap(semanticFieldsOnLine)
+    for (const entry of hunk.added.flatMap(semanticFieldsOnLine)) {
       const index = pending.findIndex((item) => item.field === entry.field)
       const prior = index === -1 ? null : pending.splice(index, 1)[0]
       if (prior) {
@@ -518,7 +559,7 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
       continue
     }
     // --text: a document declared binary, or holding a NUL byte, still has its fields read.
-    const result = gitOutputResult(target.root, [...canonicalDiffArgs(['--cached'], ['--text']), '--', '*.md', '*.kg.json'], { gitExecutable, indexFile: target.indexFile })
+    const result = gitOutputResult(target.root, [...canonicalDiffArgs(['--cached'], ['--text', '--no-renames']), '--', '*.md', '*.kg.json'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES })
     if (!result.ok) {
       findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
       continue
@@ -534,6 +575,45 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
           message: `${repo.name}/${file.path ?? '(unknown path)'}: the staged diff could not be read, so its semantic fields were not checked`,
           details: { reason: file.incomplete },
         }))
+        continue
+      }
+      if (file.pathEncodingUnsupported && !file.deleted) {
+        findings.push(finding({ severity, code: 'semantic-field-scan-incomplete', repo: repo.name, path: file.path,
+          message: `${repo.name}/${file.path}: a non-UTF-8 filename cannot be admitted or edited through this guard; retire the whole file or rename it to a UTF-8 name`,
+          details: { reason: 'unsupported-non-utf8-path' } }))
+        continue
+      }
+      // Retiring a whole source leaves no live classification to broaden. Git
+      // history remains durable. A sidecar still protects any retained asset.
+      if (file.lines.some((line) => line.startsWith('deleted file mode '))) {
+        if (!file.path.endsWith('.kg.json')) continue
+        const asset = (file.pathBytes ?? Buffer.from(file.path)).subarray(0, (file.pathBytes ?? Buffer.from(file.path)).length - Buffer.byteLength('.kg.json'))
+        const retained = gitOutputResult(target.root, ['-c', 'core.precomposeUnicode=false', 'ls-files', '--stage', '-z'], {
+          gitExecutable, indexFile: target.indexFile, encoding: 'buffer', maxBuffer: CHECK_AGGREGATE_MAX_BYTES,
+        })
+        const bytes = retained.stdout
+        let malformed = !retained.ok || !Buffer.isBuffer(bytes) || (bytes.length > 0 && bytes.at(-1) !== 0)
+        let present = false
+        if (!malformed) {
+          let offset = 0
+          while (offset < bytes.length) {
+            const end = bytes.indexOf(0, offset)
+            const entry = bytes.subarray(offset, end)
+            const tab = entry.indexOf(9)
+            if (tab < 0 || !/^\d{6} (?:[a-f0-9]{40}|[a-f0-9]{64}) [0-3]$/.test(entry.subarray(0, tab).toString('ascii')) || tab === entry.length - 1) {
+              malformed = true
+              break
+            }
+            if (entry.subarray(tab + 1).equals(asset)) present = true
+            offset = end + 1
+          }
+        }
+        if (malformed) {
+          findings.push(unscannableRepoFinding(repo, 'sidecar retirement asset evidence could not be acquired'))
+        } else if (present) {
+          findings.push(finding({ severity, code: 'sidecar-retirement-needs-asset-review', repo: repo.name, path: file.path,
+            message: `${repo.name}/${file.path}: retain an explicit reviewed sidecar while its asset remains staged; retire both together when removing the asset` }))
+        }
         continue
       }
       const changes = semanticChangesInFile(file)

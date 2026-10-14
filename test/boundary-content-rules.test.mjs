@@ -1,3 +1,4 @@
+import { matchesPathPattern } from '../src/project/path-match.mjs'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -1060,3 +1061,144 @@ test('the push guard works from a subdirectory of the repo', (t) => {
   const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: path.join(site, 'src/scripts') })
   assert.equal(report.repo, 'example-site')
 })
+
+
+test('content diff parsing retains doubled signs only inside a hunk', () => {
+  const [file] = parseAddedContent([
+    'diff --git a/example.md b/example.md',
+    '--- a/example.md',
+    '+++ b/example.md',
+    '@@ -1,2 +1,2 @@',
+    '--old bullet',
+    '++new bullet',
+    ' context',
+  ].join('\n'))
+  assert.deepEqual(file.addedLines, [{ number: 1, text: '+new bullet' }])
+})
+
+for (const mode of ['plus-prefixed text', 'binary-attributed UTF-8']) {
+  test(`staged and pushed content rules inspect ${mode}`, (t) => {
+    const { site, policy, project } = makeWorkspace(t)
+    const name = 'notes.txt'
+    if (mode === 'binary-attributed UTF-8') fs.writeFileSync(path.join(site, '.gitattributes'), `${name} -diff\n`)
+    const signature = ['-----BEGIN ', 'PRIVATE KEY-----'].join('')
+    fs.writeFileSync(path.join(site, name), `${mode === 'plus-prefixed text' ? '+' : ''}${signature}\n`)
+    git(site, ['add', '.'])
+    if (mode === 'binary-attributed UTF-8') assert.match(git(site, ['diff', '--cached']), /Binary files/)
+    const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+    assert.ok(staged.errors.some(item => item.rule === 'secret-material' && item.path === name))
+    git(site, ['commit', '--quiet', '-m', 'synthetic guarded content'])
+    const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+    assert.ok(pushed.errors.some(item => item.rule === 'secret-material' && item.path === name))
+  })
+}
+
+test('quoted diff paths decode without an incomplete-evidence refusal', { skip: !POSIX_NAMES && 'names Windows cannot hold' }, (t) => {
+  const { site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, 'quoted"name.txt'), 'ordinary text\n')
+  git(site, ['add', '.'])
+  const report = scanStagedRepository({ repoRoot: site })
+  assert.deepEqual(report.findings, [])
+})
+
+test('content acquisition preserves canonical prefixes despite repository diff configuration', (t) => {
+  const { site } = makeWorkspace(t)
+  git(site, ['config', 'diff.noprefix', 'true'])
+  git(site, ['config', 'color.diff', 'always'])
+  fs.writeFileSync(path.join(site, 'notes.txt'), '+' + ['-----BEGIN ', 'PRIVATE KEY-----'].join('') + '\n')
+  git(site, ['add', '.'])
+  assert.ok(scanStagedRepository({ repoRoot: site }).findings.some(item => item.rule === 'secret-material'))
+})
+
+for (const name of ['café.txt', 'quoted"name.txt', 'notes b/odd.txt']) {
+  for (const binary of [false, true]) {
+    test(`staged and pushed content preserve ${JSON.stringify(name)} with binary=${binary}`, (t) => {
+      if (!POSIX_NAMES && name.includes('"')) return t.skip('names Windows cannot hold')
+      const { site, policy, project } = makeWorkspace(t)
+      if (binary) fs.writeFileSync(path.join(site, '.gitattributes'), '* -diff\n')
+      fs.mkdirSync(path.dirname(path.join(site, name)), { recursive: true })
+      fs.writeFileSync(path.join(site, name), ['-----BEGIN ', 'PRIVATE KEY-----'].join('') + '\n')
+      git(site, ['add', '.'])
+      const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+      assert.ok(staged.errors.some(item => item.rule === 'secret-material' && item.path === name))
+      git(site, ['commit', '--quiet', '-m', 'synthetic named content'])
+      const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+      assert.ok(pushed.errors.some(item => item.rule === 'secret-material' && item.path === name))
+    })
+  }
+}
+
+test('malformed quoted diff paths fail closed', () => {
+  for (const header of ['diff --git "a/x" "b/x', 'diff --git a/a b/b b/c']) {
+    const diff = `${header}\n@@ -0,0 +1 @@\n+ordinary\n`
+    assert.ok(parseDiffSections(diff).some(section => section.incomplete === 'unreadable-file-path'))
+    const report = scanStagedRepository({ repoRoot: '.', gitRunner: () => ({ status: 0, stdout: diff }) })
+    assert.ok(report.diagnostics.some(item => item.code === 'content-scan-incomplete'))
+  }
+})
+
+
+test('boundary path globs include line breaks without widening exact exceptions', () => {
+  assert.equal(matchesPathPattern('transcripts/**', 'transcripts/café\nnotes.txt'), true)
+  assert.equal(matchesPathPattern('**/*.txt', 'nested\nfolder/notes.txt'), true)
+  assert.equal(matchesPathPattern('approved.txt', 'approved.txt\n'), false)
+  assert.equal(matchesPathPattern('private/*.txt', 'private/deep/notes.txt'), false)
+})
+
+test('quoted rename and copy paths preserve a leading UTF-8 BOM as filename data', () => {
+  for (const action of ['rename', 'copy']) {
+    const [section] = parseDiffSections([
+      'diff --git "a/\\357\\273\\277old.txt" "b/\\357\\273\\277new.txt"',
+      'similarity index 100%',
+      `${action} from "\\357\\273\\277old.txt"`,
+      `${action} to "\\357\\273\\277new.txt"`,
+    ].join('\n'))
+    assert.equal(section.oldPath, '\uFEFFold.txt')
+    assert.equal(section.path, '\uFEFFnew.txt')
+    assert.equal(section.incomplete, null)
+  }
+})
+
+test('staged and pushed scans acquire an edited rename with leading-BOM filename bytes', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  const oldName = '\uFEFFold.txt'
+  const newName = '\uFEFFnew.txt'
+  fs.writeFileSync(path.join(site, oldName), 'ordinary synthetic note\n'.repeat(20))
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'synthetic original name'])
+  git(site, ['mv', oldName, newName])
+  fs.appendFileSync(path.join(site, newName), ['-----BEGIN ', 'PRIVATE KEY-----'].join('') + '\n')
+  git(site, ['add', '.'])
+  const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(staged.errors.some(item => item.rule === 'secret-material' && item.path === newName), JSON.stringify(staged.errors))
+  assert.equal(staged.errors.some(item => item.code === 'content-scan-incomplete'), false)
+  git(site, ['commit', '--quiet', '-m', 'synthetic renamed content'])
+  const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(pushed.errors.some(item => item.rule === 'secret-material' && item.path === newName), JSON.stringify(pushed.errors))
+  assert.equal(pushed.errors.some(item => item.code === 'content-scan-incomplete'), false)
+})
+
+test('push scanning permits complete retirement of an opaque filename without admitting new opaque content', { skip: !POSIX_NAMES && 'POSIX byte filename fixture' }, (t) => {
+  const { site, project, policy } = makeWorkspace(t)
+  const raw = Buffer.concat([Buffer.from([255]), Buffer.from('.txt')])
+  setByteIndexEntry(site, raw, 'ordinary synthetic note\n')
+  git(site, ['config', 'core.quotePath', 'false'])
+  git(site, ['commit', '--quiet', '-m', 'synthetic historical byte name'])
+  const prior = git(site, ['rev-parse', 'HEAD'])
+  const addition = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(addition.ok, false, JSON.stringify(addition.errors))
+  setByteIndexEntry(site, raw)
+  const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(staged.ok, true, JSON.stringify(staged.errors))
+  git(site, ['commit', '--quiet', '-m', 'retire synthetic byte name'])
+  const update = { localRef: 'refs/heads/main', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: prior }
+  const retired = checkPushContent({ project, policy, updates: [update], cwd: site })
+  assert.equal(retired.ok, true, JSON.stringify(retired.errors))
+})
+
+function setByteIndexEntry(repoRoot, nameBytes, content = null) {
+  const oid = content === null ? '0'.repeat(40) : execFileSync('git', ['-C', repoRoot, 'hash-object', '-w', '--stdin'], { input: content }).toString().trim()
+  execFileSync('git', ['-C', repoRoot, 'update-index', '-z', '--index-info'], {
+    input: Buffer.concat([Buffer.from(`${content === null ? '0' : '100644'} ${oid}\t`), nameBytes, Buffer.from([0])]),
+  })
+}
