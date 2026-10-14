@@ -807,13 +807,18 @@ for (const kind of ['promise', 'refused-promise', 'thenable', 'promise-with-own-
   })
 }
 
-for (const [kind, what] of [['unreadable-then', 'answers a project whose `then` cannot be read'], ['throws-undefined', 'throws `undefined`'], ['throws-bare', 'throws a value with no prototype']]) {
+for (const [kind, what, message] of [
+  ['unreadable-then', 'answers a project whose `then` cannot be read', 'injected: then cannot be read'],
+  ['throws-undefined', 'throws `undefined`', 'undefined'],
+  ['throws-bare', 'throws a value with no prototype', 'unprintable'],
+  ['throws-code-getter', 'throws an error whose `code` cannot be read', 'injected: a code that cannot be read'],
+]) {
   test(`started by a login item on a loader that ${what}, the service ends as on any failure of its loader: logged as refused, untyped, and a crash`, (t) => {
     const w = world(t)
     const child = childProcess.spawnSync(process.execPath, [SERVICE_ENTRY, `--project=${w.configPath}`, `--data-root=${w.dataRoot}`, `--workspace-id=${WORKSPACE_ID}`, '--startup', `--loader-answers=${kind}`], { env: w.env, encoding: 'utf8', windowsHide: true, timeout: 120_000 })
     assert.equal(child.status, 1, `an error nobody typed is a crash, which the service manager restarts after its throttle: ${child.stdout}${child.stderr}`)
     const log = fs.readFileSync(servicePaths(w.workspaceRoot).log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
-    assert.deepEqual(log.filter((line) => line.event === 'refused').map((line) => line.code), ['untyped-error'], 'the failure is in the log of the workspace the unit names')
+    assert.deepEqual(log.filter((line) => line.event === 'refused').map((line) => [line.code, line.message]), [['untyped-error', message]], 'the failure, what was thrown, is in the log of the workspace the unit names')
     assert.equal(readLastStartup({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null, 'only a typed refusal is recorded as how the start ended')
     assert.deepEqual(child.stdout.split('\n').filter((line) => line.includes('loader-calls')).map((line) => JSON.parse(line).count), [1])
     assert.equal(readServiceRecord({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null)

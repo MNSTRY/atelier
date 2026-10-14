@@ -18,7 +18,8 @@
 //   --loader-answers=<kind>       the project loader answers a `promise`, a `refused-promise` or a `thenable` instead of
 //                                 a project, a refused promise with a `then` of its own that throws
 //                                 (`promise-with-own-then`), one whose `then` cannot be read (`unreadable-then`), or throws
-//                                 `undefined` (`throws-undefined`) or a value with no prototype (`throws-bare`); how
+//                                 `undefined` (`throws-undefined`), a value with no prototype (`throws-bare`) or an
+//                                 error whose `code` cannot be read (`throws-code-getter`); how
 //                                 often it was asked, and how often a thenable's `then` was called, is printed when the
 //                                 process ends
 //   --locator-answers=<kind>      with --personal-home, the locator answers a `thenable` or throws `undefined`
@@ -80,6 +81,7 @@ const loadProject = answers === null ? options.loadProject : () => {
   if (answers === 'unreadable-then') return Object.defineProperty({}, 'then', { get() { throw new Error('injected: then cannot be read') } })
   if (answers === 'throws-undefined') throw undefined
   if (answers === 'throws-bare') throw Object.create(null)
+  if (answers === 'throws-code-getter') throw Object.defineProperty(new Error('injected: a code that cannot be read'), 'code', { get() { throw new Error('injected: code') } })
   return { then: (resolve) => { thenCalls += 1; resolve(options.loadProject()) } }
 }
 const locatorAnswers = typeof args['locator-answers'] === 'string' ? args['locator-answers'] : null

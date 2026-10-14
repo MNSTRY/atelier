@@ -87,8 +87,9 @@ const printed = (entry) => { try { process.stdout.write(`${JSON.stringify(entry)
 
 // The first answer of the loader, or of the locator of a personal home, asked for once and handed to both who need it
 // at a start under a login item: the lookup of the workspace below, and the service's own start, which takes it as the
-// answer to its first call. One that answers a promise or another thenable is not waited for by either. A thenable is
-// adopted here, once, as a native promise (so its `then` is called once in all), and that promise is let go, handled
+// answer to its first call. One that answers a promise or another thenable is not waited for by either. A promise of
+// this realm's `Promise` is kept as it is; any other thenable, another realm's promise or a subclass's included, is
+// adopted here, once, as a native promise (so its `then` is called once in all). That promise is let go, handled
 // without calling a `then` of its own: a refusal of it never goes unhandled and ends the process with an error where
 // the service's typed refusal should end it cleanly. The service is handed that promise. Whatever is thrown,
 // `undefined` included, and a `then` that cannot be read, is thrown again at the service's first call, so it ends the
