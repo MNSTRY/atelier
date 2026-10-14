@@ -38,6 +38,22 @@ import { PROJECT_CONFIG_SCHEMA, commandProject, parseArgs, writeJson } from '../
 const CART = 'src/scripts/cart.ts'
 const CART_SOURCE = 'export const save = (items) => localStorage.setItem("cart", JSON.stringify(items))\n'
 
+// Git's automatic maintenance can start detached after a commit, merge, pull
+// or push (and receive-side auto-gc after a local push) and keep writing into a
+// test repository while the test removes it: ENOTEMPTY on Linux and EBUSY on
+// Windows in run 38530462871. This file's own Git commands run with it off.
+// The code under test removes every GIT_* variable from its own Git calls.
+const MAINTENANCE_OFF = {
+  GIT_CONFIG_COUNT: '3',
+  GIT_CONFIG_KEY_0: 'maintenance.auto',
+  GIT_CONFIG_VALUE_0: 'false',
+  GIT_CONFIG_KEY_1: 'gc.auto',
+  GIT_CONFIG_VALUE_1: '0',
+  GIT_CONFIG_KEY_2: 'receive.autogc',
+  GIT_CONFIG_VALUE_2: 'false',
+}
+Object.assign(process.env, MAINTENANCE_OFF)
+
 // Windows can hold a just-written file for a moment (a scanner, or a Git
 // process still exiting), so a temporary tree is removed with Node's bounded
 // retry on EBUSY, EPERM and ENOTEMPTY; a tree that stays busy still fails.
@@ -782,6 +798,7 @@ function hookedGit(t, cwd) {
   fs.symlinkSync(process.execPath, path.join(bin, 'node'))
   fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'))
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
+  Object.assign(env, MAINTENANCE_OFF)
   // The person at the terminal names themselves with the supported local selector, so a
   // platform login in the environment (GITHUB_ACTOR on CI) is not mistaken for them.
   Object.assign(env, { PATH: [bin, '/usr/bin', '/bin'].join(':'), MNSTRY_ATELIER_PACKAGE_ROOT: PACKAGE_ROOT, MNSTRY_ATELIER_ACTOR: 'author' })
