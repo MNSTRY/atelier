@@ -48,7 +48,8 @@ export function matchesPathPattern(pattern, rel) {
   if (!normalizedPattern || !normalizedRel) return false
   const candidate = normalizedPattern.includes('/') ? normalizedRel : path.posix.basename(normalizedRel)
   // dotAll: `**` crosses a newline in a name as well as a slash.
-  return new RegExp(`^${globSource(normalizedPattern)}$`, 'is').test(candidate)
+  const match = candidate.match(new RegExp(`^${globSource(normalizedPattern)}$`, 'is'))
+  return match !== null && match[0].length === candidate.length
 }
 
 export const basenameOf = (pattern) => path.posix.basename(normalizeRelPath(pattern))

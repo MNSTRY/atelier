@@ -1,3 +1,4 @@
+import { matchesPathPattern } from '../src/project/path-match.mjs'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -1059,4 +1060,86 @@ test('the push guard works from a subdirectory of the repo', (t) => {
   commit(site, 'README.md', '# Site\n', 'docs')
   const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: path.join(site, 'src/scripts') })
   assert.equal(report.repo, 'example-site')
+})
+
+
+test('content diff parsing retains doubled signs only inside a hunk', () => {
+  const [file] = parseAddedContent([
+    'diff --git a/example.md b/example.md',
+    '--- a/example.md',
+    '+++ b/example.md',
+    '@@ -1,2 +1,2 @@',
+    '--old bullet',
+    '++new bullet',
+    ' context',
+  ].join('\n'))
+  assert.deepEqual(file.addedLines, [{ number: 1, text: '+new bullet' }])
+})
+
+for (const mode of ['plus-prefixed text', 'binary-attributed UTF-8']) {
+  test(`staged and pushed content rules inspect ${mode}`, (t) => {
+    const { site, policy, project } = makeWorkspace(t)
+    const name = 'notes.txt'
+    if (mode === 'binary-attributed UTF-8') fs.writeFileSync(path.join(site, '.gitattributes'), `${name} -diff\n`)
+    const signature = ['-----BEGIN ', 'PRIVATE KEY-----'].join('')
+    fs.writeFileSync(path.join(site, name), `${mode === 'plus-prefixed text' ? '+' : ''}${signature}\n`)
+    git(site, ['add', '.'])
+    if (mode === 'binary-attributed UTF-8') assert.match(git(site, ['diff', '--cached']), /Binary files/)
+    const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+    assert.ok(staged.errors.some(item => item.rule === 'secret-material' && item.path === name))
+    git(site, ['commit', '--quiet', '-m', 'synthetic guarded content'])
+    const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+    assert.ok(pushed.errors.some(item => item.rule === 'secret-material' && item.path === name))
+  })
+}
+
+test('quoted diff paths decode without an incomplete-evidence refusal', (t) => {
+  const { site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, 'quoted"name.txt'), 'ordinary text\n')
+  git(site, ['add', '.'])
+  const report = scanStagedRepository({ repoRoot: site })
+  assert.deepEqual(report.findings, [])
+})
+
+test('content acquisition preserves canonical prefixes despite repository diff configuration', (t) => {
+  const { site } = makeWorkspace(t)
+  git(site, ['config', 'diff.noprefix', 'true'])
+  git(site, ['config', 'color.diff', 'always'])
+  fs.writeFileSync(path.join(site, 'notes.txt'), '+' + ['-----BEGIN ', 'PRIVATE KEY-----'].join('') + '\n')
+  git(site, ['add', '.'])
+  assert.ok(scanStagedRepository({ repoRoot: site }).findings.some(item => item.rule === 'secret-material'))
+})
+
+for (const name of ['café.txt', 'quoted"name.txt', 'notes b/odd.txt']) {
+  for (const binary of [false, true]) {
+    test(`staged and pushed content preserve ${JSON.stringify(name)} with binary=${binary}`, (t) => {
+      const { site, policy, project } = makeWorkspace(t)
+      if (binary) fs.writeFileSync(path.join(site, '.gitattributes'), '* -diff\n')
+      fs.mkdirSync(path.dirname(path.join(site, name)), { recursive: true })
+      fs.writeFileSync(path.join(site, name), ['-----BEGIN ', 'PRIVATE KEY-----'].join('') + '\n')
+      git(site, ['add', '.'])
+      const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+      assert.ok(staged.errors.some(item => item.rule === 'secret-material' && item.path === name))
+      git(site, ['commit', '--quiet', '-m', 'synthetic named content'])
+      const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+      assert.ok(pushed.errors.some(item => item.rule === 'secret-material' && item.path === name))
+    })
+  }
+}
+
+test('malformed quoted diff paths fail closed', () => {
+  for (const header of ['diff --git "a/x" "b/x', 'diff --git "a/\\377" "b/\\377"', 'diff --git a/a b/b b/c']) {
+    const diff = `${header}\n@@ -0,0 +1 @@\n+ordinary\n`
+    assert.ok(parseDiffSections(diff).some(section => section.incomplete === 'unreadable-file-path'))
+    const report = scanStagedRepository({ repoRoot: '.', gitRunner: () => ({ status: 0, stdout: diff }) })
+    assert.ok(report.diagnostics.some(item => item.code === 'content-scan-incomplete'))
+  }
+})
+
+
+test('boundary path globs include line breaks without widening exact exceptions', () => {
+  assert.equal(matchesPathPattern('transcripts/**', 'transcripts/café\nnotes.txt'), true)
+  assert.equal(matchesPathPattern('**/*.txt', 'nested\nfolder/notes.txt'), true)
+  assert.equal(matchesPathPattern('approved.txt', 'approved.txt\n'), false)
+  assert.equal(matchesPathPattern('private/*.txt', 'private/deep/notes.txt'), false)
 })

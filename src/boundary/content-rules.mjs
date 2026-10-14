@@ -222,7 +222,13 @@ function readQuotedToken(text, start) {
   const bytes = []
   for (let index = start + 1; index < text.length; index += 1) {
     const char = String.fromCodePoint(text.codePointAt(index))
-    if (char === '"') return { value: Buffer.from(bytes).toString('utf8'), end: index + 1 }
+    if (char === '"') {
+      try {
+        return { value: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(bytes)), end: index + 1 }
+      } catch {
+        return null
+      }
+    }
     if (char !== '\\') {
       bytes.push(...Buffer.from(char, 'utf8'))
       index += char.length - 1
@@ -472,7 +478,7 @@ export function gitOutputResult(repoRoot, args, {
   if (result?.error?.code === 'ENOBUFS') {
     return { ok: false, code: 'git-output-limit-exceeded', error: `Git ${args[0] ?? 'command'} exceeded the ${maxBuffer}-byte evidence limit`, stdout: null }
   }
-  if (result?.status !== 0) {
+  if (result?.error || result?.status !== 0) {
     return { ok: false, code: 'git-command-failed', error: `Git ${args[0] ?? 'command'} failed with status ${result?.status ?? 'unknown'}`, stdout: null }
   }
   const stdout = result.stdout ?? (encoding === 'buffer' ? Buffer.alloc(0) : '')
