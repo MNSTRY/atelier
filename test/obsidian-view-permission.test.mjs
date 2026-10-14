@@ -9,7 +9,7 @@ import { LOCAL_OVERLAY_ENV, resolveProjectConfig, writeJson } from '../src/proje
 import { OBSIDIAN_EXT_KEY } from '../src/projection/obsidian/contracts.mjs'
 import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
 import { LOCAL_POINTER_SCHEMA, ensureWorkspaceIdentity, localPointerPath, workspaceStateRoot } from '../src/runtime/obsidian/machine-settings.mjs'
-import { readLastStartup, readServiceRecord } from '../src/runtime/obsidian/service-record.mjs'
+import { readLastStartup, readServiceRecord, servicePaths } from '../src/runtime/obsidian/service-record.mjs'
 import { runServiceProcess } from '../src/runtime/obsidian/service-main.mjs'
 import { resolveServiceWorkspace, runMaintenanceService, serviceWorkspaceInputs } from '../src/runtime/obsidian/service.mjs'
 import {
@@ -799,7 +799,22 @@ for (const kind of ['promise', 'refused-promise', 'thenable']) {
     assert.equal(/unhandled|rejection/i.test(child.stderr), false, child.stderr)
     const startup = readLastStartup({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID })
     assert.deepEqual([startup?.outcome, startup?.code], ['refused', 'service-loader-not-synchronous'])
-    assert.deepEqual(child.stdout.split('\n').filter((line) => line.includes('loader-calls')).map((line) => JSON.parse(line).count), [1], 'one call serves the lookup of the workspace and the service\'s start')
+    const calls = child.stdout.split('\n').filter((line) => line.includes('loader-calls')).map((line) => JSON.parse(line))
+    assert.deepEqual(calls.map((line) => line.count), [1], 'one call serves the lookup of the workspace and the service\'s start')
+    if (kind === 'thenable') assert.equal(calls[0].thenCalls, 1, 'the thenable is adopted once: its `then` is called once in all')
+    assert.equal(readServiceRecord({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null)
+  })
+}
+
+for (const [kind, what] of [['unreadable-then', 'answers a project whose `then` cannot be read'], ['throws-undefined', 'throws `undefined`']]) {
+  test(`started by a login item on a loader that ${what}, the service ends as on any failure of its loader: logged as refused, untyped, and a crash`, (t) => {
+    const w = world(t)
+    const child = childProcess.spawnSync(process.execPath, [SERVICE_ENTRY, `--project=${w.configPath}`, `--data-root=${w.dataRoot}`, `--workspace-id=${WORKSPACE_ID}`, '--startup', `--loader-answers=${kind}`], { env: w.env, encoding: 'utf8', windowsHide: true, timeout: 120_000 })
+    assert.equal(child.status, 1, `an error nobody typed is a crash, which the service manager restarts after its throttle: ${child.stdout}${child.stderr}`)
+    const log = fs.readFileSync(servicePaths(w.workspaceRoot).log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    assert.deepEqual(log.filter((line) => line.event === 'refused').map((line) => line.code), ['untyped-error'], 'the failure is in the log of the workspace the unit names')
+    assert.equal(readLastStartup({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null, 'only a typed refusal is recorded as how the start ended')
+    assert.deepEqual(child.stdout.split('\n').filter((line) => line.includes('loader-calls')).map((line) => JSON.parse(line).count), [1])
     assert.equal(readServiceRecord({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID }), null)
   })
 }

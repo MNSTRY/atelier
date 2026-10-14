@@ -16,7 +16,9 @@
 //                                 yielding until the file F exists (two minutes at most), so a test decides when the
 //                                 busy service goes on and no deadline of the test depends on the host's load
 //   --loader-answers=<kind>       the project loader answers a `promise`, a `refused-promise` or a `thenable` instead of
-//                                 a project; how often it was asked is printed when the process ends
+//                                 a project, answers one whose `then` cannot be read (`unreadable-then`), or throws
+//                                 `undefined` (`throws-undefined`); how often it was asked, and how often a thenable's
+//                                 `then` was called, is printed when the process ends
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from '../../../src/project/config.mjs'
@@ -61,13 +63,16 @@ const seams = {
 
 const answers = typeof args['loader-answers'] === 'string' ? args['loader-answers'] : null
 let loaderCalls = 0
+let thenCalls = 0
 const loadProject = answers === null ? options.loadProject : () => {
   loaderCalls += 1
   if (answers === 'promise') return Promise.resolve().then(() => options.loadProject())
   if (answers === 'refused-promise') return Promise.reject(new Error('injected: the composition refused'))
-  return { then: (resolve) => resolve(options.loadProject()) }
+  if (answers === 'unreadable-then') return Object.defineProperty({}, 'then', { get() { throw new Error('injected: then cannot be read') } })
+  if (answers === 'throws-undefined') throw undefined
+  return { then: (resolve) => { thenCalls += 1; resolve(options.loadProject()) } }
 }
-if (answers !== null) process.on('exit', () => { try { fs.writeSync(1, `${JSON.stringify({ event: 'loader-calls', count: loaderCalls })}\n`) } catch { /* nobody reads it */ } })
+if (answers !== null) process.on('exit', () => { try { fs.writeSync(1, `${JSON.stringify({ event: 'loader-calls', count: loaderCalls, thenCalls })}\n`) } catch { /* nobody reads it */ } })
 
 await runServiceProcess({
   ...options,

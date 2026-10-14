@@ -86,22 +86,27 @@ const printed = (entry) => { try { process.stdout.write(`${JSON.stringify(entry)
 
 // The loader's first answer, asked for once and handed to both who need it at a start under a login item: the lookup
 // of the workspace below, and the service's own start, which takes it as the answer to its first call. A loader that
-// answers a promise or another thenable is not waited for by either: the promise is let go here, so that a refusal of
-// it never goes unhandled and ends the process with an error where the service's typed refusal should end it cleanly.
+// answers a promise or another thenable is not waited for by either. Its answer is adopted here, once, as a native
+// promise (so the `then` of a thenable is called once in all), and that promise is let go: a refusal of it never goes
+// unhandled and ends the process with an error where the service's typed refusal should end it cleanly. The service
+// is handed that promise. Whatever the loader throws, `undefined` included, and a `then` that cannot be read, is
+// thrown again at the service's first call, so it ends the start as the loader's own failure would.
 function firstAnswerOf(loadProject) {
   let first
-  try { first = { project: loadProject() } } catch (error) { first = { error } }
-  const promised = typeof first.project?.then === 'function'
-  if (promised) Promise.resolve(first.project).catch(() => {})
+  try {
+    const project = loadProject()
+    first = typeof project?.then === 'function' ? { promised: Promise.resolve(project) } : { project }
+  } catch (error) { first = { threw: true, error } }
+  first.promised?.catch(() => {})
   let taken = false
   return {
     // The project, when the loader answered one at once; null when it threw or answered a promise.
-    project: () => (first.error === undefined && !promised ? first.project : null),
+    project: () => (first.threw || first.promised ? null : first.project),
     loadProject() {
       if (taken) return loadProject()
       taken = true
-      if (first.error !== undefined) throw first.error
-      return first.project
+      if (first.threw) throw first.error
+      return first.promised ?? first.project
     },
   }
 }
