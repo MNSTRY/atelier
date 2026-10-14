@@ -1265,12 +1265,13 @@ test('a remote named under another does not hide history from it', (t) => {
 
 test('a merge is never judged by an incomplete parent diff, however small', (t) => {
   // The merge adds a key line to text declared binary. Against the local parent
-  // the narrowed text diff is over the output limit (incomplete, and smaller);
-  // against the upstream parent it is one line (complete, larger by the notes).
-  const { root, site, policy, project } = makeWorkspace(t)
-  const size = 8 * 1024 * 1024 - 4096
+  // the text read is made to fail as an over-limit read does (incomplete, and
+  // the smaller diff); against the upstream parent it is complete, and larger by
+  // the local notes. The over-limit result is injected rather than produced:
+  // a real one makes Git compute a very large diff for nothing.
+  const { root, site } = makeWorkspace(t)
   fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg binary\n')
-  fs.writeFileSync(path.join(site, 'big.cfg'), '\n'.repeat(size))
+  fs.writeFileSync(path.join(site, 'big.cfg'), 'blank\n')
   git(site, ['add', '-A'])
   git(site, ['commit', '--quiet', '-m', 'blank config'])
   git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
@@ -1279,19 +1280,27 @@ test('a merge is never judged by an incomplete parent diff, however small', (t) 
   execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(root, 'example-site.git'), collaborator])
   git(collaborator, ['config', 'user.email', 'other@example.invalid'])
   git(collaborator, ['config', 'user.name', 'Other'])
-  const filled = 'x\n'.repeat(size / 2)
+  const filled = 'filled = 1\nfilled = 2\n'
   fs.writeFileSync(path.join(collaborator, 'big.cfg'), filled)
   git(collaborator, ['commit', '--quiet', '-am', 'filled config'])
   git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
   commit(site, 'notes.txt', Array.from({ length: 4000 }, (_, index) => `note ${index} padded out to a fair length\n`).join(''), 'local notes')
+  const local = git(site, ['rev-parse', 'HEAD'])
   git(site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
   fs.writeFileSync(path.join(site, 'big.cfg'), `${filled}${KEY_MATERIAL}\n`)
   git(site, ['add', 'big.cfg'])
   git(site, ['commit', '--quiet', '--amend', '--no-edit'])
   const merge = git(site, ['rev-parse', 'HEAD'])
   commit(site, 'big.cfg', filled, 'drops the key')
-  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
-  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'big.cfg' && item.commit === merge), JSON.stringify(report.errors))
+  const result = scanPushUpdate({
+    repoRoot: site,
+    update: pushUpdate(site)[0],
+    repo: 'site',
+    gitRunner: (exe, args, opts) => (args.includes('--text') && args.includes(local) && args.includes(merge)
+      ? { status: null, stdout: '', error: Object.assign(new Error('output limit'), { code: 'ENOBUFS' }) }
+      : spawnSync(exe, args, opts)),
+  })
+  assert.ok(result.findings.some((item) => item.rule === 'secret-material' && item.path === 'big.cfg' && item.commit === merge), JSON.stringify(result.findings))
 })
 
 test('a merge that cannot be read against any parent refuses the push', (t) => {
