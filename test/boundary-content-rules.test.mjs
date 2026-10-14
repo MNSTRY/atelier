@@ -1226,10 +1226,13 @@ test('a remote named under another does not hide history from it', (t) => {
   const added = git(site, ['rev-parse', 'HEAD'])
   fs.rmSync(path.join(site, 'notes', 'key.txt'))
   commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  // Newer Git refuses to add a remote named under another, but older Git and
+  // hand-written configuration still produce one; set it up directly, with the
+  // tracking ref a fetch from it would leave.
   execFileSync('git', ['init', '--quiet', '--bare', path.join(root, 'nested.git')])
-  git(site, ['remote', 'add', 'origin/x', path.join(root, 'nested.git')])
-  git(site, ['push', '--quiet', 'origin/x', 'HEAD:refs/heads/main'])
-  git(site, ['fetch', '--quiet', 'origin/x'])
+  git(site, ['config', 'remote.origin/x.url', path.join(root, 'nested.git')])
+  git(site, ['config', 'remote.origin/x.fetch', '+refs/heads/*:refs/remotes/origin/x/*'])
+  git(site, ['update-ref', 'refs/remotes/origin/x/main', 'HEAD'])
   const result = scanPushUpdate({ repoRoot: site, update: pushUpdate(site)[0], repo: 'site', remote: 'origin' })
   assert.ok(result.findings.some((item) => item.rule === 'secret-material' && item.commit === added), JSON.stringify(result.findings))
 })
