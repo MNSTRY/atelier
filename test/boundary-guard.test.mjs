@@ -840,7 +840,7 @@ for (const suffix of ['md', 'kg.json']) {
 }
 
 for (const context of ['removed marker', 'path header', 'hunk heading']) {
-  test(`a ${context} cannot approve a semantic change`, () => {
+  test(`a ${context} cannot approve a semantic change`, { skip: process.platform === 'win32' && context === 'path header' && 'names Windows cannot hold' }, () => {
     const { project: cfg, policy, privateRepo } = makeWorkspace()
     const marker = 'Atelier-Boundary-Review: approved'
     const name = context === 'path header' ? `${marker}.md` : 'metadata.md'
@@ -862,7 +862,7 @@ for (const context of ['removed marker', 'path header', 'hunk heading']) {
   })
 }
 
-test('quoted metadata paths retain added-content review markers', () => {
+test('quoted metadata paths retain added-content review markers', { skip: process.platform === 'win32' && 'names Windows cannot hold' }, () => {
   const { project: cfg, policy, privateRepo } = makeWorkspace()
   const name = 'quoted"name.md'
   fs.writeFileSync(path.join(privateRepo, name), 'audience: team\nAtelier-Boundary-Review: approved\n')
@@ -893,7 +893,7 @@ for (const name of ['café.md', 'notes b/odd.md']) {
   })
 }
 
-test('NUL-delimited paths preserve forbidden paths containing newlines', () => {
+test('NUL-delimited paths preserve forbidden paths containing newlines', { skip: process.platform === 'win32' && 'names Windows cannot hold' }, () => {
   const { project: cfg, policy, privateRepo } = makeWorkspace()
   const name = 'transcripts/café\nnotes.txt'
   fs.mkdirSync(path.dirname(path.join(privateRepo, name)), { recursive: true })

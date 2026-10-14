@@ -224,7 +224,8 @@ function readQuotedToken(text, start) {
     const char = String.fromCodePoint(text.codePointAt(index))
     if (char === '"') {
       try {
-        return { value: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(bytes)), end: index + 1 }
+        // In a filename, a leading BOM is data rather than a text-stream signature.
+        return { value: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(bytes)), end: index + 1 }
       } catch {
         return null
       }

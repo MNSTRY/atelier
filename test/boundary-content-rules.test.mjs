@@ -1093,7 +1093,7 @@ for (const mode of ['plus-prefixed text', 'binary-attributed UTF-8']) {
   })
 }
 
-test('quoted diff paths decode without an incomplete-evidence refusal', (t) => {
+test('quoted diff paths decode without an incomplete-evidence refusal', { skip: !POSIX_NAMES && 'names Windows cannot hold' }, (t) => {
   const { site } = makeWorkspace(t)
   fs.writeFileSync(path.join(site, 'quoted"name.txt'), 'ordinary text\n')
   git(site, ['add', '.'])
@@ -1113,6 +1113,7 @@ test('content acquisition preserves canonical prefixes despite repository diff c
 for (const name of ['café.txt', 'quoted"name.txt', 'notes b/odd.txt']) {
   for (const binary of [false, true]) {
     test(`staged and pushed content preserve ${JSON.stringify(name)} with binary=${binary}`, (t) => {
+      if (!POSIX_NAMES && name.includes('"')) return t.skip('names Windows cannot hold')
       const { site, policy, project } = makeWorkspace(t)
       if (binary) fs.writeFileSync(path.join(site, '.gitattributes'), '* -diff\n')
       fs.mkdirSync(path.dirname(path.join(site, name)), { recursive: true })
@@ -1142,4 +1143,37 @@ test('boundary path globs include line breaks without widening exact exceptions'
   assert.equal(matchesPathPattern('**/*.txt', 'nested\nfolder/notes.txt'), true)
   assert.equal(matchesPathPattern('approved.txt', 'approved.txt\n'), false)
   assert.equal(matchesPathPattern('private/*.txt', 'private/deep/notes.txt'), false)
+})
+
+test('quoted rename and copy paths preserve a leading UTF-8 BOM as filename data', () => {
+  for (const action of ['rename', 'copy']) {
+    const [section] = parseDiffSections([
+      'diff --git "a/\\357\\273\\277old.txt" "b/\\357\\273\\277new.txt"',
+      'similarity index 100%',
+      `${action} from "\\357\\273\\277old.txt"`,
+      `${action} to "\\357\\273\\277new.txt"`,
+    ].join('\n'))
+    assert.equal(section.oldPath, '\uFEFFold.txt')
+    assert.equal(section.path, '\uFEFFnew.txt')
+    assert.equal(section.incomplete, null)
+  }
+})
+
+test('staged and pushed scans acquire an edited rename with leading-BOM filename bytes', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  const oldName = '\uFEFFold.txt'
+  const newName = '\uFEFFnew.txt'
+  fs.writeFileSync(path.join(site, oldName), 'ordinary synthetic note\n'.repeat(20))
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'synthetic original name'])
+  git(site, ['mv', oldName, newName])
+  fs.appendFileSync(path.join(site, newName), ['-----BEGIN ', 'PRIVATE KEY-----'].join('') + '\n')
+  git(site, ['add', '.'])
+  const staged = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(staged.errors.some(item => item.rule === 'secret-material' && item.path === newName), JSON.stringify(staged.errors))
+  assert.equal(staged.errors.some(item => item.code === 'content-scan-incomplete'), false)
+  git(site, ['commit', '--quiet', '-m', 'synthetic renamed content'])
+  const pushed = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(pushed.errors.some(item => item.rule === 'secret-material' && item.path === newName), JSON.stringify(pushed.errors))
+  assert.equal(pushed.errors.some(item => item.code === 'content-scan-incomplete'), false)
 })
