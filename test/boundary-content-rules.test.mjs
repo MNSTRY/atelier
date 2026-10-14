@@ -38,13 +38,36 @@ import { PROJECT_CONFIG_SCHEMA, commandProject, parseArgs, writeJson } from '../
 const CART = 'src/scripts/cart.ts'
 const CART_SOURCE = 'export const save = (items) => localStorage.setItem("cart", JSON.stringify(items))\n'
 
+// Git's automatic maintenance can start detached after a commit, merge, pull
+// or push (and receive-side auto-gc after a local push) and keep writing into a
+// test repository while the test removes it: ENOTEMPTY on Linux and EBUSY on
+// Windows in run 38530462871. This file's own Git commands run with it off.
+// The code under test removes every GIT_* variable from its own Git calls.
+const MAINTENANCE_OFF = {
+  GIT_CONFIG_COUNT: '3',
+  GIT_CONFIG_KEY_0: 'maintenance.auto',
+  GIT_CONFIG_VALUE_0: 'false',
+  GIT_CONFIG_KEY_1: 'gc.auto',
+  GIT_CONFIG_VALUE_1: '0',
+  GIT_CONFIG_KEY_2: 'receive.autogc',
+  GIT_CONFIG_VALUE_2: 'false',
+}
+Object.assign(process.env, MAINTENANCE_OFF)
+
+// Windows can hold a just-written file for a moment (a scanner, or a Git
+// process still exiting), so a temporary tree is removed with Node's bounded
+// retry on EBUSY, EPERM and ENOTEMPTY; a tree that stays busy still fails.
+function removeTree(dir) {
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+}
+
 function git(repo, args, options = {}) {
   return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', ...options }).trim()
 }
 
 function makeWorkspace(t, { exceptions = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-content-'))
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
 
   const site = path.join(root, 'example-site')
   const upstream = path.join(root, 'example-site.git')
@@ -269,6 +292,7 @@ test('the shared guard script contains no repo-specific paths', (t) => {
   const hook = fs.readFileSync(path.join(site, '.git/hooks/pre-push'), 'utf8')
 
   assert.match(hook, /boundary push-check/, 'pre-push must judge the pushed range')
+  assert.match(hook, /--remote="\$\{1:-\}"/, 'pre-push passes the remote Git names')
   assert.doesNotMatch(hook, /cart\.ts|localStorage|:!/, 'repo-specific carve-outs belong in policy, not in shared infrastructure')
   const preCommit = fs.readFileSync(path.join(site, '.git/hooks/pre-commit'), 'utf8')
   assert.match(preCommit, /boundary check --staged/)
@@ -770,10 +794,11 @@ const PACKAGE_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname
 /** Run git as a person would, with installed hooks answered only by this checkout's CLI. */
 function hookedGit(t, cwd) {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-hook-bin-'))
-  t.after(() => fs.rmSync(bin, { recursive: true, force: true }))
+  t.after(() => removeTree(bin))
   fs.symlinkSync(process.execPath, path.join(bin, 'node'))
   fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'))
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
+  Object.assign(env, MAINTENANCE_OFF)
   // The person at the terminal names themselves with the supported local selector, so a
   // platform login in the environment (GITHUB_ACTOR on CI) is not mistaken for them.
   Object.assign(env, { PATH: [bin, '/usr/bin', '/bin'].join(':'), MNSTRY_ATELIER_PACKAGE_ROOT: PACKAGE_ROOT, MNSTRY_ATELIER_ACTOR: 'author' })
@@ -917,6 +942,443 @@ test('a hook index is resolved against the work tree the hook runs in', (t) => {
   // A chained hook that moved into a subdirectory still names the top of the work tree.
   const nested = hookIndexFromEnvironment({ env: { GIT_INDEX_FILE: '.git/index' }, cwd: path.join(site, 'src') })
   assert.deepEqual(nested, plain)
+})
+
+test('content added and removed again within one push is judged in the commit that added it', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing here\n', 'removes it again')
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.equal(report.ok, false)
+  const found = report.errors.filter((item) => item.rule === 'secret-material')
+  assert.deepEqual(found.map((item) => [item.path, item.line, item.commit]), [['notes/key.txt', 1, added]])
+  assert.match(found[0].message, new RegExp(`in commit ${added.slice(0, 12)}`))
+
+  // A binary added and deleted again within the push is read as well.
+  const second = makeWorkspace(t)
+  commit(second.site, 'assets/blob.bin', Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`${KEY_MATERIAL}\n`)]), 'adds a binary')
+  const binaryCommit = git(second.site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(second.site, 'assets', 'blob.bin'))
+  commit(second.site, 'assets/readme.txt', 'nothing here\n', 'removes it again')
+  const binaryReport = checkPushContent({ project: second.project, policy: second.policy, updates: pushUpdate(second.site), cwd: second.site })
+  assert.ok(binaryReport.errors.some((item) => item.path === 'assets/blob.bin' && item.binary === true && item.commit === binaryCommit), JSON.stringify(binaryReport.errors))
+
+  // A key that reaches the pushed tip is reported once, by the endpoint change.
+  const kept = makeWorkspace(t)
+  commit(kept.site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  commit(kept.site, 'notes/other.txt', 'more\n', 'another commit')
+  const keptReport = checkPushContent({ project: kept.project, policy: kept.policy, updates: pushUpdate(kept.site), cwd: kept.site })
+  const keys = keptReport.errors.filter((item) => item.rule === 'secret-material')
+  assert.deepEqual(keys.map((item) => [item.path, item.line, item.commit ?? null]), [['notes/key.txt', 1, null]])
+  // The report still says which commits carry it.
+  assert.deepEqual(keys[0].commits, [git(kept.site, ['rev-parse', 'HEAD~1'])])
+})
+
+test('a push judges each commit no remote has, once, and refuses one that carries too many', (t) => {
+  const { site } = makeWorkspace(t)
+  const diffs = []
+  const scan = (update, options = {}) => scanPushUpdate({
+    repoRoot: site,
+    update,
+    repo: 'site',
+    gitRunner: (exe, args, opts) => {
+      if (args.includes('diff')) diffs.push(args.slice(-2).join('..'))
+      return spawnSync(exe, args, opts)
+    },
+    ...options,
+  })
+  // One commit on the remote's tip is the endpoint change itself: one diff.
+  commit(site, 'a.txt', 'one\n', 'one')
+  let result = scan(pushUpdate(site)[0])
+  assert.equal(diffs.length, 1)
+  assert.deepEqual(result.diagnostics, [])
+  // Three new commits: the endpoints, then each commit against its parent.
+  commit(site, 'b.txt', 'two\n', 'two')
+  commit(site, 'c.txt', 'three\n', 'three')
+  diffs.length = 0
+  result = scan(pushUpdate(site)[0])
+  assert.equal(diffs.length, 1 + 3)
+  // A new branch from the pushed main carries only its own commit, not main's history.
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  git(site, ['fetch', '--quiet', 'origin'])
+  git(site, ['checkout', '--quiet', '-b', 'feature'])
+  commit(site, 'd.txt', 'four\n', 'four')
+  diffs.length = 0
+  result = scan({ localRef: 'refs/heads/feature', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/feature', remoteSha: '0'.repeat(40) })
+  assert.equal(diffs.length, 1 + 1)
+  // Past the limit the push is refused, not judged only by its endpoints.
+  commit(site, 'e.txt', 'five\n', 'five')
+  result = scan({ localRef: 'refs/heads/feature', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/feature', remoteSha: '0'.repeat(40) }, { maxCommits: 1 })
+  assert.deepEqual(result.diagnostics.map((item) => [item.code, item.details.reason, item.details.limit]), [['content-scan-incomplete', 'push-range-too-long', 1]])
+  assert.match(result.diagnostics[0].message, /push it in smaller parts/)
+})
+
+test('a pull merge is not judged for what the remote already holds, but an evil merge is', (t) => {
+  const { root, site, policy, project } = makeWorkspace(t)
+  // A collaborator publishes a change the guard would refuse, without the hook.
+  const collaborator = path.join(root, 'collaborator')
+  execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(root, 'example-site.git'), collaborator])
+  git(collaborator, ['config', 'user.email', 'other@example.invalid'])
+  git(collaborator, ['config', 'user.name', 'Other'])
+  fs.appendFileSync(path.join(collaborator, CART), 'export const load = () => localStorage.getItem("cart")\n')
+  git(collaborator, ['commit', '--quiet', '-am', 'published without the hook'])
+  git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  commit(site, 'README.md', '# Site\n', 'readme')
+  git(site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
+  let report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.deepEqual(report.errors, [], 'content the remote already holds is not judged again')
+
+  // A key that only the merge introduces is new against every parent.
+  fs.appendFileSync(path.join(site, 'README.md'), `${KEY_MATERIAL}\n`)
+  git(site, ['add', 'README.md'])
+  git(site, ['commit', '--quiet', '--amend', '--no-edit'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  assert.equal(git(site, ['rev-list', '--parents', '-n', '1', 'HEAD']).split(' ').length, 3)
+  // Removed again afterwards, so only the merge itself carries it.
+  fs.writeFileSync(path.join(site, 'README.md'), '# Site\n')
+  commit(site, 'README.md', '# Site\n', 'removes the key')
+  report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'README.md' && item.commit === merge), JSON.stringify(report.errors))
+  assert.ok(report.errors.every((item) => item.rule !== 'browser-persistence'), JSON.stringify(report.errors))
+})
+
+test('a key added and removed on a merged side branch is judged in its own commit', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  git(site, ['checkout', '--quiet', '-b', 'side'])
+  commit(site, 'side/key.txt', `${KEY_MATERIAL}\n`, 'adds a key on the side')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'side', 'key.txt'))
+  commit(site, 'side/readme.txt', 'nothing\n', 'removes it')
+  git(site, ['checkout', '--quiet', '-'])
+  commit(site, 'main.txt', 'main work\n', 'main work')
+  git(site, ['merge', '--quiet', '--no-ff', '--no-edit', 'side'])
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.commit === added), JSON.stringify(report.errors))
+})
+
+test('an intermediate commit the push check cannot read refuses the push and names the commit', (t) => {
+  // A binary over the per-file limit, added and removed again.
+  const big = makeWorkspace(t)
+  commit(big.site, 'assets/big.bin', Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL), Buffer.alloc(BINARY_FILE_MAX_BYTES + 1, 1)]), 'a large binary')
+  const bigCommit = git(big.site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(big.site, 'assets', 'big.bin'))
+  commit(big.site, 'assets/readme.txt', 'gone\n', 'removes it')
+  let report = checkPushContent({ project: big.project, policy: big.policy, updates: pushUpdate(big.site), cwd: big.site })
+  assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.details.commit === bigCommit && new RegExp(bigCommit.slice(0, 12)).test(item.message)), JSON.stringify(report.errors))
+
+  // A text change whose diff is over the limit, added and removed again.
+  const wide = makeWorkspace(t)
+  commit(wide.site, 'notes/huge.txt', `${KEY_MATERIAL}\n${'filler line of text\n'.repeat(900000)}`, 'a huge text file')
+  const wideCommit = git(wide.site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(wide.site, 'notes', 'huge.txt'))
+  commit(wide.site, 'notes/readme.txt', 'gone\n', 'removes it')
+  report = checkPushContent({ project: wide.project, policy: wide.policy, updates: pushUpdate(wide.site), cwd: wide.site })
+  assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.details?.commit === wideCommit), JSON.stringify(report.errors))
+  // Deleting it again is readable: a deletion's removed lines are not printed.
+  assert.deepEqual(report.errors.filter((item) => item.code === 'content-scan-incomplete').map((item) => item.details?.commit), [wideCommit])
+})
+
+test('the push check refuses when it cannot list the commits or the evidence grows past its budget', (t) => {
+  const { site } = makeWorkspace(t)
+  commit(site, 'a.txt', 'one\n', 'one')
+  commit(site, 'b.txt', 'two\n', 'two')
+  const update = pushUpdate(site)[0]
+  let result = scanPushUpdate({ repoRoot: site, update, repo: 'site', gitRunner: (exe, args, opts) => (args.includes('rev-list') ? { status: 128, stdout: '' } : spawnSync(exe, args, opts)) })
+  assert.ok(result.diagnostics.some((item) => item.code === 'content-scan-incomplete' && /could not be listed/.test(item.message)), JSON.stringify(result.diagnostics))
+  // Most of this push's evidence is in a commit that adds a large file and one that removes it.
+  commit(site, 'notes/large.txt', 'a line of filler text\n'.repeat(5000), 'a large file')
+  fs.rmSync(path.join(site, 'notes', 'large.txt'))
+  commit(site, 'notes/readme.txt', 'gone\n', 'removes it')
+  const wide = pushUpdate(site)[0]
+  const endpoints = scanPushUpdate({ repoRoot: site, update: wide, repo: 'site', maxCommits: 0 })
+  assert.ok(endpoints.bytes < 50000)
+  result = scanPushUpdate({ repoRoot: site, update: wide, repo: 'site', maxBytes: 50000 })
+  assert.ok(result.diagnostics.some((item) => item.details.reason === 'push-evidence-too-large'), JSON.stringify(result.diagnostics))
+  assert.ok(result.bytes > 50000)
+})
+
+test('history only another remote holds is judged on its way to a new one', (t) => {
+  const { root, site } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  // Published to origin earlier, without the hook.
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  execFileSync('git', ['init', '--quiet', '--bare', path.join(root, 'public.git')])
+  git(site, ['remote', 'add', 'public', path.join(root, 'public.git')])
+  const update = { localRef: 'refs/heads/main', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: '0'.repeat(40) }
+  const toPublic = scanPushUpdate({ repoRoot: site, update, repo: 'site', remote: 'public' })
+  assert.ok(toPublic.findings.some((item) => item.rule === 'secret-material' && item.commit === added), JSON.stringify(toPublic.findings))
+})
+
+test('a blob judged at one path is judged again at another', (t) => {
+  const { site, policy, project } = makeWorkspace(t, { exceptions: [{ rule: 'secret-material', repo: 'example-site', paths: ['fixtures/**'], reason: 'test fixture' }] })
+  const blob = Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`${KEY_MATERIAL}\n`)])
+  commit(site, 'fixtures/key.bin', blob, 'an excepted fixture')
+  commit(site, 'src/key.bin', blob, 'the same bytes elsewhere')
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.path === 'src/key.bin' && item.rule === 'secret-material'), JSON.stringify(report.errors))
+  assert.ok(!report.errors.some((item) => item.path === 'fixtures/key.bin'), JSON.stringify(report.errors))
+})
+
+test('an evil merge over a type change is still judged', { skip: process.platform === 'win32' && 'symbolic links' }, (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  commit(site, 'notes/f.txt', 'one\n', 'a file')
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  git(site, ['checkout', '--quiet', '-b', 'linked'])
+  fs.rmSync(path.join(site, 'notes', 'f.txt'))
+  fs.symlinkSync('elsewhere', path.join(site, 'notes', 'f.txt'))
+  git(site, ['add', '-A'])
+  git(site, ['commit', '--quiet', '-m', 'now a link'])
+  git(site, ['checkout', '--quiet', '-'])
+  commit(site, 'notes/f.txt', 'two\n', 'edited')
+  assert.throws(() => git(site, ['merge', '--quiet', 'linked']))
+  fs.rmSync(path.join(site, 'notes', 'f.txt'), { force: true })
+  fs.writeFileSync(path.join(site, 'notes', 'f.txt'), `two\n${KEY_MATERIAL}\n`)
+  git(site, ['add', '-A'])
+  git(site, ['commit', '--quiet', '--no-edit'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  commit(site, 'notes/f.txt', 'two\n', 'removes the key')
+  const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.commit === merge), JSON.stringify(report.errors))
+})
+
+test('a pull merge over large upstream binaries passes, but a binary only the merge adds is judged', (t) => {
+  const { root, site, policy, project } = makeWorkspace(t)
+  const collaborator = path.join(root, 'collaborator')
+  execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(root, 'example-site.git'), collaborator])
+  git(collaborator, ['config', 'user.email', 'other@example.invalid'])
+  git(collaborator, ['config', 'user.name', 'Other'])
+  // More binary content than one diff may read, all of it already published.
+  for (let index = 0; index < 5; index += 1) {
+    fs.mkdirSync(path.join(collaborator, 'photos'), { recursive: true })
+    fs.writeFileSync(path.join(collaborator, 'photos', `photo-${index}.bin`), Buffer.concat([Buffer.from([0, index]), Buffer.alloc(7 * 1024 * 1024, index + 1)]))
+    git(collaborator, ['add', '.'])
+    git(collaborator, ['commit', '--quiet', '-m', `photo ${index}`])
+    git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  }
+  commit(site, 'README.md', '# Site\n', 'readme')
+  git(site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
+  let report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.deepEqual(report.errors, [], 'published content neither refuses nor spends the budget')
+  const budgeted = scanPushUpdate({ repoRoot: site, update: pushUpdate(site)[0], repo: 'site', maxBytes: 20 * 1024 * 1024 })
+  assert.deepEqual(budgeted.diagnostics, [])
+
+  // The merge alone adds a binary holding a key, removed again afterwards.
+  fs.writeFileSync(path.join(site, 'z-evil.bin'), Buffer.concat([Buffer.from([0, 9]), Buffer.from(`${KEY_MATERIAL}\n`)]))
+  git(site, ['add', 'z-evil.bin'])
+  git(site, ['commit', '--quiet', '--amend', '--no-edit'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'z-evil.bin'))
+  commit(site, 'README.md', '# Site, again\n', 'removes it')
+  report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site })
+  assert.ok(report.errors.some((item) => item.path === 'z-evil.bin' && item.binary === true && item.commit === merge), JSON.stringify(report.errors))
+})
+
+test('the push budget counts published binaries not at all and each new blob once', (t) => {
+  const { root, site } = makeWorkspace(t)
+  const collaborator = path.join(root, 'collaborator')
+  execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(root, 'example-site.git'), collaborator])
+  git(collaborator, ['config', 'user.email', 'other@example.invalid'])
+  git(collaborator, ['config', 'user.name', 'Other'])
+  fs.mkdirSync(path.join(collaborator, 'photos'))
+  for (let index = 0; index < 3; index += 1) fs.writeFileSync(path.join(collaborator, 'photos', `photo-${index}.bin`), Buffer.concat([Buffer.from([0, index]), Buffer.alloc(6 * 1024 * 1024, index + 1)]))
+  git(collaborator, ['add', '.'])
+  git(collaborator, ['commit', '--quiet', '-m', 'published photos'])
+  git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  commit(site, 'README.md', '# Site\n', 'readme')
+  git(site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
+  let result = scanPushUpdate({ repoRoot: site, update: pushUpdate(site)[0], repo: 'site', maxBytes: 10 * 1024 * 1024 })
+  assert.deepEqual(result.diagnostics, [], 'a pull merge is judged by the diff that leaves out what the remote published')
+
+  // New binaries are read by the endpoint diff and by their commit, but count once.
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  git(site, ['fetch', '--quiet', 'origin'])
+  for (let index = 0; index < 3; index += 1) fs.writeFileSync(path.join(site, `asset-${index}.bin`), Buffer.concat([Buffer.from([0, 9, index]), Buffer.alloc(4 * 1024 * 1024, index + 5)]))
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'new assets'])
+  commit(site, 'notes.txt', 'more\n', 'more')
+  result = scanPushUpdate({ repoRoot: site, update: pushUpdate(site)[0], repo: 'site', maxBytes: 20 * 1024 * 1024 })
+  assert.deepEqual(result.diagnostics, [])
+  assert.ok(result.bytes < 20 * 1024 * 1024 && result.bytes > 12 * 1024 * 1024, String(result.bytes))
+})
+
+test('a merge that alone adds unreadable or keyed content is judged even when a parent diff fails', (t) => {
+  // The merge alone adds a binary over the per-file limit, removed again: refused.
+  const big = makeWorkspace(t)
+  git(big.site, ['checkout', '--quiet', '-b', 'side'])
+  commit(big.site, 'side.txt', 'side\n', 'side')
+  git(big.site, ['checkout', '--quiet', '-'])
+  commit(big.site, 'main.txt', 'main\n', 'main')
+  git(big.site, ['merge', '--quiet', '--no-ff', '--no-commit', 'side'])
+  fs.writeFileSync(path.join(big.site, 'evil.bin'), Buffer.concat([Buffer.from([0]), Buffer.from(KEY_MATERIAL), Buffer.alloc(BINARY_FILE_MAX_BYTES + 1, 1)]))
+  git(big.site, ['add', 'evil.bin'])
+  git(big.site, ['commit', '--quiet', '--no-edit'])
+  const bigMerge = git(big.site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(big.site, 'evil.bin'))
+  commit(big.site, 'gone.txt', 'gone\n', 'removes it')
+  let result = scanPushUpdate({ repoRoot: big.site, update: pushUpdate(big.site)[0], repo: 'site' })
+  assert.ok(result.diagnostics.some((item) => item.details?.commit === bigMerge), JSON.stringify(result.diagnostics))
+
+  // One parent diff is over the output limit; the merge's own key line is still found.
+  const wide = makeWorkspace(t)
+  const collaborator = path.join(wide.root, 'collaborator')
+  execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(wide.root, 'example-site.git'), collaborator])
+  git(collaborator, ['config', 'user.email', 'other@example.invalid'])
+  git(collaborator, ['config', 'user.name', 'Other'])
+  fs.writeFileSync(path.join(collaborator, 'huge.txt'), 'published filler text\n'.repeat(900000))
+  git(collaborator, ['add', '.'])
+  git(collaborator, ['commit', '--quiet', '-m', 'a huge published file'])
+  git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  commit(wide.site, 'README.md', '# Site\n', 'readme')
+  git(wide.site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
+  fs.appendFileSync(path.join(wide.site, 'README.md'), `${KEY_MATERIAL}\n`)
+  git(wide.site, ['add', 'README.md'])
+  git(wide.site, ['commit', '--quiet', '--amend', '--no-edit'])
+  const wideMerge = git(wide.site, ['rev-parse', 'HEAD'])
+  commit(wide.site, 'README.md', '# Site\n', 'removes the key')
+  result = scanPushUpdate({ repoRoot: wide.site, update: pushUpdate(wide.site)[0], repo: 'site' })
+  assert.ok(result.findings.some((item) => item.rule === 'secret-material' && item.commit === wideMerge), JSON.stringify(result.findings))
+})
+
+test('a remote named under another does not hide history from it', (t) => {
+  const { root, site } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  // Newer Git refuses to add a remote named under another, but older Git and
+  // hand-written configuration still produce one; set it up directly, with the
+  // tracking ref a fetch from it would leave.
+  execFileSync('git', ['init', '--quiet', '--bare', path.join(root, 'nested.git')])
+  git(site, ['config', 'remote.origin/x.url', path.join(root, 'nested.git')])
+  git(site, ['config', 'remote.origin/x.fetch', '+refs/heads/*:refs/remotes/origin/x/*'])
+  git(site, ['update-ref', 'refs/remotes/origin/x/main', 'HEAD'])
+  for (const remote of ['origin', path.join(root, 'example-site.git')]) {
+    const result = scanPushUpdate({ repoRoot: site, update: pushUpdate(site)[0], repo: 'site', remote })
+    assert.ok(result.findings.some((item) => item.rule === 'secret-material' && item.commit === added), `${remote}: ${JSON.stringify(result.findings)}`)
+  }
+})
+
+test('a merge is never judged by an incomplete parent diff, however small', (t) => {
+  // The merge adds a key line to text declared binary. Against the local parent
+  // the text read is made to fail as an over-limit read does (incomplete, and
+  // the smaller diff); against the upstream parent it is complete, and larger by
+  // the local notes. The over-limit result is injected rather than produced:
+  // a real one makes Git compute a very large diff for nothing.
+  const { root, site } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg binary\n')
+  fs.writeFileSync(path.join(site, 'big.cfg'), 'blank\n')
+  git(site, ['add', '-A'])
+  git(site, ['commit', '--quiet', '-m', 'blank config'])
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  git(site, ['fetch', '--quiet', 'origin'])
+  const collaborator = path.join(root, 'collaborator')
+  execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(root, 'example-site.git'), collaborator])
+  git(collaborator, ['config', 'user.email', 'other@example.invalid'])
+  git(collaborator, ['config', 'user.name', 'Other'])
+  const filled = 'filled = 1\nfilled = 2\n'
+  fs.writeFileSync(path.join(collaborator, 'big.cfg'), filled)
+  git(collaborator, ['commit', '--quiet', '-am', 'filled config'])
+  git(collaborator, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  commit(site, 'notes.txt', Array.from({ length: 4000 }, (_, index) => `note ${index} padded out to a fair length\n`).join(''), 'local notes')
+  const local = git(site, ['rev-parse', 'HEAD'])
+  git(site, ['pull', '--quiet', '--no-rebase', '--no-edit', 'origin', 'main'])
+  fs.writeFileSync(path.join(site, 'big.cfg'), `${filled}${KEY_MATERIAL}\n`)
+  git(site, ['add', 'big.cfg'])
+  git(site, ['commit', '--quiet', '--amend', '--no-edit'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  commit(site, 'big.cfg', filled, 'drops the key')
+  const result = scanPushUpdate({
+    repoRoot: site,
+    update: pushUpdate(site)[0],
+    repo: 'site',
+    gitRunner: (exe, args, opts) => (args.includes('--text') && args.includes(local) && args.includes(merge)
+      ? { status: null, stdout: '', error: Object.assign(new Error('output limit'), { code: 'ENOBUFS' }) }
+      : spawnSync(exe, args, opts)),
+  })
+  assert.ok(result.findings.some((item) => item.rule === 'secret-material' && item.path === 'big.cfg' && item.commit === merge), JSON.stringify(result.findings))
+})
+
+test('a merge that cannot be read against any parent refuses the push', (t) => {
+  const { site } = makeWorkspace(t)
+  git(site, ['checkout', '--quiet', '-b', 'side'])
+  commit(site, 'side.txt', 'side\n', 'side')
+  git(site, ['checkout', '--quiet', '-'])
+  commit(site, 'main.txt', 'main\n', 'main')
+  git(site, ['merge', '--quiet', '--no-ff', '--no-edit', 'side'])
+  const merge = git(site, ['rev-parse', 'HEAD'])
+  const result = scanPushUpdate({
+    repoRoot: site,
+    update: pushUpdate(site)[0],
+    repo: 'site',
+    gitRunner: (exe, args, opts) => (args.includes('diff') && args.at(-1) === merge && args.length > 0 && args.at(-2) !== git(site, ['rev-parse', 'origin/main']) ? { status: 128, stdout: '' } : spawnSync(exe, args, opts)),
+  })
+  assert.ok(result.diagnostics.some((item) => item.details?.commit === merge), JSON.stringify(result.diagnostics))
+})
+
+test('a push to a URL or an unknown remote judges history other remotes hold', (t) => {
+  const { root, site } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  const added = git(site, ['rev-parse', 'HEAD'])
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  const publicUrl = path.join(root, 'public.git')
+  execFileSync('git', ['init', '--quiet', '--bare', publicUrl])
+  git(site, ['remote', 'add', 'public', publicUrl])
+  const update = { localRef: 'refs/heads/main', localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: '0'.repeat(40) }
+  for (const remote of [publicUrl, path.join(root, 'unconfigured.git')]) {
+    const result = scanPushUpdate({ repoRoot: site, update, repo: 'site', remote })
+    assert.ok(result.findings.some((item) => item.rule === 'secret-material' && item.commit === added), `${remote}: ${JSON.stringify(result.findings)}`)
+  }
+})
+
+test('the pre-push hook passes its remote, and only rule violations suggest an exception', { skip: process.platform === 'win32' && 'POSIX hook shell' }, (t) => {
+  const { root, site, project } = makeWorkspace(t)
+  commit(site, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'adds a key')
+  fs.rmSync(path.join(site, 'notes', 'key.txt'))
+  commit(site, 'notes/readme.txt', 'nothing\n', 'removes it')
+  git(site, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  installBoundaryHooks({ project })
+  // Setup commits below bypass the pre-commit hook; the push is what is under test.
+  const setup = (rel, contents, message) => {
+    fs.mkdirSync(path.dirname(path.join(site, rel)), { recursive: true })
+    if (contents === null) fs.rmSync(path.join(site, rel))
+    else fs.writeFileSync(path.join(site, rel), contents)
+    git(site, ['add', '-A'])
+    git(site, ['commit', '--quiet', '--no-verify', '-m', message])
+  }
+  execFileSync('git', ['init', '--quiet', '--bare', path.join(root, 'public.git')])
+  git(site, ['remote', 'add', 'public', path.join(root, 'public.git')])
+  const run = hookedGit(t, site)
+  let result = run(['push', '--quiet', 'public', 'HEAD:refs/heads/main'])
+  assert.notEqual(result.status, 0, 'legacy history reached a new remote unjudged')
+  assert.match(result.stdout + result.stderr, /secret-material/)
+  assert.match(result.stdout + result.stderr, /If this usage is intentional/)
+
+  // Refused only because an intermediate commit cannot be read: no exception hint.
+  setup('assets/big.bin', Buffer.concat([Buffer.from([0]), Buffer.alloc(BINARY_FILE_MAX_BYTES + 1, 1)]), 'a large binary')
+  setup('assets/big.bin', null, 'removes it')
+  result = run(['push', '--quiet', 'origin', 'HEAD:refs/heads/main'])
+  assert.notEqual(result.status, 0)
+  assert.match(result.stdout + result.stderr, /content-scan-incomplete/)
+  assert.doesNotMatch(result.stdout + result.stderr, /If this usage is intentional/)
+})
+
+test('a new branch in a SHA-256 repository is scanned from its empty tree', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-sha256-'))
+  t.after(() => removeTree(root))
+  git(root, ['init', '--quiet', '--object-format=sha256'])
+  git(root, ['config', 'user.email', 'author@example.invalid'])
+  git(root, ['config', 'user.name', 'Author'])
+  commit(root, 'notes/key.txt', `${KEY_MATERIAL}\n`, 'a key on a new branch')
+  const result = scanPushUpdate({ repoRoot: root, update: { localRef: 'refs/heads/main', localSha: git(root, ['rev-parse', 'HEAD']), remoteRef: 'refs/heads/main', remoteSha: '0'.repeat(64) }, repo: 'site' })
+  assert.deepEqual(result.diagnostics, [])
+  assert.ok(result.findings.some((item) => item.path === 'notes/key.txt' && item.rule === 'secret-material'), JSON.stringify(result.findings))
 })
 
 test('diff headers resolve quoted, ambiguous and renamed paths, and unreadable sections fail closed', () => {

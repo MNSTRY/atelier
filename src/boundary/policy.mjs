@@ -610,7 +610,7 @@ function repoForCwd(project, cwd) {
  * which reports without blocking, so an accepted usage elsewhere in the repo can
  * never strand unrelated work on the machine.
  */
-export function checkPushContent({ project, policy, repo, updates, cwd = process.cwd(), gitRunner = spawnSync } = {}) {
+export function checkPushContent({ project, policy, repo, updates, remote = null, cwd = process.cwd(), gitRunner = spawnSync } = {}) {
   const target = repo ?? repoForCwd(project, cwd)
   if (!target) {
     // Fail closed. This hook is only installed into managed repos, so failing to
@@ -628,15 +628,17 @@ export function checkPushContent({ project, policy, repo, updates, cwd = process
   const findings = []
   let totalBytes = 0
   for (const update of updates) {
-    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, gitRunner })
+    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, remote, gitRunner, maxBytes: CHECK_AGGREGATE_MAX_BYTES - totalBytes })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
+    // The per-commit scan reports its own budget refusal; say it once.
+    if (result.diagnostics.some((item) => item.details?.reason === 'push-evidence-too-large')) break
     if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
       findings.push(finding({
         severity: 'error',
         code: 'content-scan-incomplete',
         repo: target.name,
-        message: `push evidence exceeds the ${CHECK_AGGREGATE_MAX_BYTES}-byte aggregate limit`,
+        message: `push evidence exceeds the ${CHECK_AGGREGATE_MAX_BYTES}-byte aggregate limit; push it in smaller parts`,
       }))
       break
     }
@@ -857,7 +859,7 @@ ATELIER_HOOK_PROJECT_CONFIG="$ATELIER_HOOK_REPO_ROOT"/${shellSingleQuote(portabl
   // pre-push reads the ref updates git writes to stdin and judges only that range;
   // pre-commit judges the staged diff. Neither scans the whole tree — that view is
   // `atelier boundary audit`, which reports without blocking.
-  const invocation = hookName === 'pre-push' ? `boundary push-check ${config}` : `boundary check --staged ${config}`
+  const invocation = hookName === 'pre-push' ? `boundary push-check ${config} --remote="\${1:-}"` : `boundary check --staged ${config}`
   return `#!/usr/bin/env bash
 # MNSTRY_ATELIER_BOUNDARY_GUARD ${hookName}
 set -euo pipefail
@@ -903,13 +905,17 @@ export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdi
     console.log('[boundary:push-check] no ref updates on stdin · nothing to judge')
     process.exit(0)
   }
-  const report = checkPushContent({ project, policy: loaded.policy, updates: parsed.updates, cwd: process.cwd() })
+  // The installed hook passes the remote Git names as its first argument.
+  const report = checkPushContent({ project, policy: loaded.policy, updates: parsed.updates, remote: firstString(args.remote), cwd: process.cwd() })
   if (args.json) {
     console.log(JSON.stringify(report, null, 2))
   } else {
     console.log(`[boundary:push-check] ${report.ok ? 'passed' : 'blocked'} · ${report.repo ?? 'unknown repo'} · ${report.errors.length} errors · ${report.warnings.length} warnings`)
-    for (const item of report.findings.slice(0, 50)) console.log(`${item.severity} ${item.rule ?? item.code}: ${item.message}`)
-    if (!report.ok && report.repo) {
+    for (const item of report.findings.slice(0, 50)) {
+      const also = item.commits?.length ? ` (also in commits ${item.commits.map((commit) => commit.slice(0, 12)).join(', ')})` : ''
+      console.log(`${item.severity} ${item.rule ?? item.code}: ${item.message}${also}`)
+    }
+    if (!report.ok && report.repo && report.errors.some((item) => item.code === 'content-rule-violation')) {
       console.log('')
       console.log('If this usage is intentional, declare it in the boundary policy:')
       console.log('  contentRuleExceptions: [{ rule, repo, paths: [...], reason: "why this is accepted" }]')

@@ -638,3 +638,13 @@ test('a repo whose staged paths cannot be listed blocks the commit', { skip: pro
   const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true, gitExecutable: wrapper })
   assert.ok(report.errors.some((item) => item.code === 'repo-unscannable' && /staged paths could not be listed/.test(item.message)), JSON.stringify(report.errors))
 })
+
+test('deleting a document with semantic fields still needs review', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'sensitive')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  git(privateRepo, ['rm', '-q', 'doc.md'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'doc.md'), JSON.stringify(report.errors))
+})
