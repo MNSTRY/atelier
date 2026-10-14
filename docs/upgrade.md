@@ -32,9 +32,9 @@ now judge work they used to miss, so a commit or push that passed on
   remote is judged on its way to a new one. The push check judges every commit
   the remote's tracking refs do not hold, each against its parent, binaries
   included. A push carrying more than 1000 such commits or more than the
-  evidence budget is refused with `content-scan-incomplete` (reason
-  `push-range-too-long` or `push-evidence-too-large`); push it in smaller
-  parts.
+  evidence budget is refused with `content-scan-incomplete` (for one ref,
+  reason `push-range-too-long` or `push-evidence-too-large`); push it in
+  smaller parts.
 - The pre-commit check reads the index and work tree Git names, so
   `git commit -a`, `git commit <paths>` and commits from a linked worktree are
   judged. It blocks with `pre-commit-repo-unresolved` when no single declared
@@ -55,8 +55,9 @@ now judge work they used to miss, so a commit or push that passed on
 - `runMaintenanceService` from `@mnstry/atelier/obsidian` refuses a project
   loader that answers with a promise when no `locateProject` is given
   (`service-loader-not-synchronous`); on 0.2.0-alpha.13 such a service
-  protected no repository. Pass a synchronous `locateProject` to keep an
-  asynchronous loader.
+  protected no repository. Pass a synchronous `locateProject`, which answers
+  a project naming its folder, to keep an asynchronous loader (see
+  [Obsidian](obsidian.md)).
 
 A package update supplies no interpretation approval, source-write permission,
 publication authority or runtime activation. Rehearse this exact installed
