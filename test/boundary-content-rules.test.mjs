@@ -38,13 +38,20 @@ import { PROJECT_CONFIG_SCHEMA, commandProject, parseArgs, writeJson } from '../
 const CART = 'src/scripts/cart.ts'
 const CART_SOURCE = 'export const save = (items) => localStorage.setItem("cart", JSON.stringify(items))\n'
 
+// Windows can hold a just-written file for a moment (a scanner, or a Git
+// process still exiting), so a temporary tree is removed with Node's bounded
+// retry on EBUSY, EPERM and ENOTEMPTY; a tree that stays busy still fails.
+function removeTree(dir) {
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+}
+
 function git(repo, args, options = {}) {
   return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', ...options }).trim()
 }
 
 function makeWorkspace(t, { exceptions = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-content-'))
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
 
   const site = path.join(root, 'example-site')
   const upstream = path.join(root, 'example-site.git')
@@ -771,7 +778,7 @@ const PACKAGE_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname
 /** Run git as a person would, with installed hooks answered only by this checkout's CLI. */
 function hookedGit(t, cwd) {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-hook-bin-'))
-  t.after(() => fs.rmSync(bin, { recursive: true, force: true }))
+  t.after(() => removeTree(bin))
   fs.symlinkSync(process.execPath, path.join(bin, 'node'))
   fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'))
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
@@ -1338,7 +1345,7 @@ test('the pre-push hook passes its remote, and only rule violations suggest an e
 
 test('a new branch in a SHA-256 repository is scanned from its empty tree', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-sha256-'))
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeTree(root))
   git(root, ['init', '--quiet', '--object-format=sha256'])
   git(root, ['config', 'user.email', 'author@example.invalid'])
   git(root, ['config', 'user.name', 'Author'])
