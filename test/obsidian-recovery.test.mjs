@@ -428,14 +428,15 @@ test('a cleanup that fails after a refusal during staging does not replace the r
   }))
   assert.deepEqual([failed, thrown], [1, null], 'one removal failed, and the publication did not throw')
   assert.deepEqual([result.state, result.refusal?.code, result.refusal?.detail?.cleanupCause], ['refused', 'vault-root-moved', 'EBUSY'], JSON.stringify(result).slice(0, 300))
-  assert.equal(filesUnder(world.store.stagingRoot).length, 1, 'the candidate whose removal failed is left, and the other one was removed')
+  assert.deepEqual(filesUnder(world.store.stagingRoot).map((file) => fs.readFileSync(file, 'utf8')), [CANDIDATE], 'the candidate whose removal failed is left, and the other one was removed')
   fs.renameSync(away, world.vault)
   assert.deepEqual([world.store.readCurrent().generationId, world.read(NOTE), world.read(OTHER)], ['gen-0001', BASE, BASE], 'nothing in the vault was touched')
 })
 
 test('a cleanup that fails after a caller stopped the staging does not replace the stop: the same error is handed on with the cleanup failure as cleanupCause', needsExchange, async (t) => {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
-  const stop = Object.assign(new Error('source selection or eligibility changed while a view was being published'), { code: 'mixed-read', detail: { cause: 'EIO' } })
+  const shared = { cause: 'EIO' }
+  const stop = Object.assign(new Error('source selection or eligibility changed while a view was being published'), { code: 'mixed-read', detail: shared })
   let armed = false
   const { result, thrown, failed } = await withFirstStagingRemovalFailing(world, () => world.publish(BOTH_CANDIDATES(), absentAdapter(), {
     ...leavingACandidate, scheduling: { guard: () => { if (armed) throw stop }, maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'staging-complete') armed = true } },
@@ -443,6 +444,7 @@ test('a cleanup that fails after a caller stopped the staging does not replace t
   assert.deepEqual([failed, result], [1, null])
   assert.equal(thrown, stop, 'the stop itself is handed on')
   assert.deepEqual(stop.detail, { cause: 'EIO', cleanupCause: 'EBUSY' }, 'its own detail is kept, and the cleanup failure is added')
+  assert.deepEqual([stop.detail === shared, shared], [false, { cause: 'EIO' }], 'in a copy: the object it shared as its detail is left as it was')
   assert.equal(filesUnder(world.store.stagingRoot).length, 1)
   assert.deepEqual([world.read(NOTE), world.read(OTHER)], [BASE, BASE])
 })
@@ -463,9 +465,46 @@ test('a cleanup that fails after a candidate could not be staged reports staging
     }))
     assert.deepEqual([seen, failed, thrown], [2, 1, null])
     assert.deepEqual([result.state, result.refusal?.code, result.refusal?.detail], ['refused', 'staging-failed', { cause: 'ENOSPC', cleanupCause: 'EBUSY' }], JSON.stringify(result).slice(0, 300))
-    assert.equal(filesUnder(world.store.stagingRoot).length, 1, 'the candidate whose removal failed is left, and the other one was removed')
+    assert.deepEqual(filesUnder(world.store.stagingRoot).map((file) => fs.readFileSync(file, 'utf8')), [CANDIDATE], 'the candidate whose removal failed is left, and the other one was removed')
     assert.deepEqual([world.store.readCurrent().generationId, world.read(NOTE), world.read(OTHER)], ['gen-0001', BASE, BASE])
   } finally { fs.writeFileSync = write }
+})
+
+test('the cleanup of candidates already moved to their exchange paths goes on past one that cannot be read, and the first failure is the one named: the one left there is removed by the restart recovery of the next publication', needsExchange, async (t) => {
+  const THIRD = 'notes/Third--aaaaaaaaaaaa.md'
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE, [THIRD]: BASE })
+  const away = `${world.vault}.moved-away`
+  // Three replacements: two are moved to their exchange paths when the vault's folder goes away before the third is.
+  // Then the first moved candidate cannot be read (EIO), so it is not known to be ours and stays; and the first
+  // removal from staging fails too (EBUSY).
+  const open = fs.openSync
+  let armed = false
+  let unreadable = 0
+  fs.openSync = (file, ...rest) => {
+    if (armed && unreadable === 0 && typeof file === 'string' && path.basename(file) === EXCHANGE_CANDIDATE_NAME) {
+      unreadable += 1
+      throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO', syscall: 'open' })
+    }
+    return open(file, ...rest)
+  }
+  let seen = 0
+  try {
+    const { result, thrown, failed } = await withFirstStagingRemovalFailing(world, () => world.publish(viewOf('gen-not-moved', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE, [THIRD]: CANDIDATE } }), absentAdapter(), {
+      ...leavingACandidate, scheduling: { maxUnits: 1, onBurst: ({ phase }) => {
+        if (phase !== 'move-candidate' || (seen += 1) !== 3) return
+        fs.renameSync(world.vault, away)
+        armed = true
+      } },
+    }))
+    assert.deepEqual([seen, unreadable, failed, thrown], [3, 1, 1, null], 'two candidates were moved; one read and one removal failed')
+    assert.deepEqual([result.state, result.refusal?.code, result.refusal?.detail?.cleanupCause], ['refused', 'vault-root-moved', 'EIO'], JSON.stringify(result).slice(0, 300))
+    assert.equal(exchangeCandidateFiles(world).length, 1, 'the moved candidate that could not be read is left, and the other one was removed')
+    assert.deepEqual(filesUnder(world.store.stagingRoot), [], 'staging holds nothing: two candidates left it when they moved, and the third was removed')
+  } finally { fs.openSync = open }
+  fs.renameSync(away, world.vault)
+  const next = await world.publish(viewOf('gen-after-cleanup', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE, [THIRD]: CANDIDATE } }), absentAdapter())
+  assert.deepEqual([next.state, exchangeCandidateFiles(world)], ['committed', []], 'the next publication\'s restart recovery removed it')
+  assert.deepEqual([world.read(NOTE), world.read(OTHER), world.read(THIRD)], [CANDIDATE, CANDIDATE, CANDIDATE])
 })
 
 test('a publication refused before its commit is not committed by the restart recovery of the next publication', needsExchange, async (t) => {

@@ -979,6 +979,46 @@ for (const during of ['preparation', 'stage-candidate', 'move-candidate']) {
   })
 }
 
+test('views whose vault folders cannot be allocated for a file-system error are each named with that error\'s code beside the tick, which is no failure', { skip: process.platform !== 'win32' && process.getuid?.() !== 0 ? false : 'this user can write in a folder whose mode refuses writes' }, async (t) => {
+  const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, EAST_SCOPE]) })
+  // The folder that would hold the vaults is under one this user cannot write in.
+  const closed = path.join(world.dir, 'closed')
+  fs.mkdirSync(closed)
+  fs.chmodSync(closed, 0o500)
+  let report
+  try {
+    world.configureMachine({ decisions: { audience: null, location: { parent: path.join(closed, 'Atelier'), ...STAMP }, loginItem: null, adapter: null } })
+    report = await world.engine().tick()
+  } finally { fs.chmodSync(closed, 0o700) }
+  assert.deepEqual([report.state, world.scope(report).state, world.scope(report).reason], ['ticked', 'stale', 'vault-location-unusable'], JSON.stringify(report.scopes))
+  assert.deepEqual(report.refusalCauses, [FULL_SCOPE, EAST_SCOPE].map(({ scopeId }) => ({ scopeId, code: 'vault-location-unusable', cause: 'EACCES' })))
+})
+
+test('a refused view is named beside the tick by the codes of file-system errors only: a cleanup failure alone is named, and a cause that is a message, another kind of code or unknown is not', needsExchange, async (t) => {
+  const refusedWith = (code, detail) => ({ state: 'refused', refusal: { code, message: 'stub', detail }, notes: [], retainedEdits: [], lateWriters: [] })
+  const cases = [
+    ['a cleanup failure after a refusal with no cause', refusedWith('vault-root-moved', { path: 'elsewhere', cleanupCause: 'EBUSY' }), [{ scopeId: FULL_SCOPE.scopeId, code: 'vault-root-moved', cleanupCause: 'EBUSY' }]],
+    ['a cause and an unknown cleanup failure', refusedWith('staging-failed', { cause: 'EIO', cleanupCause: 'unknown' }), [{ scopeId: FULL_SCOPE.scopeId, code: 'staging-failed', cause: 'EIO' }]],
+    ['a cause that is a message naming a path', refusedWith('staging-failed', { cause: `EACCES: permission denied, open '${path.join(os.tmpdir(), 'somewhere', 'note.md')}'` }), undefined],
+    ['a code of another kind', refusedWith('staging-failed', { cause: 'ERR_INVALID_ARG_TYPE' }), undefined],
+    ['no detail', refusedWith('exchange-unsupported-platform', undefined), undefined],
+  ]
+  for (const [name, refused, expected] of cases) await t.test(name, async (t) => {
+    const world = makeWorld(t)
+    const report = await world.engine({ seams: { publishView: async () => refused } }).tick()
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason, report.refusalCauses], ['stale', refused.refusal.code, expected])
+  })
+})
+
+test('at most 64 views a tick are named beside it for a file-system error', needsExchange, async (t) => {
+  const many = Array.from({ length: 70 }, (_, number) => ({ scopeId: `scope-${String(number).padStart(2, '0')}`, mode: 'full', selector: { all: true } }))
+  const world = makeWorld(t, { ext: settingsOf(many) })
+  const refused = { state: 'refused', refusal: { code: 'staging-failed', message: 'stub', detail: { cause: 'ENOSPC' } }, notes: [], retainedEdits: [], lateWriters: [] }
+  const report = await world.engine({ seams: { publishView: async () => refused } }).tick()
+  assert.equal(report.scopes.filter((entry) => entry.reason === 'staging-failed').length, 70)
+  assert.deepEqual(report.refusalCauses, many.slice(0, 64).map(({ scopeId }) => ({ scopeId, code: 'staging-failed', cause: 'ENOSPC' })))
+})
+
 test('a fault of the settings check that is no read failure still surfaces: a TypeError is not turned into a refusal', needsExchange, async (t) => {
   const world = makeWorld(t)
   let broken = false
@@ -3073,12 +3113,14 @@ test('a view the tick refused for a file-system error is named in the private lo
   // The publisher refuses the view as one whose candidates could not be staged (no space left), and the cleanup after it
   // could not remove a candidate (busy). The engine settles the view under the refusal's code alone.
   const refused = { state: 'refused', refusal: { code: 'staging-failed', message: 'stub', detail: { cause: 'ENOSPC', cleanupCause: 'EBUSY' } }, notes: [], retainedEdits: [], lateWriters: [] }
-  const { service, record } = await inProcessService(t, world, { engineOptions: { seams: { publishView: async () => refused } }, log: (entry) => lines.push(entry) })
+  let refusals = 0
+  const { service, record } = await inProcessService(t, world, { engineOptions: { seams: { publishView: async () => { refusals += 1; return refused } } }, log: (entry) => lines.push(entry) })
   await service.tickNow()
   const status = (await callService(record, 'GET', '/status')).body
   assert.deepEqual([status.lastTick?.state, status.lastError?.code ?? null], ['ticked', null], 'the tick is no failure')
   const logged = lines.filter((line) => line.event === 'view-refused').map(({ at: _at, ...rest }) => rest)
-  assert.ok(logged.length >= 1, 'each tick that refused the view wrote one line for it')
+  assert.ok(refusals >= 1)
+  assert.equal(logged.length, refusals, 'one line for each time the view was refused')
   for (const line of logged) assert.deepEqual(line, { event: 'view-refused', scopeId: FULL_SCOPE.scopeId, code: 'staging-failed', cause: 'ENOSPC', cleanupCause: 'EBUSY' })
   assert.equal(lines.some((line) => line.event === 'tick-failed'), false)
 })

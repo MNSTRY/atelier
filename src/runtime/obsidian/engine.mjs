@@ -198,7 +198,8 @@ function uncoordinatedAdapter(refusal) {
 }
 // Views a tick may be asked to prepare again, at most, before it runs.
 const MAX_PREPARATION_REQUESTS = 64
-// At most this many views a tick refuses for a file-system error are named with that error's code (`refusalCauses`).
+// At most this many views a tick refuses for a file-system error are named with that error's code (`refusalCauses`); the
+// others of that tick are not named.
 const MAX_REFUSAL_CAUSES = 64
 
 function journalTime(journalId) {
@@ -482,6 +483,27 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never
     // published under the data root (vault-location.mjs). A view whose folder cannot be allocated is not prepared on
     // this tick, and its freshness says why; the other views go on.
+    // A view refused for a file-system error (a vault folder that could not be allocated or placed, a configuration
+    // file that could not be read again, a source removed while it was read, candidates that could not be staged) is
+    // settled under the refusal's code alone, and such a tick ends without a failure. The error's code (`EACCES`, `EIO`,
+    // `ENOENT`), and that of a cleanup after it that failed too, are reported beside it for the service's log. Only
+    // codes shaped as a file-system error's are kept: never a message, which may name a path.
+    const refusalCauses = []
+    const errnoOf = (value) => (typeof value === 'string' && /^E[A-Z]+$/.test(value) ? value : null)
+    const noteRefusalCause = (scopeId, refusal) => {
+      const cause = errnoOf(refusal?.detail?.cause)
+      const cleanupCause = errnoOf(refusal?.detail?.cleanupCause)
+      if ((cause === null && cleanupCause === null) || refusalCauses.length >= MAX_REFUSAL_CAUSES) return
+      refusalCauses.push({ scopeId, code: refusal.code, ...(cause === null ? {} : { cause }), ...(cleanupCause === null ? {} : { cleanupCause }) })
+    }
+    // A view whose own vault cannot be placed: a typed refusal's code and detail, or `vault-location-unusable` for a
+    // file-system error there, whose code is its cause.
+    const refuseViewAlone = (scopeId, error) => {
+      const code = viewRefusalCode(error)
+      if (code === null) throw error
+      allocationRefusals.set(scopeId, code)
+      noteRefusalCause(scopeId, isTypedRefusal(error) ? error : { code, detail: { cause: error.code } })
+    }
     const allocationRefusals = new Map()
     if (machine.decisions.location !== null) {
       // The app's list, read once per tick and only when a view is about to be allocated. An engine given no reader
@@ -510,11 +532,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             vaults = known.vaults
           }
           ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId, location: machine.decisions.location, projectName: projectDisplayName(project), repositoryRoots, vaults, allocatedPaths, now })
-        } catch (error) {
-          const code = viewRefusalCode(error)
-          if (code === null) throw error
-          allocationRefusals.set(scope.scopeId, code)
-        }
+        } catch (error) { refuseViewAlone(scope.scopeId, error) }
       }
     }
     // Each view's store, on its own: one whose vault cannot be placed (a record naming a folder inside a repository,
@@ -522,11 +540,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const scopes = []
     for (const scope of enablement.scopes) {
       if (allocationRefusals.has(scope.scopeId)) continue
-      try { scopes.push({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }) } catch (error) {
-        const code = viewRefusalCode(error)
-        if (code === null) throw error
-        allocationRefusals.set(scope.scopeId, code)
-      }
+      try { scopes.push({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }) } catch (error) { refuseViewAlone(scope.scopeId, error) }
     }
 
     watch([
@@ -668,16 +682,6 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       entries.set(scope.scopeId, carried ?? blankEntry(scope.scopeId, now))
     }
     const attempt = new Map()
-    // A view refused for a file-system error (a configuration file that could not be read again, a source removed while
-    // it was read, candidates that could not be staged) is settled under the refusal's code alone, and such a tick
-    // ends without a failure. The error's code (`EIO`, `EACCES`, `ENOENT`) is reported beside it for the service's log.
-    const refusalCauses = []
-    const noteRefusalCause = (scopeId, refusal) => {
-      const cause = refusal?.detail?.cause
-      if (typeof cause !== 'string' || !/^E[A-Z]+$/.test(cause) || refusalCauses.length >= MAX_REFUSAL_CAUSES) return
-      const cleanup = refusal.detail.cleanupCause
-      refusalCauses.push({ scopeId, code: refusal.code, cause, ...(typeof cleanup === 'string' && /^E[A-Z]+$/.test(cleanup) ? { cleanupCause: cleanup } : {}) })
-    }
     const invalidate = (scopeId, changeClass) => attempt.set(scopeId, new Set([...(attempt.get(scopeId) ?? []), ...(changeClass ? [changeClass] : [])]))
     // The notes that keep a view in the vault layout they were published in (see layoutHeldPaths).
     const layoutHeldOf = (scopeId) => layoutHeldPaths(edits, scopeId, now)

@@ -318,16 +318,19 @@ export function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = 
   return units
 }
 
-// The rules the oracle tests are sensitive to. Production always uses these; the tests substitute a deliberately
-// broken one through publishViewForOracleTests to prove the oracle can fail.
 // The code of a failure met while candidates were being cleaned up after a staging that did not complete, for the detail
 // of what ended it. Nothing else of the failure is kept: its message may name a path.
 const cleanupCauseOf = (failure) => (failure === null ? {} : { cleanupCause: typeof failure?.code === 'string' && failure.code !== '' ? failure.code.slice(0, 64) : 'unknown' })
+// The stop or refusal itself is handed on, so the caller can still tell it by identity: its `detail` is replaced by a
+// copy that adds `cleanupCause`, and an object shared as its detail is left as it was. A caller that throws the same
+// error object again keeps that field on it.
 function withCleanupCause(error, failure) {
   if (failure !== null) try { error.detail = { ...(error.detail ?? {}), ...cleanupCauseOf(failure) } } catch { /* an error that cannot be extended is handed on as it is */ }
   return error
 }
 
+// The rules the oracle tests are sensitive to. Production always uses these; the tests substitute a deliberately
+// broken one through publishViewForOracleTests to prove the oracle can fail.
 export const PUBLICATION_PRIMITIVES = Object.freeze({
   // The one operation the `direct-unheld` path writes into the vault: a file created where nothing is.
   unheldWrites: (op) => op === 'create',
