@@ -629,9 +629,15 @@ note open in the editor.
   workspace resolution (pointer folder, data-root preference, protected
   repositories) keeping two loads apart; a system that resolves no path, for
   a regular file and for a link; and, through the test service entry in a
-  child process, a start under `--startup` on a promise, a refused promise
-  and a thenable, which asks the loader once, records the refusal and ends
-  with 0. Ten more mutations (the loader asked twice at such a start, its
+  child process, a start under `--startup` on a promise, a refused promise,
+  a thenable (its `then` called once) and a refused promise with a `then` of
+  its own that throws (never called), which asks the loader once, records the
+  refusal and ends with 0; and one on a loader that throws `undefined`, a
+  value with no prototype or one whose `code` cannot be read, or answers a
+  project whose `then` cannot be read, which logs what was thrown and ends
+  with 1. `test/obsidian-personal-selection.test.mjs` covers a locator that
+  answers a thenable (its `then` called once) or throws `undefined`. Ten more
+  mutations (the loader asked twice at such a start, its
   promise not let go, every load or every failure written, no fallback for a
   regular file or one for a link too, a late refusal not given up, and each
   of the three inputs dropped) each fail at least one case.

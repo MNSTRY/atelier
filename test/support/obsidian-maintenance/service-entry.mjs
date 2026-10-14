@@ -16,7 +16,14 @@
 //                                 yielding until the file F exists (two minutes at most), so a test decides when the
 //                                 busy service goes on and no deadline of the test depends on the host's load
 //   --loader-answers=<kind>       the project loader answers a `promise`, a `refused-promise` or a `thenable` instead of
-//                                 a project; how often it was asked is printed when the process ends
+//                                 a project, a refused promise with a `then` of its own that throws
+//                                 (`promise-with-own-then`), one whose `then` cannot be read (`unreadable-then`), or throws
+//                                 `undefined` (`throws-undefined`), a value with no prototype (`throws-bare`) or an
+//                                 error whose `code` cannot be read (`throws-code-getter`); how
+//                                 often it was asked, and how often a thenable's `then` was called, is printed when the
+//                                 process ends
+//   --locator-answers=<kind>      with --personal-home, the locator answers a `thenable` or throws `undefined`
+//                                 (`throws-undefined`) instead; printed the same way
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from '../../../src/project/config.mjs'
@@ -61,17 +68,35 @@ const seams = {
 
 const answers = typeof args['loader-answers'] === 'string' ? args['loader-answers'] : null
 let loaderCalls = 0
+let thenCalls = 0
 const loadProject = answers === null ? options.loadProject : () => {
   loaderCalls += 1
   if (answers === 'promise') return Promise.resolve().then(() => options.loadProject())
   if (answers === 'refused-promise') return Promise.reject(new Error('injected: the composition refused'))
-  return { then: (resolve) => resolve(options.loadProject()) }
+  if (answers === 'promise-with-own-then') {
+    const refused = Promise.reject(new Error('injected: the composition refused'))
+    refused.then = () => { thenCalls += 1; throw new Error('injected: its own then') }
+    return refused
+  }
+  if (answers === 'unreadable-then') return Object.defineProperty({}, 'then', { get() { throw new Error('injected: then cannot be read') } })
+  if (answers === 'throws-undefined') throw undefined
+  if (answers === 'throws-bare') throw Object.create(null)
+  if (answers === 'throws-code-getter') throw Object.defineProperty(new Error('injected: a code that cannot be read'), 'code', { get() { throw new Error('injected: code') } })
+  return { then: (resolve) => { thenCalls += 1; resolve(options.loadProject()) } }
 }
-if (answers !== null) process.on('exit', () => { try { fs.writeSync(1, `${JSON.stringify({ event: 'loader-calls', count: loaderCalls })}\n`) } catch { /* nobody reads it */ } })
+const locatorAnswers = typeof args['locator-answers'] === 'string' ? args['locator-answers'] : null
+let locatorCalls = 0
+const locateProject = locatorAnswers === null || typeof options.locateProject !== 'function' ? options.locateProject : () => {
+  locatorCalls += 1
+  if (locatorAnswers === 'throws-undefined') throw undefined
+  return { then: (resolve) => { thenCalls += 1; resolve(options.locateProject()) } }
+}
+if (answers !== null || locatorAnswers !== null) process.on('exit', () => { try { fs.writeSync(1, `${JSON.stringify({ event: 'loader-calls', count: loaderCalls, locatorCalls, thenCalls })}\n`) } catch { /* nobody reads it */ } })
 
 await runServiceProcess({
   ...options,
   loadProject,
+  ...(locateProject === undefined ? {} : { locateProject }),
   ...(options.startup && typeof args['release-root'] === 'string' ? { releaseWatch: createReleaseWatch({ root: args['release-root'] }) } : {}),
   entryPath: fileURLToPath(import.meta.url),
   adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' }),

@@ -127,7 +127,9 @@ export async function runMaintenanceService(options = {}) {
   // no repositories); its answer is let go unread. A located project names its folder, or is refused.
   const project = locateProject === null ? loadProject() : locateProject()
   if (typeof project?.then === 'function') {
-    Promise.resolve(project).catch(() => {})
+    // Let go without calling a `then` of its own, which a promise of this realm's `Promise` may carry and which may
+    // throw; any other thenable is adopted, its `then` called once.
+    Promise.prototype.then.call(Promise.resolve(project), undefined, () => {})
     refuse('service-loader-not-synchronous', 'the service resolves its workspace from a project its loader answers at once; a loader that answers a promise is not supported when the service starts')
   }
   if (locateProject !== null && typeof project?.configDir !== 'string') refuse('service-locator-invalid', 'the locator of this service answered no folder to resolve its workspace from')
