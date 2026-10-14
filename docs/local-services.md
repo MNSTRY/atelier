@@ -288,6 +288,16 @@ The lock stays this service's, and the next tick gives it back before it takes
 it again, instead of finding its own ticket and answering `busy` until the
 service is started again.
 
+A view refused for a file-system error does not fail the tick. Examples are a
+configuration file that could not be read again during the tick, a source
+removed while it was read (both `mixed-read`) and candidates that could not be
+staged (`staging-failed`). The view's freshness names only the refusal, so the
+service writes one `view-refused` line to its private log for each such view:
+the view, the refusal's code and the error's code (`EIO`, `ENOENT`, `ENOSPC`).
+When removing the staged candidates afterwards fails too, the line also names
+that error's code as `cleanupCause`. That failure does not replace the
+refusal, and what could not be removed stays in `staging/`.
+
 ### Cases that need a person
 
 - a record that does not validate, or that belongs to another workspace;

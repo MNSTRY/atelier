@@ -198,6 +198,8 @@ function uncoordinatedAdapter(refusal) {
 }
 // Views a tick may be asked to prepare again, at most, before it runs.
 const MAX_PREPARATION_REQUESTS = 64
+// At most this many views a tick refuses for a file-system error are named with that error's code (`refusalCauses`).
+const MAX_REFUSAL_CAUSES = 64
 
 function journalTime(journalId) {
   const match = /^journal-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{3})-/.exec(journalId)
@@ -666,6 +668,16 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       entries.set(scope.scopeId, carried ?? blankEntry(scope.scopeId, now))
     }
     const attempt = new Map()
+    // A view refused for a file-system error (a configuration file that could not be read again, a source removed while
+    // it was read, candidates that could not be staged) is settled under the refusal's code alone, and such a tick
+    // ends without a failure. The error's code (`EIO`, `EACCES`, `ENOENT`) is reported beside it for the service's log.
+    const refusalCauses = []
+    const noteRefusalCause = (scopeId, refusal) => {
+      const cause = refusal?.detail?.cause
+      if (typeof cause !== 'string' || !/^E[A-Z]+$/.test(cause) || refusalCauses.length >= MAX_REFUSAL_CAUSES) return
+      const cleanup = refusal.detail.cleanupCause
+      refusalCauses.push({ scopeId, code: refusal.code, cause, ...(typeof cleanup === 'string' && /^E[A-Z]+$/.test(cleanup) ? { cleanupCause: cleanup } : {}) })
+    }
     const invalidate = (scopeId, changeClass) => attempt.set(scopeId, new Set([...(attempt.get(scopeId) ?? []), ...(changeClass ? [changeClass] : [])]))
     // The notes that keep a view in the vault layout they were published in (see layoutHeldPaths).
     const layoutHeldOf = (scopeId) => layoutHeldPaths(edits, scopeId, now)
@@ -820,7 +832,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         }
       } catch (error) {
         if (!isTypedRefusal(error)) throw error
-        for (const scopeId of attempt.keys()) entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now))
+        for (const scopeId of attempt.keys()) { entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now)); noteRefusalCause(scopeId, error) }
         if (REREAD_CODES.has(error.code)) forceFull = true
         // The personal workspace refused the bound generation: the project is loaded again at the next tick, so a
         // loader that now binds another generation is followed.
@@ -905,6 +917,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const common = { generationId: pointerNow?.generationId ?? null, preparedGenerationId, retainedEdits: pointerNow?.retained?.length ?? 0 }
           if (result.state === 'refused') {
             settle(CONFLICT_REFUSALS.has(result.refusal.code) ? 'publisher-conflict' : 'stale', result.refusal.code, { ...common, heldNotes: held })
+            noteRefusalCause(scopeId, result.refusal)
           } else if (result.state === 'updating') {
             const blocking = result.notes.filter((note) => note.blocking)
             const byEdit = blocking.length > 0 && blocking.every((note) => EDIT_OUTCOMES.has(note.outcome))
@@ -938,6 +951,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const where = error.code === 'redaction-failure' ? error.detail ?? {} : {}
           diagnostics = typeof where.rule === 'string' ? [{ code: error.code, rule: where.rule, ...(typeof where.notePath === 'string' ? { notePath: where.notePath } : {}), ...(typeof where.filePath === 'string' ? { filePath: where.filePath } : {}) }] : []
           settle('stale', error.code)
+          noteRefusalCause(scopeId, error)
           if (REREAD_CODES.has(error.code)) forceFull = true
         }
       }
@@ -956,7 +970,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       state: 'ticked', full, workspaceId, maintenanceMode: machine.maintenanceMode,
       changes: changes.map((change) => ({ ...change })), scopes: [...entries.values()].sort((left, right) => compareText(left.scopeId, right.scopeId)),
       pendingEdits: edits.filter((edit) => edit.closedAt === null).map(({ editId, scopeId, path: notePath, state }) => ({ editId, scopeId, path: notePath, state })),
-      dispatched, lateWriters, ...(observed === null ? {} : { observed }), ...(proposals === null ? {} : { proposals }),
+      dispatched, lateWriters, ...(observed === null ? {} : { observed }), ...(proposals === null ? {} : { proposals }), ...(refusalCauses.length === 0 ? {} : { refusalCauses }),
     }
   }
 

@@ -223,6 +223,8 @@ export async function runMaintenanceService(options = {}) {
     consecutiveFailures = outcome.consecutiveFailures
     if (outcome.ok) {
       lastTick = { at, state: outcome.report.state, reason: outcome.report.reason ?? outcome.report.refusal?.code ?? null }
+      // A view the tick refused for a file-system error: the view's freshness names the refusal, and this line the error.
+      for (const item of outcome.report.refusalCauses ?? []) log({ at, event: 'view-refused', scopeId: item.scopeId, code: item.code, cause: item.cause, ...(item.cleanupCause ? { cleanupCause: item.cleanupCause } : {}) })
       const previous = readLastServiceError({ workspaceRoot, workspaceId })
       if (previous && previous.resolvedAt === null) writeLastServiceError({ workspaceRoot, workspaceId, document: { ...previous, consecutiveFailures: 0, resolvedAt: at } })
       return

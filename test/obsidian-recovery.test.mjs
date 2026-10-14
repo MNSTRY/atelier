@@ -394,6 +394,80 @@ for (const [phase, occurrence, when] of STAGING_STOPS) {
   })
 }
 
+// The first removal from staging that the cleanup after an incomplete staging makes fails with EBUSY; every other
+// removal is made. Returns what `run` returned and how many removals failed.
+async function withFirstStagingRemovalFailing(world, run) {
+  const rm = fs.rmSync
+  let failed = 0
+  fs.rmSync = (file, ...rest) => {
+    if (failed === 0 && typeof file === 'string' && file.startsWith(`${world.store.stagingRoot}${path.sep}`)) {
+      failed += 1
+      throw Object.assign(new Error('EBUSY: resource busy or locked, rm'), { code: 'EBUSY', syscall: 'rm' })
+    }
+    return rm(file, ...rest)
+  }
+  try {
+    let result = null
+    let thrown = null
+    try { result = await run() } catch (error) { thrown = error }
+    return { result, thrown, failed }
+  } finally { fs.rmSync = rm }
+}
+const BOTH_CANDIDATES = () => viewOf('gen-not-staged', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } })
+// These publications leave on purpose the one candidate whose removal failed, which no journal names, so the check that
+// ends a production publication in `world.publish` (staging holds only recorded candidates) is not run after them: they
+// publish through a wrapper, and assert what is left in staging themselves.
+const leavingACandidate = { publisher: (options) => publishView(options) }
+
+test('a cleanup that fails after a refusal during staging does not replace the refusal: it is handed on with the cleanup failure as cleanupCause, and every other candidate is removed', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const away = `${world.vault}.moved-away`
+  // Both candidates are staged; the vault's folder goes away before the check that follows.
+  const { result, thrown, failed } = await withFirstStagingRemovalFailing(world, () => world.publish(BOTH_CANDIDATES(), absentAdapter(), {
+    ...leavingACandidate, scheduling: { maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'staging-complete') fs.renameSync(world.vault, away) } },
+  }))
+  assert.deepEqual([failed, thrown], [1, null], 'one removal failed, and the publication did not throw')
+  assert.deepEqual([result.state, result.refusal?.code, result.refusal?.detail?.cleanupCause], ['refused', 'vault-root-moved', 'EBUSY'], JSON.stringify(result).slice(0, 300))
+  assert.equal(filesUnder(world.store.stagingRoot).length, 1, 'the candidate whose removal failed is left, and the other one was removed')
+  fs.renameSync(away, world.vault)
+  assert.deepEqual([world.store.readCurrent().generationId, world.read(NOTE), world.read(OTHER)], ['gen-0001', BASE, BASE], 'nothing in the vault was touched')
+})
+
+test('a cleanup that fails after a caller stopped the staging does not replace the stop: the same error is handed on with the cleanup failure as cleanupCause', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const stop = Object.assign(new Error('source selection or eligibility changed while a view was being published'), { code: 'mixed-read', detail: { cause: 'EIO' } })
+  let armed = false
+  const { result, thrown, failed } = await withFirstStagingRemovalFailing(world, () => world.publish(BOTH_CANDIDATES(), absentAdapter(), {
+    ...leavingACandidate, scheduling: { guard: () => { if (armed) throw stop }, maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'staging-complete') armed = true } },
+  }))
+  assert.deepEqual([failed, result], [1, null])
+  assert.equal(thrown, stop, 'the stop itself is handed on')
+  assert.deepEqual(stop.detail, { cause: 'EIO', cleanupCause: 'EBUSY' }, 'its own detail is kept, and the cleanup failure is added')
+  assert.equal(filesUnder(world.store.stagingRoot).length, 1)
+  assert.deepEqual([world.read(NOTE), world.read(OTHER)], [BASE, BASE])
+})
+
+test('a cleanup that fails after a candidate could not be staged reports staging-failed, with the write failure as cause and the cleanup failure as cleanupCause', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const write = fs.writeFileSync
+  let armed = false
+  fs.writeFileSync = (target, ...rest) => {
+    // The second candidate's bytes, written through the descriptor its staging opened.
+    if (armed && typeof target === 'number') { armed = false; throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC', syscall: 'write' }) }
+    return write(target, ...rest)
+  }
+  let seen = 0
+  try {
+    const { result, thrown, failed } = await withFirstStagingRemovalFailing(world, () => world.publish(BOTH_CANDIDATES(), absentAdapter(), {
+      ...leavingACandidate, scheduling: { maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'stage-candidate' && (seen += 1) === 2) armed = true } },
+    }))
+    assert.deepEqual([seen, failed, thrown], [2, 1, null])
+    assert.deepEqual([result.state, result.refusal?.code, result.refusal?.detail], ['refused', 'staging-failed', { cause: 'ENOSPC', cleanupCause: 'EBUSY' }], JSON.stringify(result).slice(0, 300))
+    assert.equal(filesUnder(world.store.stagingRoot).length, 1, 'the candidate whose removal failed is left, and the other one was removed')
+    assert.deepEqual([world.store.readCurrent().generationId, world.read(NOTE), world.read(OTHER)], ['gen-0001', BASE, BASE])
+  } finally { fs.writeFileSync = write }
+})
+
 test('a publication refused before its commit is not committed by the restart recovery of the next publication', needsExchange, async (t) => {
   const refusals = {
     // What the resident engine does when a selected source changed during the publication.

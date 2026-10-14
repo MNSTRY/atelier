@@ -251,6 +251,7 @@ test('a source removed after this tick observed it and before the graph build re
   const report = await engine.tick()
   assert.equal(removed(), true)
   assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.deepEqual(report.refusalCauses, [{ scopeId: FULL_SCOPE.scopeId, code: 'mixed-read', cause: 'ENOENT' }])
   assert.deepEqual([world.calls.prepareView, world.calls.publishView.length], [0, 0], 'nothing is prepared or published from the build')
   const next = await engine.tick()
   assert.deepEqual([next.full, world.scope(next).state], [true, 'current'], 'the next tick reads everything again and publishes')
@@ -348,6 +349,7 @@ test('a selected source removed while its view is being prepared, before the pre
   assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
   assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false, 'the whole view is not published')
   assert.deepEqual([world.calls.prepareView, world.calls.publishView, world.scope(report, WEST_SCOPE.scopeId).state], [2, [WEST_SCOPE.scopeId], 'current'], 'the tick goes on to the west view, prepared and published after the refusal')
+  assert.deepEqual(report.refusalCauses, [{ scopeId: FULL_SCOPE.scopeId, code: 'mixed-read', cause: 'ENOENT' }], 'only the refused view is named')
   world.advance(1000)
   const next = await engine.tick()
   assert.deepEqual([next.full, world.scope(next).state], [true, 'current'], 'the next tick reads everything again and publishes')
@@ -961,12 +963,13 @@ for (const during of ['preparation', 'stage-candidate', 'move-candidate']) {
     const { world, report, thrown, next, before, after, failed } = await guardReadFailure(t, { during })
     assert.deepEqual([failed, thrown], [1, null], 'the read failed once, and the tick did not throw')
     assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'], JSON.stringify(world.scope(report)))
+    assert.deepEqual(report.refusalCauses, [{ scopeId: FULL_SCOPE.scopeId, code: 'mixed-read', cause: 'EIO' }], 'the read failure is reported beside the refusal, for the service log')
     assert.deepEqual(after.pointer, before.pointer, 'the committed generation of the refused view is the one it had')
     assert.deepEqual(after.vault, before.vault, 'nothing in the vault of the refused view was touched')
     assert.deepEqual([world.scope(report, EAST_SCOPE.scopeId).state, world.scope(report, EAST_SCOPE.scopeId).reason], ['current', 'published-and-verified'], 'the second view of the tick was prepared and published')
     assert.match(fs.readFileSync(world.noteFile('east-wing:lantern', EAST_SCOPE.scopeId), 'utf8'), /The lamp was cleaned/)
     // Everything is read again at the next tick, and the view that was refused is published.
-    assert.deepEqual([next.full, world.scope(next).state, world.scope(next).reason], [true, 'current', 'published-and-verified'], JSON.stringify(world.scope(next)))
+    assert.deepEqual([next.full, world.scope(next).state, world.scope(next).reason, next.refusalCauses], [true, 'current', 'published-and-verified', undefined], JSON.stringify(world.scope(next)))
     assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /The lamp was cleaned/)
   })
   test(`mutation control: an engine that lets a read failure of its settings check out of the tick fails the oracle, during ${during}`, needsExchange, async (t) => {
@@ -3062,6 +3065,22 @@ async function assertTickErrorIsSurvived(t, world, createEngine) {
 
 test('a tick error nobody typed (ENOSPC inside a seam) is recorded in private state and the next tick proceeds', async (t) => {
   await assertTickErrorIsSurvived(t, makeWorld(t))
+})
+
+test('a view the tick refused for a file-system error is named in the private log with that error\'s code, and the tick is no failure', async (t) => {
+  const world = makeWorld(t)
+  const lines = []
+  // The publisher refuses the view as one whose candidates could not be staged (no space left), and the cleanup after it
+  // could not remove a candidate (busy). The engine settles the view under the refusal's code alone.
+  const refused = { state: 'refused', refusal: { code: 'staging-failed', message: 'stub', detail: { cause: 'ENOSPC', cleanupCause: 'EBUSY' } }, notes: [], retainedEdits: [], lateWriters: [] }
+  const { service, record } = await inProcessService(t, world, { engineOptions: { seams: { publishView: async () => refused } }, log: (entry) => lines.push(entry) })
+  await service.tickNow()
+  const status = (await callService(record, 'GET', '/status')).body
+  assert.deepEqual([status.lastTick?.state, status.lastError?.code ?? null], ['ticked', null], 'the tick is no failure')
+  const logged = lines.filter((line) => line.event === 'view-refused').map(({ at: _at, ...rest }) => rest)
+  assert.ok(logged.length >= 1, 'each tick that refused the view wrote one line for it')
+  for (const line of logged) assert.deepEqual(line, { event: 'view-refused', scopeId: FULL_SCOPE.scopeId, code: 'staging-failed', cause: 'ENOSPC', cleanupCause: 'EBUSY' })
+  assert.equal(lines.some((line) => line.event === 'tick-failed'), false)
 })
 
 test('mutation control: an engine that a thrown error poisons fails the tick-error oracle', async (t) => {
