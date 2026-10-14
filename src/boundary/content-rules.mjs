@@ -659,6 +659,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
   const findings = []
   const diagnostics = []
   let totalBytes = 0
+  const blobs = []
   const seen = new Set()
   const declaredText = []
   // A deleted path is absent from the revision being scanned, so there is nothing
@@ -697,6 +698,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
       continue
     }
     totalBytes += result.bytes
+    blobs.push({ id: section.newBlob, bytes: result.bytes })
     if (totalBytes > BINARY_AGGREGATE_MAX_BYTES) {
       diagnostics.push(incompleteDiagnostic({
         repo,
@@ -732,7 +734,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
       findings.push(...scanAddedContent({ files: [{ path: section.path, added: false, addedLines }], rules: contentRules, exceptions, repo }))
     }
   }
-  return { findings, diagnostics, bytes: totalBytes }
+  return { findings, diagnostics, bytes: totalBytes, blobs }
 }
 
 export function scanStagedRepository({
@@ -763,7 +765,7 @@ export function scanStagedRepository({
 
 function scanRevisionRange({ repoRoot, base, tip, rules, exceptions, repo, gitRunner }) {
   const acquired = gitOutputResult(repoRoot, contentDiffArgs([base, tip]), { runner: gitRunner })
-  if (!acquired.ok) return { acquired, keyed: [], diagnostics: [], bytes: 0 }
+  if (!acquired.ok) return { acquired, keyed: [], diagnostics: [], bytes: 0, blobs: [] }
   const sections = parseDiffSections(acquired.stdout)
   const binary = readBinaryChanges({ repoRoot, revisions: [base, tip], sections, rules, exceptions, repo, gitRunner })
   const findings = [...scanAddedContent({ files: addedFilesFrom(sections), rules, exceptions, repo }), ...binary.findings]
@@ -772,6 +774,7 @@ function scanRevisionRange({ repoRoot, base, tip, rules, exceptions, repo, gitRu
     keyed: findings.map((item) => [findingKey(item), item]),
     diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
     bytes: acquired.bytes + binary.bytes,
+    blobs: binary.blobs,
   }
 }
 
@@ -793,13 +796,15 @@ function scanCommit({ repoRoot, commit, parents, empty, rules, exceptions, repo,
   const read = parents
     .map((parent) => scanRevisionRange({ repoRoot, base: parent, tip: commit, rules, exceptions, repo, gitRunner }))
     .filter((scan) => scan.acquired.ok)
-  if (read.length === 0) return { acquired: { ok: false, code: 'merge-unreadable' }, keyed: [], diagnostics: [], bytes: 0 }
+  if (read.length === 0) return { acquired: { ok: false, code: 'merge-unreadable' }, keyed: [], diagnostics: [], bytes: 0, blobs: [] }
   const complete = read.filter((scan) => scan.diagnostics.length === 0)
-  const reference = complete[0] ?? read[0]
+  // Any complete parent diff yields the same findings; the smallest is the one
+  // that does not re-read what the other parent already published.
+  const reference = complete.length > 0 ? complete.reduce((small, scan) => (scan.bytes < small.bytes ? scan : small)) : read[0]
   const keyed = reference.keyed.filter(([key]) => complete.every((scan) => scan === reference || scan.keyed.some(([other]) => other === key)))
   const diagnostics = complete.length > 0 ? [] : read.flatMap((scan) => scan.diagnostics)
   // Evidence counts once, as the diff the commit is judged by.
-  return { acquired: reference.acquired, keyed, diagnostics, bytes: reference.bytes }
+  return { acquired: reference.acquired, keyed, diagnostics, bytes: reference.bytes, blobs: reference.blobs }
 }
 
 const PLAIN_REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
@@ -823,7 +828,11 @@ function remoteScope(repoRoot, remote, runner) {
     })
     : []
   const named = remotes.find((item) => item.name === remote) ?? remotes.find((item) => item.url === remote)
-  if (named && PLAIN_REMOTE_NAME.test(named.name)) return { args: [`--remotes=${named.name}`], label: `${named.name} does not hold` }
+  if (named && PLAIN_REMOTE_NAME.test(named.name)) {
+    // `--remotes=origin` would also take a remote named `origin/x`; leave those out.
+    const nested = remotes.filter((item) => item.name.startsWith(`${named.name}/`)).map((item) => `--exclude=${item.name}/*`)
+    return { args: [...nested, `--remotes=${named.name}`], label: `${named.name} does not hold` }
+  }
   return { args: [], label: `${remote} does not hold` }
 }
 
@@ -850,7 +859,15 @@ export function scanPushUpdate({
   const reported = new Map(net.keyed)
   const findings = net.keyed.map(([, item]) => item)
   const diagnostics = [...net.diagnostics]
-  let bytes = net.bytes
+  // Every path is judged wherever it appears, but each blob counts once toward
+  // the evidence budget, however many diffs read it.
+  const counted = new Set()
+  const evidence = (scan) => scan.bytes - scan.blobs.reduce((repeat, blob) => {
+    if (counted.has(blob.id)) return repeat + blob.bytes
+    counted.add(blob.id)
+    return repeat
+  }, 0)
+  let bytes = evidence(net)
   const scope = remoteScope(repoRoot, remote, gitRunner)
   // Parents before children, so a commit is judged before a merge that brings it in.
   const listed = gitOutputResult(repoRoot, ['rev-list', '--topo-order', '--reverse', '--parents', `--max-count=${maxCommits + 1}`, update.localSha, '--not', ...(base === update.remoteSha ? [base] : []), ...scope.args], { runner: gitRunner })
@@ -877,7 +894,7 @@ export function scanPushUpdate({
       diagnostics.push(incompleteDiagnostic({ repo, message: `commit ${short} could not be read`, details: { reason: step.acquired.code, commit } }))
       continue
     }
-    bytes += step.bytes
+    bytes += evidence(step)
     for (const [key, item] of step.keyed) {
       const retained = reported.get(key)
       if (retained) {

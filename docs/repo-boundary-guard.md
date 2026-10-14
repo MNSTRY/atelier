@@ -273,8 +273,9 @@ machine for weeks.
   refused through the change from the remote's commit, as before. The hook
   passes the remote Git names: a configured remote, or a URL matched to the
   remote configured with it. Only that remote's tracking refs, stale ones
-  included, exclude commits; a URL no remote is configured with excludes only
-  the remote's commit. A hook installed before this judges against every
+  included, exclude commits (a remote whose `pushurl` names another
+  repository is still scoped by its fetch-side tracking refs); a URL no remote
+  is configured with excludes only the remote's commit. A hook installed before this judges against every
   remote's tracking refs, so reinstall it (`atelier boundary install-hooks`)
   for history that only another remote holds to be judged on its way to a new
   one. A brand-new branch is diffed against the empty tree, in SHA-1 and SHA-256
