@@ -995,7 +995,7 @@ test('a pull merge is not judged for what the remote already holds, but an evil 
   const { root, site, policy, project } = makeWorkspace(t)
   // A collaborator publishes a change the guard would refuse, without the hook.
   const collaborator = path.join(root, 'collaborator')
-  execFileSync('git', ['clone', '--quiet', path.join(root, 'example-site.git'), collaborator])
+  execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(root, 'example-site.git'), collaborator])
   git(collaborator, ['config', 'user.email', 'other@example.invalid'])
   git(collaborator, ['config', 'user.name', 'Other'])
   fs.appendFileSync(path.join(collaborator, CART), 'export const load = () => localStorage.getItem("cart")\n')
@@ -1125,7 +1125,7 @@ test('an evil merge over a type change is still judged', { skip: process.platfor
 test('a pull merge over large upstream binaries passes, but a binary only the merge adds is judged', (t) => {
   const { root, site, policy, project } = makeWorkspace(t)
   const collaborator = path.join(root, 'collaborator')
-  execFileSync('git', ['clone', '--quiet', path.join(root, 'example-site.git'), collaborator])
+  execFileSync('git', ['clone', '--quiet', '--branch', 'main', path.join(root, 'example-site.git'), collaborator])
   git(collaborator, ['config', 'user.email', 'other@example.invalid'])
   git(collaborator, ['config', 'user.name', 'Other'])
   // More binary content than one diff may read, all of it already published.
