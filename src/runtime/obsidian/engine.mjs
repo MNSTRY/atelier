@@ -141,14 +141,15 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   // (no permission, an I/O error, no descriptor left), recognised as one is where a vault is placed. Anything else is a
   // fault of the engine and stops the tick.
   guardReadFailed: (error) => typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code),
-  // Whether an error that stopped the graph build is a source, or a folder of sources, removed after this tick
-  // observed it and before the build read it: no such file (or a parent that is no longer a folder), at a path that is
-  // gone now and that this tick's walk over the sources recorded with a digest (a source of a repository the project
-  // observes), or a folder that held such a source. The look again at the sources after the build refuses that change
-  // as `mixed-read`; a build that could not read the file refuses the same, and the next tick reads everything again.
-  // Anything else stops the tick, as before: a path still there, a path the walk listed and could not read (it was
-  // recorded without a digest), or one it never listed, so a path that can never be read still fails every tick.
-  sourceRemovedDuringBuild(error, { project, index }) {
+  // Whether an error met when the graph build, a view's preparation or the look again before its commit reads a
+  // source is a source, or a folder of sources, removed after this tick observed it: no such file (or a parent that is
+  // no longer a folder), at a path that is gone now and that this tick's walk over the sources recorded with a digest (a
+  // source of a repository the project observes), or a folder that held such a source. The look again at the sources
+  // after the build refuses that change as `mixed-read`; a read that could not find the file refuses the same, and the
+  // next tick reads everything again. Anything else stops the tick, as before: a path still there, a path the walk
+  // listed and could not read (it was recorded without a digest), or one it never listed, so a path that can never be
+  // read still fails every tick.
+  sourceRemovedSinceObserved(error, { project, index }) {
     if ((error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') || typeof error.path !== 'string' || !(index instanceof Map)) return false
     const missing = path.resolve(error.path)
     if (fs.existsSync(missing)) return false
@@ -791,7 +792,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             }
           }
         } catch (error) {
-          if (!isTypedRefusal(error) && rules.sourceRemovedDuringBuild(error, { project, index })) refuse('mixed-read', 'a source was removed while the canonical graph was being built', { cause: error.code })
+          if (!isTypedRefusal(error) && rules.sourceRemovedSinceObserved(error, { project, index })) refuse('mixed-read', 'a source was removed while the canonical graph was being built', { cause: error.code })
           throw error
         }
         // The assets this graph lets a view copy are observed from now on, and hashed now so the snapshot pins
@@ -803,8 +804,18 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         // An asset newly observed, or one no longer embedded, is the list changing. Anything else that moved since this tick looked at the sources moved while the graph was being read.
         if (settled.changes.some((change) => !(change.kind === 'added' && assetKeys.has(change.key)) && !(change.kind === 'removed' && formerAssetKeys.has(change.key) && !assetKeys.has(change.key)))) throw new ObsidianMaintenanceRefusal('mixed-read', 'a source changed while the canonical graph was being built')
         const configDigest = digestOfJson([...index].filter(([key]) => key.startsWith(CONFIG_PREFIX)).map(([key, entry]) => [path.basename(key.slice(CONFIG_PREFIX.length)), entry.digest]))
+        const snapshot = seams.captureSnapshot({ project, graph, workspaceId, index, configDigest, capturedAt: now })
+        const observedProject = project
         built = {
-          snapshot: seams.captureSnapshot({ project, graph, workspaceId, index, configDigest, capturedAt: now }),
+          // A view's preparation, and the look again at its sources before the commit, read a source through the
+          // snapshot. A selected source removed after this tick observed it, read there, refuses the view as
+          // `mixed-read`, as a removal during the build does; the other views of the tick are still prepared.
+          snapshot: { ...snapshot, readSource: (repoId, relative) => {
+            try { return snapshot.readSource(repoId, relative) } catch (error) {
+              if (!isTypedRefusal(error) && rules.sourceRemovedSinceObserved(error, { project: observedProject, index })) refuse('mixed-read', 'a selected source was removed while its view was being prepared or published', { cause: error.code })
+              throw error
+            }
+          } },
           profile: seams.profileFor({ project, workspaceId, audienceAllow: machine.audienceAllow }),
         }
       } catch (error) {
