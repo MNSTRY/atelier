@@ -159,10 +159,9 @@ export async function runMaintenanceService(options = {}) {
   let stopping = false
   let consecutiveFailures = 0
   let lastTick = null
-  // What the last tick that did not fail refused each view for, as it named it (refusalCauses). A view refused again for
-  // the same reason at the next tick is not written to the log again: a refusal that lasts (a folder that stays
-  // unwritable is tried again at every tick) is written once, and again when its reason changes or after a tick that
-  // did not name it.
+  // What the last tick that did not fail named each refused view for (refusalCauses). A view the next tick names for the
+  // same reason is not written to the log again: a refusal that lasts (a folder that stays unwritable is tried again at
+  // every tick) is written once, and again when its reason changes or after a tick that failed or did not name it.
   let refusedLastTick = new Map()
   let settleDone
   const done = new Promise((resolve) => { settleDone = resolve })

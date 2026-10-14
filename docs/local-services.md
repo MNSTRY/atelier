@@ -297,10 +297,11 @@ service writes a `view-refused` line to its private log for each such view
 whose refusal carries a file-system error's code, at most 64 a tick: the view,
 the refusal's code and the error's code (`EACCES`, `EIO`, `ENOENT`, `ENOSPC`).
 Only codes shaped as a file-system error's are written, never a message. A view
-refused again for the same reason at the next tick is not written again, so a
-folder that stays unwritable (tried at every tick) is written once; it is
-written again when the reason changes, or after a tick that did not refuse it
-or failed. When removing the staged candidates afterwards fails
+the next tick names for the same reason is not written again, so a folder that
+stays unwritable (tried at every tick) is written once. It is written again when
+its reason changes, or after a tick that failed or did not name it: a tick that
+did not refuse it, refused it for no file-system error, or had named 64 other
+views first. When removing the staged candidates afterwards fails
 too, the line also names that error's code as `cleanupCause`, and a line is
 written for that alone when the refusal names no error of its own. That failure
 does not replace the refusal. What could not be removed stays where it was: in

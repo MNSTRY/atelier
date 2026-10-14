@@ -3129,25 +3129,38 @@ test('a view the tick refused for a file-system error is named in the private lo
   const status = (await callService(record, 'GET', '/status')).body
   assert.deepEqual([status.lastTick?.state, status.lastError?.code ?? null], ['ticked', null], 'the tick is no failure')
   const logged = lines.filter((line) => line.event === 'view-refused').map(({ at: _at, ...rest }) => rest)
-  assert.ok(refusals >= 1)
-  assert.equal(logged.length, refusals, 'one line for each time the view was refused')
+  assert.equal(refusals, 1, 'the view is refused at the first tick; no retry of it comes due on a clock that does not move')
+  assert.equal(logged.length, 1, 'and that refusal is written once')
   for (const line of logged) assert.deepEqual(line, { event: 'view-refused', scopeId: FULL_SCOPE.scopeId, code: 'staging-failed', cause: 'ENOSPC', cleanupCause: 'EBUSY' })
   assert.equal(lines.some((line) => line.event === 'tick-failed'), false)
 })
 
-test('a view refused for the same reason at tick after tick is written to the log once, and again when the reason changes or after a tick that did not name it or failed', async (t) => {
+test('a view the next tick names for the same reason is not written to the log again; it is written again when its reason changes, or after a tick that did not name it or failed, and each view is remembered on its own', async (t) => {
   const world = makeWorld(t)
   const lines = []
-  const unwritable = (cause) => [{ scopeId: FULL_SCOPE.scopeId, code: 'vault-location-unusable', cause }]
-  // What each tick names, in order: the same reason three times, another, none, the first again; then a tick that fails
-  // and the same reason after it.
-  const sequence = [unwritable('EACCES'), unwritable('EACCES'), unwritable('EACCES'), unwritable('EROFS'), [], unwritable('EACCES'), 'fails', unwritable('EACCES')]
+  const whole = (cause) => ({ scopeId: FULL_SCOPE.scopeId, code: 'vault-location-unusable', cause })
+  const east = (code, cleanupCause) => ({ scopeId: EAST_SCOPE.scopeId, code, cause: 'ENOSPC', ...(cleanupCause ? { cleanupCause } : {}) })
+  // What each tick names, and what the log should then gain.
+  const sequence = [
+    [[whole('EACCES'), east('staging-failed')], [whole('EACCES'), east('staging-failed')]],
+    [[whole('EACCES'), east('staging-failed')], []],
+    [[whole('EACCES'), east('staging-failed', 'EBUSY')], [east('staging-failed', 'EBUSY')]],
+    [[whole('EROFS')], [whole('EROFS')]],
+    [[whole('EROFS'), east('staging-failed', 'EBUSY')], [east('staging-failed', 'EBUSY')]],
+    [[], []],
+    [[whole('EROFS')], [whole('EROFS')]],
+    ['fails', []],
+    [[whole('EROFS'), east('vault-location-unusable')], [whole('EROFS'), east('vault-location-unusable')]],
+    [[whole('EROFS'), east('staging-failed')], [east('staging-failed')]],
+    // The east view takes the reason the whole view has had all along: it is the east view's reason that changed.
+    [[whole('EROFS'), { ...whole('EROFS'), scopeId: EAST_SCOPE.scopeId }], [{ ...whole('EROFS'), scopeId: EAST_SCOPE.scopeId }]],
+  ]
   let ticks = 0
   const createEngine = (options) => {
     const engine = createMaintenanceEngine(options)
     return { ...engine, tick: async () => {
       const { refusalCauses: _own, ...report } = await engine.tick()
-      const named = sequence[ticks] ?? []
+      const [named] = sequence[ticks] ?? [[]]
       ticks += 1
       if (named === 'fails') throw Object.assign(new Error('a synthetic failure'), { code: 'ESYNTHETIC' })
       return named.length === 0 ? report : { ...report, refusalCauses: named }
@@ -3157,8 +3170,8 @@ test('a view refused for the same reason at tick after tick is written to the lo
   await waitFor(async () => { const { body } = await callService(record, 'GET', '/status'); return body.loop.ticks >= 1 && body.loop.ticking === false ? body : null }, { label: 'the first tick' })
   while (ticks < sequence.length) await service.tickNow()
   assert.equal(ticks, sequence.length)
-  const logged = lines.filter((line) => line.event === 'view-refused').map((line) => line.cause)
-  assert.deepEqual(logged, ['EACCES', 'EROFS', 'EACCES', 'EACCES'])
+  const logged = lines.filter((line) => line.event === 'view-refused').map(({ at: _at, event: _event, ...rest }) => rest)
+  assert.deepEqual(logged, sequence.flatMap(([, written]) => written))
   assert.ok(lines.some((line) => line.event === 'tick-failed' && line.code === 'ESYNTHETIC'))
 })
 
