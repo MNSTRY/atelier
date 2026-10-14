@@ -433,23 +433,34 @@ every two seconds for every open vault, so the project is kept:
   - a load that answered at once and took a second or more (`slow`). A second
     is most of the second and a half the plugin gives a request, spent on the
     listener's own event loop; a load that answers a promise holds nothing;
-  - a load after which nothing is kept although the files that decide the
-    project were known when it started (`notKept`, from the second in a row,
-    with `vouched` false while a file vouches for nothing): a load at every
-    request. A start has two loads that keep nothing, the first, which knows
-    no files, and the one after it, which has nothing to agree with yet, so a
-    start writes no such line.
+  - a load after which nothing is kept although it named the files it
+    started over (`notKept`, from the second in a row, with `vouched` false
+    while a file vouches for nothing): a load at every request. A load that
+    named other files than it started over (the first, which started over
+    none, or the one after a change that names other files, such as a new
+    confirmed selection) neither counts nor ends that row. A start and a
+    change each have one load that names the files it started over and has
+    nothing to agree with yet, so neither writes such a line; each is
+    counted, so a healthy service shows one `notKept` at its start and one
+    after each change.
 
   A row of failures goes on through loads that answer between them, and ends
   at the first load that answers a minute or more after its last failure; a
-  line is written then (`afterFailures`). A row of slow loads ends the same
-  way, at a load that answers in time a minute or more after the last slow
-  one. So a loader that fails every other load, or every third, keeps one
-  row, written less and less often, instead of a line per load. A row of
-  loads after which nothing is kept ends at the next load that keeps the
-  project. A healthy service writes none of these lines. The log is cut over
-  only when it is opened, so a line per load, every two seconds while a file
-  vouches for nothing, would have grown it without bound.
+  line is written then (`afterFailures`). That line comes with the next load
+  after the minute, which under a kept project is the next reload, up to two
+  and a half minutes later, and none comes if no load follows. A row of slow
+  loads ends the same way, at a load that answers in time a minute or more
+  after the last slow one. So, while loads come less than a minute apart (a
+  load at every request, or the retries after a failure), a loader that
+  fails, or is slow, every other load or every third keeps one row, written
+  less and less often, instead of a line per load. While a project is kept it
+  is loaded again every two and a half minutes, so there each failure and the
+  load that ends its row, and each slow load, are written, as before. A row
+  of loads after which nothing is kept ends at the next load that keeps the
+  project and named the files it started over. A healthy service writes none
+  of these lines. The log is cut over only when it is opened, so a line per
+  load, every two seconds while a file vouches for nothing, would have grown
+  it without bound.
 
 Refusals, before anything else is looked at: `Host` other than the listener's
 literal loopback authority, a cross-site `Origin` or `Sec-Fetch-Site`, a path
@@ -643,9 +654,10 @@ note open in the editor.
   log report writes (a row of failures or of slow loads kept through loads in
   time between them until a minute without one, so a loader that fails every
   other or every third load writes one row; loads after which nothing is
-  kept, from the second in a row) and that a line holds no path; a load at
+  kept, from the second in a row, and loads that named other files, which
+  neither count nor end that row) and that a line holds no path; a load at
   every request written while a file vouches for nothing and while loads
-  never agree; each input of the
+  never agree, and none at a change that names other files; each input of the
   workspace resolution (pointer folder, data-root preference, protected
   repositories) keeping two loads apart; a system that resolves no path, for
   a regular file and for a link; and, through the test service entry in a
@@ -655,7 +667,8 @@ note open in the editor.
   refusal and ends with 0; and one on a loader that throws `undefined`, a
   value with no prototype or one whose `code` cannot be read, or answers a
   project whose `then` cannot be read, which logs `untyped-error` with the
-  message of what was thrown (`unprintable` when it cannot be read) and ends
+  text of what was thrown (its message, or the value itself, `undefined` for
+  `undefined`, and `unprintable` when it cannot be made text) and ends
   with 1. `test/obsidian-personal-selection.test.mjs` covers a locator that
   answers a thenable (its `then` called once) or throws `undefined`. Ten more
   mutations (the loader asked twice at such a start, its
@@ -664,8 +677,9 @@ note open in the editor.
   of the three inputs dropped) each fail at least one case, and so do a row
   of failures or of slow loads ended at any load in time, a load after which
   nothing is kept written from the first in a row, the first load counted
-  among those, a kept project that does not end that row, and the files
-  taken as known, or as vouching, when they were not.
+  among those, a kept project that does not end that row, a load that named
+  other files counted or ending it, and the files taken as vouching when they
+  did not.
   `test/obsidian-personal-workspace.test.mjs` keeps a bound personal
   workspace from the loader that composes in a worker: its views once two
   compositions agree, nothing while its generation is refused, and the next

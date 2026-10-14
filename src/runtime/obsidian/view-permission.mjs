@@ -89,13 +89,14 @@ import { readFileFacts } from './observation.mjs'
 // promise, or one that answers at once and threw), a change to another file
 // waits for the next try as well.
 //
-// `onLoad({ durationMs, outcome, promised, kept, known, vouched, at })` is told
-// how long each load took and how it ended (`answered`, `failed` or
-// `given-up`), whether a project is kept after it, whether the files that
-// decide the project were known when it started (not for the first load) and
-// whether they vouched then, and when it ended (`now()`): times, codes and
-// flags only. createLoadReport, below, counts them and decides which are worth
-// a log line.
+// `onLoad({ durationMs, outcome, promised, kept, sameFiles, vouched, at })` is
+// told how long each load took and how it ended (`answered`, `failed` or
+// `given-up`), whether a project is kept after it, whether it named the files
+// that decide the project as they were when it started (not the first load,
+// which started over none, nor one that named other files), whether those
+// files vouched then, and when it ended (`now()`): times, codes and flags
+// only. createLoadReport, below, counts them and decides which are worth a
+// log line.
 
 // A kept project is never used for longer than the engine goes without a full reconciliation.
 export const DEFAULT_KEEP_FOR_MS = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS
@@ -154,16 +155,20 @@ export const DEFAULT_ROW_ENDS_AFTER_MS = 60 * 1000
 //                      writes a line less and less often, never one per try
 //   answered           the one that ends a row of failures; one that answered at once and held the event loop for
 //                      `slowMs` or more, on the same doubling row while slow loads follow each other; and one after
-//                      which nothing is kept although the files that decide the project were known when it started,
-//                      from the second in a row on the same doubling row: a load at every request
+//                      which nothing is kept although it named the files it started over, from the second in a row
+//                      on the same doubling row: a load at every request
 //
-// A row of failures, or of slow loads, ends only at a load that answers in time `rowEndsAfterMs` or more after the
-// row's last one, so a loader that fails, or is slow, every other load or every third keeps one row, written less and
-// less often, not a line per load. A row of loads after which nothing is kept ends at the next that keeps a project.
-// The first load of a permission keeps nothing and knows no files, and the one after it has nothing to agree with yet,
-// so a start writes none of these. A load that answered in time after another that did, and kept the project, writes
-// nothing: that is every load of a healthy service. A line holds the event, milliseconds, the outcome, flags and
-// counts; never a path, a view or a message.
+// A row of failures ends only at a load that answers `rowEndsAfterMs` or more after its last failure, and a row of
+// slow loads at a load that answers in time that long after its last slow one. While loads come closer together than
+// that (a load at every request, or the retries after a failure), a loader that fails, or is slow, every other load or
+// every third keeps one row, written less and less often, not a line per load. A kept project is loaded again only
+// every half of its keep time, so there a row ends at the next reload, as it did at the next load before. A row of
+// loads after which nothing is kept ends at the next that keeps a project. A load that named other files than it
+// started over (the first, or one after a change that names other files) neither counts nor ends that row, so a start
+// and a change, each with one load that has nothing to agree with yet, write none of these. Any other load that
+// answered and kept the project, slow or not, writes nothing unless it ends a row of failures: that is every load of
+// a healthy service. A line holds the event, milliseconds, the outcome, flags and counts; never a path, a view or a
+// message.
 export function createLoadReport({ write, slowMs = DEFAULT_SLOW_LOAD_MS, rowEndsAfterMs = DEFAULT_ROW_ENDS_AFTER_MS }) {
   if (typeof write !== 'function') throw new TypeError('a load report needs somewhere to write')
   const counts = { answered: 0, failed: 0, givenUp: 0, slow: 0, notKept: 0, longestMs: 0 }
@@ -174,8 +179,8 @@ export function createLoadReport({ write, slowMs = DEFAULT_SLOW_LOAD_MS, rowEnds
   let lastSlowAt = 0
   let notKeptInARow = 0
   return {
-    // `kept` and `known` default to a load that kept its project, `vouched` to files that vouched, and `at` to now.
-    onLoad({ durationMs, outcome, promised, kept = true, known = true, vouched = true, at = performance.now() }) {
+    // `kept` and `sameFiles` default to a load that kept its project, `vouched` to files that vouched, and `at` to now.
+    onLoad({ durationMs, outcome, promised, kept = true, sameFiles = true, vouched = true, at = performance.now() }) {
       const ms = Math.round(durationMs)
       counts.longestMs = Math.max(counts.longestMs, ms)
       if (outcome !== 'answered') {
@@ -194,11 +199,11 @@ export function createLoadReport({ write, slowMs = DEFAULT_SLOW_LOAD_MS, rowEnds
         slowInARow += 1
         lastSlowAt = at
       } else if (slowInARow > 0 && at - lastSlowAt >= rowEndsAfterMs) slowInARow = 0
-      const notKept = !kept && known
+      const notKept = sameFiles && !kept
       if (notKept) {
         counts.notKept += 1
         notKeptInARow += 1
-      } else if (kept) notKeptInARow = 0
+      } else if (sameFiles) notKeptInARow = 0
       const writeSlow = slow && doubled(slowInARow)
       const writeNotKept = notKept && notKeptInARow >= 2 && doubled(notKeptInARow)
       if (afterFailures > 0 || writeSlow || writeNotKept) {
@@ -250,9 +255,10 @@ export function createViewPermission({
     failed = { digest, times: failed !== null && failed.digest === digest ? failed.times + 1 : 1, at }
   }
   const tooSoon = (digest, at) => failed !== null && failed.digest === digest && at - failed.at < Math.min(retryAtMostMs, retryAfterMs * 2 ** (failed.times - 1))
-  // `known` and `vouched`: whether the files that decide the project were known when the load started, and vouched then.
-  const told = (startedAt, outcome, promised, { known, vouched }) => {
-    try { const at = now(); onLoad({ durationMs: Math.max(0, at - startedAt), outcome, promised, kept: kept !== null, known, vouched, at }) } catch { /* only told */ }
+  // `before` and `vouched`: the files that decided the project when the load started, and whether they vouched then.
+  const sameList = (left, right) => left !== null && right !== null && left.length === right.length && left.every((file, index) => file === right[index])
+  const told = (startedAt, outcome, promised, { before, vouched }) => {
+    try { const at = now(); onLoad({ durationMs: Math.max(0, at - startedAt), outcome, promised, kept: kept !== null, sameFiles: sameList(before, files), vouched, at }) } catch { /* only told */ }
   }
 
   // What a load returned; `digest` was read before it started. A project that names other files than the ones read
@@ -269,7 +275,7 @@ export function createViewPermission({
 
   // Asks the loader. What it returned, when it answers at once; null when it answers a promise.
   function load(digest, at) {
-    const as = { known: files !== null, vouched: digest !== null }
+    const as = { before: files, vouched: digest !== null }
     let answer
     try {
       answer = loadProject()

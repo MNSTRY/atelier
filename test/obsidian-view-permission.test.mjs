@@ -628,10 +628,11 @@ test('each load is told with how long it took and how it ended: times and codes 
   failing = true
   w.write(settings({ enabled: false }))
   assert.equal(permits(VIEW), false)
-  // The first load knew no files; the second knew them, and they vouched. Neither left a project kept.
+  // The first load started over no files; the second started over the files the first named, and they vouched. Neither
+  // left a project kept.
   assert.deepEqual(told, [
-    { durationMs: 120, outcome: 'answered', promised: false, kept: false, known: false, vouched: false, at: 120 },
-    { durationMs: 120, outcome: 'failed', promised: false, kept: false, known: true, vouched: true, at: 240 },
+    { durationMs: 120, outcome: 'answered', promised: false, kept: false, sameFiles: false, vouched: false, at: 120 },
+    { durationMs: 120, outcome: 'failed', promised: false, kept: false, sameFiles: true, vouched: true, at: 240 },
   ])
 
   const promisedTold = []
@@ -648,13 +649,13 @@ test('each load is told with how long it took and how it ended: times and codes 
   promised(VIEW)
   w.advance(DEFAULT_LOAD_DEADLINE_MS)
   promised(VIEW)
-  assert.deepEqual(promisedTold.map(({ at: _at, ...entry }) => entry), [
-    { durationMs: 900, outcome: 'answered', promised: true, kept: false, known: false, vouched: false },
-    { durationMs: 400, outcome: 'failed', promised: true, kept: false, known: true, vouched: true },
-    { durationMs: DEFAULT_LOAD_DEADLINE_MS, outcome: 'given-up', promised: true, kept: false, known: true, vouched: true },
+  // Each is told when it ended, by the permission's clock: when the promise answered or was refused, or when a request
+  // found the deadline passed.
+  assert.deepEqual(promisedTold, [
+    { durationMs: 900, outcome: 'answered', promised: true, kept: false, sameFiles: false, vouched: false, at: 1140 },
+    { durationMs: 400, outcome: 'failed', promised: true, kept: false, sameFiles: true, vouched: true, at: 1540 },
+    { durationMs: DEFAULT_LOAD_DEADLINE_MS, outcome: 'given-up', promised: true, kept: false, sameFiles: true, vouched: true, at: 3540 + DEFAULT_LOAD_DEADLINE_MS },
   ])
-  assert.ok(promisedTold.every((entry) => typeof entry.at === 'number'), 'and when it ended, by the permission\'s clock')
-  assert.deepEqual(Object.keys(promisedTold[0]).sort(), ['at', 'durationMs', 'kept', 'known', 'outcome', 'promised', 'vouched'])
 })
 
 test('a promised load that answers, or is refused, only after its deadline with no request in between is told as given up, once, and counts as one failure', async (t) => {
@@ -666,8 +667,8 @@ test('a promised load that answers, or is refused, only after its deadline with 
     assert.equal(permits(VIEW), false)
     w.advance(DEFAULT_LOAD_DEADLINE_MS + 5)
     await loader[late]()
-    // The first load, which knew no files, given up: nothing kept.
-    assert.deepEqual(told, [{ durationMs: DEFAULT_LOAD_DEADLINE_MS + 5, outcome: 'given-up', promised: true, kept: false, known: false, vouched: false, at: DEFAULT_LOAD_DEADLINE_MS + 5 }], late)
+    // The first load, which started over no files, given up: nothing kept.
+    assert.deepEqual(told, [{ durationMs: DEFAULT_LOAD_DEADLINE_MS + 5, outcome: 'given-up', promised: true, kept: false, sameFiles: false, vouched: false, at: DEFAULT_LOAD_DEADLINE_MS + 5 }], late)
     assert.equal(permits(VIEW), false)
     w.advance(DEFAULT_RETRY_AFTER_MS - 1)
     assert.equal(permits(VIEW), false)
@@ -685,7 +686,7 @@ test('the load report writes a line for a load that failed, was given up or held
   const report = createLoadReport({ write: (line) => lines.push(line) })
   let at = 0
   // Each load ends a second after the one before, unless it says otherwise.
-  const load = (outcome, { durationMs = 120, promised = false, kept = true, known = true, vouched = true, after = 1000 } = {}) => { at += after; report.onLoad({ durationMs, outcome, promised, kept, known, vouched, at }) }
+  const load = (outcome, { durationMs = 120, promised = false, kept = true, sameFiles = true, vouched = true, after = 1000 } = {}) => { at += after; report.onLoad({ durationMs, outcome, promised, kept, sameFiles, vouched, at }) }
   // A healthy service: every load answers in time and keeps the project. Nothing is written, however many there are.
   for (let index = 0; index < 500; index += 1) load('answered')
   assert.deepEqual(lines, [])
@@ -726,21 +727,25 @@ test('the load report writes a line for a load that failed, was given up or held
   load('answered', { after: DEFAULT_ROW_ENDS_AFTER_MS })
   load('answered', { durationMs: DEFAULT_SLOW_LOAD_MS })
   assert.equal(lines.at(-1).inARow, 1, 'a load in time a minute or more after the last slow one ends the row')
-  // Loads after which nothing is kept, though the files were known: a load at every request. The first in a row writes
-  // nothing (a load after a change keeps nothing either); from the second, on the doubling row. One that keeps ends it,
-  // and a first load, which knows no files, neither counts nor ends it.
+  // Loads after which nothing is kept, though they named the files they started over: a load at every request. The
+  // first in a row writes nothing (a load after a change keeps nothing either); from the second, on the doubling row.
   lines.length = 0
   for (let index = 0; index < 15; index += 1) load('answered', { kept: false, vouched: index % 2 === 0 })
   assert.deepEqual(lines.map(({ notKept, notKeptInARow, vouched }) => [notKept, notKeptInARow, vouched]), [[true, 2, false], [true, 4, false], [true, 8, false]])
+  // A load that named other files than it started over neither counts nor ends the row, whether or not it kept a
+  // project: the sixteenth in the row is written.
   lines.length = 0
-  // Fifteen in the row: a sixteenth would be written. A first load in between neither counts nor ends the row; one that
-  // keeps the project ends it, so the next is the first of a new row.
-  load('answered', { kept: false, known: false })
+  load('answered', { kept: false, sameFiles: false })
+  load('answered', { kept: true, sameFiles: false })
+  load('answered', { kept: false })
+  assert.deepEqual(lines.map(({ notKeptInARow }) => notKeptInARow), [16])
+  // One that keeps the project ends it, so the next is the first of a new row.
+  lines.length = 0
   load('answered')
   load('answered', { kept: false })
   assert.deepEqual(lines, [], 'a kept project ended the row')
   // Every load is counted, written or not.
-  assert.deepEqual(report.counts(), { answered: 841, failed: 257, givenUp: 10, slow: 41, notKept: 16, longestMs: 60_000 })
+  assert.deepEqual(report.counts(), { answered: 843, failed: 257, givenUp: 10, slow: 41, notKept: 17, longestMs: 60_000 })
   assert.throws(() => createLoadReport({}), TypeError)
 })
 
@@ -818,30 +823,47 @@ test('where the system resolves no path for a regular file that is there, the fi
   assert.equal(w.loads, 13, 'loaded at every request')
 })
 
-test('a load at every request is written to the log: while a file vouches for nothing, and while loads never agree', { skip: noLinks }, async (t) => {
-  for (const [name, setUp, vouched] of [
+test('a load at every request is written to the log: while a file vouches for nothing, and while loads never agree; a change that names other files writes nothing', async (t) => {
+  const tenRequests = (w, options) => {
+    const lines = []
+    const report = createLoadReport({ write: (line) => lines.push(line) })
+    const permits = w.permission({ ...options, onLoad: report.onLoad })
+    for (let request = 0; request < 10; request += 1) { permits(VIEW); w.advance(500) }
+    return { lines, report, permits }
+  }
+  for (const [name, setUp, vouched, skip] of [
     ['a file that vouches for nothing', (w) => {
       const kept = path.join(w.dir, 'dotfiles', 'atelier.project.json')
       fs.mkdirSync(path.dirname(kept), { recursive: true })
       fs.renameSync(w.configPath, kept)
       w.link(w.configPath, kept)
       return { realpath: refusingRealpath }
-    }, false],
+    }, false, noLinks],
     ['loads that never agree', (w) => {
       // Every load names the same files, and the views of one load are never those of the one before.
       let flip = false
       return { loadProject: () => { w.loads += 1; flip = !flip; const project = w.load(); return flip ? project : { ...project, config: { ...project.config, ext: {} } } } }
-    }, true],
-  ]) await t.test(name, (t) => {
+    }, true, false],
+  ]) await t.test(name, { skip }, (t) => {
     const w = world(t)
-    const lines = []
-    const report = createLoadReport({ write: (line) => lines.push(line) })
-    const permits = w.permission({ ...setUp(w), onLoad: report.onLoad })
-    for (let request = 0; request < 10; request += 1) { permits(VIEW); w.advance(500) }
+    const { lines, report } = tenRequests(w, setUp(w))
     assert.equal(w.loads, 10, 'never kept: a load at every request')
-    // The first load knew no files; the nine after it knew them, kept nothing, and are one row.
+    // The first load started over no files; the nine after it named the files they started over, kept nothing, and
+    // are one row.
     assert.deepEqual(lines.map(({ notKept, notKeptInARow, vouched: line }) => [notKept, notKeptInARow, line]), [[true, 2, vouched], [true, 4, vouched], [true, 8, vouched]])
     assert.equal(report.counts().notKept, 9)
+  })
+  await t.test('a change that names other files than the project was loaded from', (t) => {
+    const w = world(t)
+    const { lines, report, permits } = tenRequests(w, {})
+    assert.equal(w.loads, 3, 'kept from the third load')
+    // The configuration names another repository access file: the next load names other files than it started over,
+    // and the one after it has nothing to agree with yet.
+    writeJson(w.configPath, { ...configWith(settings()), graph: { repoAccessPath: 'access-elsewhere.json', outputPath: 'atelier-output/knowledge.graph.json' } })
+    assert.deepEqual(answers(permits, 6), [true])
+    assert.equal(w.loads, 6, 'three loads after the change, and kept again')
+    assert.deepEqual(lines, [], 'a start and a change write nothing')
+    assert.equal(report.counts().notKept, 2, 'one at the start and one after the change: each had nothing to agree with yet')
   })
 })
 

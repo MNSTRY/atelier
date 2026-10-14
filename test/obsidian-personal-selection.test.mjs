@@ -53,7 +53,7 @@ const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/st
 const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, notePersonalSelectionNow, personalSelectionOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
 const { SELECTION_PRIMITIVES, loadSelectedProject, loadSelectedProjectOffThread, locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
 const { resolveServiceWorkspace, runMaintenanceService, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
-const { createViewPermission } = await import('../src/runtime/obsidian/view-permission.mjs')
+const { createLoadReport, createViewPermission } = await import('../src/runtime/obsidian/view-permission.mjs')
 const { nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { serviceOptionsFromArgv } = await import('../src/runtime/obsidian/service-main.mjs')
 const { planLoginItem } = await import('../src/runtime/obsidian/login-item.mjs')
@@ -821,7 +821,9 @@ test('the plugin status read permits a bound view once two loads of the confirme
   const settle = async () => { await loads.at(-1)?.catch(() => {}); await new Promise((resolve) => { setImmediate(resolve) }) }
   const resolveWorkspace = (project) => resolveServiceWorkspace({ project, dataRoot: ari.dataRoot, env: process.env })
   const { workspaceId, workspaceRoot } = resolveWorkspace(ari.locate())
-  const permits = createViewPermission({ loadProject, resolveWorkspace, workspaceInputsOf: serviceWorkspaceInputs, workspaceId, workspaceRoot, now: () => time })
+  const lines = []
+  const report = createLoadReport({ write: (line) => lines.push(line) })
+  const permits = createViewPermission({ loadProject, resolveWorkspace, workspaceInputsOf: serviceWorkspaceInputs, workspaceId, workspaceRoot, now: () => time, onLoad: report.onLoad })
   const until = async (expected) => { for (let round = 0; round < 8 && permits('both') !== expected; round += 1) { await settle(); time += 2000 } return permits('both') }
   assert.equal(await until(true), false, 'nothing is confirmed: no load answers a project')
   ari.select()
@@ -836,4 +838,7 @@ test('the plugin status read permits a bound view once two loads of the confirme
   assert.equal(await until(true), true)
   assert.ok(loads.length > kept)
   assert.equal(personalSelectionOf(await loads.at(-1)).sequence, 2)
+  // Each confirmation names other observed records: the load after it named other files than it started over, so the
+  // status-load report writes no load at every request.
+  assert.deepEqual(lines.filter((line) => line.notKept), [])
 })

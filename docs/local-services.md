@@ -301,8 +301,9 @@ the next tick names for the same reason is not written again, so a folder that
 stays unwritable (tried at every tick) is written once. It is written again when
 its reason changes, or after a tick that failed or did not name it: a tick that
 did not refuse it, refused it for no file-system error, had named 64 other
-views first, or was refused as a whole. When removing the staged candidates afterwards fails
-too, the line also names that error's code as `cleanupCause`, and a line is
+views first, or was refused as a whole. When removing the staged candidates
+afterwards fails too, the line also names that error's code as
+`cleanupCause`, and a line is
 written for that alone when the refusal names no error of its own. That failure
 does not replace the refusal. What could not be removed stays where it was: in
 `staging/`, or at its exchange path under `recovery/` once the publication's
