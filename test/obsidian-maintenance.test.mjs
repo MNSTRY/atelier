@@ -257,7 +257,7 @@ test('a source removed after this tick observed it and before the graph build re
   const published = world.manifest(FULL_SCOPE.scopeId).notes.map((item) => item.nodeId)
   assert.ok(published.includes('east-wing:compass') && !published.includes('east-wing:bell') && !published.includes('east-wing:whistle'), `the view is published without the removed sources: ${published}`)
   // Mutation control: without the rule the build's ENOENT stops the tick.
-  const blind = await removedDuringBuild({ ...ENGINE_PRIMITIVES, sourceRemovedDuringBuild: () => false })
+  const blind = await removedDuringBuild({ ...ENGINE_PRIMITIVES, sourceRemovedSinceObserved: () => false })
   await assert.rejects(blind.engine.tick(), (error) => error.code === 'ENOENT')
   assert.equal(blind.removed(), true)
 })
@@ -276,7 +276,7 @@ test('a path the build can never read still stops every tick: a nested repositor
     return outcomes
   }
   assert.deepEqual(await ticksOf(ENGINE_PRIMITIVES), ['ENOTDIR', 'ENOTDIR', 'ENOTDIR'])
-  assert.deepEqual(await ticksOf({ ...ENGINE_PRIMITIVES, sourceRemovedDuringBuild: () => true }), ['stale/mixed-read', 'stale/mixed-read', 'stale/mixed-read'], 'the oracle can fail')
+  assert.deepEqual(await ticksOf({ ...ENGINE_PRIMITIVES, sourceRemovedSinceObserved: () => true }), ['stale/mixed-read', 'stale/mixed-read', 'stale/mixed-read'], 'the oracle can fail')
 })
 
 test('a build error that is no removed source still stops the tick: no such file outside the repositories, or a source that cannot be read', needsExchange, async (t) => {
@@ -306,7 +306,7 @@ test('the rule that names a removed source: no such file, or a parent that is no
     [sourceKey('east-wing', 'logs/old/tide.md'), { digest: 'sha256:cc' }],
     [sourceKey('charts', 'gone.md'), { digest: 'sha256:dd' }],
   ])
-  const rule = (code, at, over = index) => ENGINE_PRIMITIVES.sourceRemovedDuringBuild(Object.assign(new Error(code), { code, ...(at === undefined ? {} : { path: at }) }), { project, index: over })
+  const rule = (code, at, over = index) => ENGINE_PRIMITIVES.sourceRemovedSinceObserved(Object.assign(new Error(code), { code, ...(at === undefined ? {} : { path: at }) }), { project, index: over })
   assert.equal(rule('ENOENT', path.join(root, 'notes', 'gone.md')), true, 'an observed source, gone')
   assert.equal(rule('ENOTDIR', path.join(root, 'notes', 'gone.md')), true, 'an observed source whose folder is no longer one')
   assert.equal(rule('ENOENT', path.join(root, 'logs', 'old')), true, 'a folder that held an observed source, gone')
@@ -320,7 +320,117 @@ test('the rule that names a removed source: no such file, or a parent that is no
   assert.equal(rule('ENOENT', path.join(dir, 'missing-root')), false, 'outside every repository')
   assert.equal(rule('ENOENT'), false, 'an error without a path')
   assert.equal(rule('ENOENT', path.join(root, 'notes', 'gone.md'), null), false, 'no observation index')
-  assert.equal(ENGINE_PRIMITIVES.sourceRemovedDuringBuild(null, { project, index }), false)
+  assert.equal(ENGINE_PRIMITIVES.sourceRemovedSinceObserved(null, { project, index }), false)
+})
+
+test('a selected source removed while its view is being prepared, before the preparation read it, refuses that view as mixed-read while another view of the tick is published, and the next tick publishes it without the source; mutation control: without the rule the tick fails without a typed reason', needsExchange, async (t) => {
+  const WEST_SCOPE = { scopeId: 'scope-west', mode: 'scoped', selector: { repo: 'west-wing' } }
+  const removedDuringPreparation = async (primitives) => {
+    const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, WEST_SCOPE]) })
+    // Views are prepared in the order they are declared: the whole view, then the west view, which selects neither of
+    // two notes of the east wing nothing links to. Both are removed at the whole view's first wait as it emits notes,
+    // which comes before it reads either; it reads each when it emits it.
+    const removable = ['bell', 'whistle'].map((name) => world.source(`east-wing/notes/${name}.md`))
+    for (const file of removable) fs.writeFileSync(file, note({ id: `east-wing:${path.basename(file, '.md')}`, title: path.basename(file, '.md'), body: 'Sounded in fog.' }))
+    let removed = false
+    const engine = world.engine({ primitives, seams: { prepareViewCooperatively: (input) => prepareViewCooperatively({
+      ...input, scheduling: { ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (removed || phase !== 'emit-note') return
+        removed = true
+        for (const file of removable) fs.rmSync(file)
+      } },
+    }) } })
+    return { world, engine, removed: () => removed }
+  }
+  const { world, engine, removed } = await removedDuringPreparation(ENGINE_PRIMITIVES)
+  const report = await engine.tick()
+  assert.equal(removed(), true)
+  assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false, 'the whole view is not published')
+  assert.deepEqual([world.calls.prepareView, world.calls.publishView, world.scope(report, WEST_SCOPE.scopeId).state], [2, [WEST_SCOPE.scopeId], 'current'], 'the tick goes on to the west view, prepared and published after the refusal')
+  world.advance(1000)
+  const next = await engine.tick()
+  assert.deepEqual([next.full, world.scope(next).state], [true, 'current'], 'the next tick reads everything again and publishes')
+  const published = world.manifest(FULL_SCOPE.scopeId).notes.map((item) => item.nodeId)
+  assert.ok(published.includes('east-wing:compass') && !published.includes('east-wing:bell') && !published.includes('east-wing:whistle'), `the view is published without the removed sources: ${published}`)
+  // Mutation control: without the rule the preparation's ENOENT stops the tick, and the west view is not prepared.
+  const blind = await removedDuringPreparation({ ...ENGINE_PRIMITIVES, sourceRemovedSinceObserved: () => false })
+  await assert.rejects(blind.engine.tick(), (error) => error.code === 'ENOENT')
+  assert.deepEqual([blind.removed(), blind.world.calls.prepareView, blind.world.calls.publishView], [true, 1, []])
+})
+
+test('a selected source removed while its view is being published, before the look again before the commit read it, refuses the view as mixed-read before its pointer is committed, and the next tick publishes without it; mutation control: without the rule the tick fails without a typed reason', needsExchange, async (t) => {
+  const removedDuringPublication = async (primitives) => {
+    const world = makeWorld(t)
+    const bell = world.source('east-wing/notes/bell.md')
+    fs.writeFileSync(bell, note({ id: 'east-wing:bell', title: 'bell', body: 'Sounded in fog.' }))
+    let removed = false
+    const engine = world.engine({ primitives, seams: { publishView: (input) => publishView({ ...input, scheduling: {
+      ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => {
+        if (removed || phase !== 'publication-complete') return
+        removed = true
+        fs.rmSync(bell)
+      },
+    } }) } })
+    return { world, engine, removed: () => removed }
+  }
+  const { world, engine, removed } = await removedDuringPublication(ENGINE_PRIMITIVES)
+  const report = await engine.tick()
+  assert.equal(removed(), true)
+  assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false, 'no pointer is committed')
+  world.advance(1000)
+  const next = await engine.tick()
+  assert.deepEqual([next.full, world.scope(next).state, world.scope(next).reason, next.pendingEdits], [true, 'current', 'published-and-verified', []], JSON.stringify(world.scope(next)))
+  const published = world.manifest(FULL_SCOPE.scopeId).notes.map((item) => item.nodeId)
+  assert.ok(published.includes('east-wing:compass') && !published.includes('east-wing:bell'), `the view is published without the removed source: ${published}`)
+  // Mutation control: without the rule the ENOENT of the look before the commit stops the tick.
+  const blind = await removedDuringPublication({ ...ENGINE_PRIMITIVES, sourceRemovedSinceObserved: () => false })
+  await assert.rejects(blind.engine.tick(), (error) => error.code === 'ENOENT')
+  assert.equal(blind.removed(), true)
+})
+
+test('a selected source removed before an already committed generation is published again refuses the view as mixed-read and leaves the pointer as it was; mutation control: without the rule the tick fails without a typed reason', needsExchange, async (t) => {
+  const removedBeforeRepublication = async (primitives) => {
+    const world = makeWorld(t)
+    const bell = world.source('east-wing/notes/bell.md')
+    fs.writeFileSync(bell, note({ id: 'east-wing:bell', title: 'bell', body: 'Sounded in fog.' }))
+    let publications = 0
+    const engine = world.engine({ primitives, seams: { publishView: (input) => {
+      publications += 1
+      if (publications === 2) fs.rmSync(bell)
+      return publishView(input)
+    } } })
+    assert.equal(world.scope(await engine.tick()).state, 'current')
+    const pointer = fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json'))
+    // Nothing changed: the view is prepared again as the generation already committed, and the source is removed after
+    // the preparation, before the publisher settles that generation.
+    engine.requestPreparation(FULL_SCOPE.scopeId)
+    return { world, engine, pointer, publications: () => publications }
+  }
+  const { world, engine, pointer, publications } = await removedBeforeRepublication(ENGINE_PRIMITIVES)
+  const next = await engine.tick()
+  assert.equal(publications(), 2)
+  assert.deepEqual([world.scope(next).state, world.scope(next).reason], ['stale', 'mixed-read'])
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), pointer)
+  const blind = await removedBeforeRepublication({ ...ENGINE_PRIMITIVES, sourceRemovedSinceObserved: () => false })
+  await assert.rejects(blind.engine.tick(), (error) => error.code === 'ENOENT')
+  assert.equal(blind.publications(), 2)
+})
+
+test('a read of a selected source that fails for another reason still stops the tick: a source that cannot be read, or no such file at a source that is still there', needsExchange, async (t) => {
+  for (const [name, fault] of Object.entries({
+    'a source that cannot be read': (file) => Object.assign(new Error('permission denied'), { code: 'EACCES', path: file }),
+    'no such file at a source that is still there': (file) => Object.assign(new Error('gone'), { code: 'ENOENT', path: file }),
+  })) await t.test(name, async (t) => {
+    const world = makeWorld(t)
+    const error = fault(world.source('west-wing/logs/tide.md'))
+    const engine = world.engine({ seams: { captureSnapshot: (input) => {
+      const snapshot = DEFAULT.captureSnapshot(input)
+      return { ...snapshot, readSource: (repo, relative) => { if (`${repo}/${relative}` === 'west-wing/logs/tide.md') throw error; return snapshot.readSource(repo, relative) } }
+    } } })
+    await assert.rejects(engine.tick(), (thrown) => thrown === error)
+  })
 })
 
 test('the graph is built with the event loop given a turn between the Markdown sources of the census, and is the graph the build in one stretch gives', async (t) => {
