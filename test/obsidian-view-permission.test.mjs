@@ -666,7 +666,8 @@ test('a promised load that answers, or is refused, only after its deadline with 
     assert.equal(permits(VIEW), false)
     w.advance(DEFAULT_LOAD_DEADLINE_MS + 5)
     await loader[late]()
-    assert.deepEqual(told, [{ durationMs: DEFAULT_LOAD_DEADLINE_MS + 5, outcome: 'given-up', promised: true }], late)
+    // The first load, which knew no files, given up: nothing kept.
+    assert.deepEqual(told, [{ durationMs: DEFAULT_LOAD_DEADLINE_MS + 5, outcome: 'given-up', promised: true, kept: false, known: false, vouched: false, at: DEFAULT_LOAD_DEADLINE_MS + 5 }], late)
     assert.equal(permits(VIEW), false)
     w.advance(DEFAULT_RETRY_AFTER_MS - 1)
     assert.equal(permits(VIEW), false)
