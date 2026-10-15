@@ -136,3 +136,10 @@ test('client transport refuses an oversized host response', async () => {
   const client = createExtensionClient(createHttpHostTransport(async () => new Response(' '.repeat(131073))))
   await assert.rejects(client.getInstallation(binding.installationId), { code: 'unavailable' })
 })
+
+test('wire JSON bounds size/depth and refuses hidden object state', () => {
+  assert.throws(() => canonicalJson('x'.repeat(131073)), ExtensionError)
+  let deep = null; for (let n = 0; n < 18; n++) deep = { value: deep }
+  assert.throws(() => canonicalJson(deep), ExtensionError)
+  assert.throws(() => canonicalJson(Object.defineProperty({}, 'hidden', { value: 'non-json-state' })), ExtensionError)
+})

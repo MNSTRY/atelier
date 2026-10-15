@@ -6,7 +6,7 @@ const reject = () => { throw new ExtensionError('invalid-input') }
 export function canonicalJson(value) {
   const seen = new Set()
   function visit(item, depth) {
-    if (depth > 64) return reject()
+    if (depth > 16) return reject()
     if (item === null || typeof item === 'boolean') return JSON.stringify(item)
     if (typeof item === 'number') return Number.isFinite(item) ? JSON.stringify(item) : reject()
     if (typeof item === 'string') {
@@ -28,13 +28,16 @@ export function canonicalJson(value) {
     } else {
       if (Object.getPrototypeOf(item) !== Object.prototype || Reflect.ownKeys(item).some(k => typeof k !== 'string')) return reject()
       const keys = Reflect.ownKeys(item).sort()
+      if (keys.some(k => !Object.getOwnPropertyDescriptor(item, k).enumerable)) return reject()
       if (keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(item, k), 'value'))) return reject()
       result = `{${keys.map(k => `${visit(k, depth + 1)}:${visit(item[k], depth + 1)}`).join(',')}}`
     }
     seen.delete(item)
     return result
   }
-  return visit(value, 0)
+  const encoded = visit(value, 0)
+  if (new TextEncoder().encode(encoded).length > 131072) return reject()
+  return encoded
 }
 export function text(value, limit = 128) {
   if (typeof value !== 'string' || !value.length || value.length > limit || /[\u0000-\u001f]/u.test(value)) return reject()
