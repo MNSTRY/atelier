@@ -136,3 +136,28 @@ export function parseProviderOperationProof(value) {
   text(proof.actionId); digest(proof.payloadDigest); digest(proof.resultDigest)
   return proof
 }
+
+
+/** Portable registration input. The receiving host independently verifies the
+ * release and file hashes; this parser performs no I/O or migration execution. */
+export function parseReleaseBundle(value) {
+  const bundle=exact(JSON.parse(canonicalJson(value)),['manifest','schemaFiles','migrationDigests'])
+  bundle.manifest=parseManifest(bundle.manifest)
+  for(const field of ['schemaFiles','migrationDigests']) {
+    const map=bundle[field]
+    if(!map||typeof map!=='object'||Array.isArray(map)||Object.getPrototypeOf(map)!==Object.prototype)throw new ExtensionError('invalid-input')
+  }
+  if(Object.keys(bundle.schemaFiles).length>256)throw new ExtensionError('invalid-input')
+  for(const [name,bytes] of Object.entries(bundle.schemaFiles)) {
+    if(!/^schemas\/[A-Za-z0-9._-]+\.json$/.test(name)||typeof bytes!=='string'||new TextEncoder().encode(bytes).length>65536)throw new ExtensionError('invalid-input')
+    let schema
+    try{schema=JSON.parse(bytes)}catch{throw new ExtensionError('invalid-input')}
+    if(typeof schema!=='boolean'&&(!schema||typeof schema!=='object'||Array.isArray(schema)))throw new ExtensionError('invalid-input')
+    canonicalJson(schema)
+  }
+  for(const [name,digest] of Object.entries(bundle.migrationDigests)) {
+    if(!/^migrations\/[A-Za-z0-9._/-]+$/.test(name)||name.split('/').some(part=>!part||part==='.'||part==='..')||typeof digest!=='string'||!/^[a-f0-9]{64}$/.test(digest))throw new ExtensionError('invalid-input')
+  }
+  for(const action of bundle.manifest.actions)for(const field of ['inputSchemaRef','outputSchemaRef'])if(!Object.hasOwn(bundle.schemaFiles,action[field]))throw new ExtensionError('invalid-input')
+  return bundle
+}

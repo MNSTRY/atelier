@@ -23,3 +23,7 @@ export function parseOperationReceipt(value: unknown): OperationReceipt
 
 export interface ProviderOperationProof extends InstallationBinding { schema: 'mnstry.extension-provider-operation/v1'; operationId: string; actionId: string; payloadDigest: string; resultDigest: string; result: Json }
 export function parseProviderOperationProof(value: unknown): ProviderOperationProof
+
+export interface ExtensionReleaseBundle { manifest: ExtensionManifest; schemaFiles: Record<string, string>; migrationDigests: Record<string, string> }
+export interface ExtensionReleaseRegistration { releaseId: string; releaseDigest: string }
+export function parseReleaseBundle(value: unknown): ExtensionReleaseBundle
