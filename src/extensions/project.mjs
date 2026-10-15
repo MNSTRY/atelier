@@ -204,19 +204,39 @@ async function projectFiles(root, subpath) {
   for (const relative of subpath) await walk(relative)
   return result
 }
+async function bundleFiles(target) {
+  const paths=['package.json','tsconfig.json','src']
+  for(const file of ['package-lock.json','npm-shrinkwrap.json','drizzle.config.ts','drizzle-introspect.config.ts','prisma.config.ts','prisma']) {
+    try { await lstat(path.join(target,file)); paths.push(file) }
+    catch(error) { if(error.code!=='ENOENT')throw error }
+  }
+  return projectFiles(target,paths)
+}
+async function preflightPackSeal(target,manifest) {
+  const file=path.join(target,packName)
+  if(!(await lstat(file)).isFile())throw new Error('extension pack must be a regular file')
+  const original=await readFile(file,'utf8')
+  loadExtensionPacks(packProject(target,manifest),{verifyLock:false})
+  const preview=JSON.parse(original)
+  preview.ext ??= {}; preview.ext['mnstry.atelier'] ??= {}
+  preview.ext['mnstry.atelier'].runtimeManifest={schema:manifest.schema,path:manifestName,releaseDigest:manifest.releaseDigest,fileDigest:'0'.repeat(64)}
+  canonicalJson(preview)
+  return original
+}
 export async function sealProject(directory, initialManifest) {
   const target = path.resolve(directory)
   const manifestFile = path.join(target, manifestName)
   if (!initialManifest && !(await lstat(manifestFile)).isFile()) throw new Error('extension manifest must be a regular file')
   const originalManifest = initialManifest ? null : await readFile(manifestFile, 'utf8')
   const manifest = parseManifest(initialManifest ?? JSON.parse(originalManifest))
-  const bundle = await projectFiles(target, ['package.json', 'src'])
+  const bundle = await bundleFiles(target)
   const schemas = await projectFiles(target, ['schemas', 'migrations'])
   manifest.deployment.bundleDigest = hash(canonicalJson(bundle)); manifest.deployment.schemaDigest = hash(canonicalJson(schemas))
   manifest.releaseDigest = releaseDigest(manifest)
   // Re-read before committing the digest; concurrent edits cannot produce a knowingly stale seal.
-  if (canonicalJson(bundle) !== canonicalJson(await projectFiles(target, ['package.json', 'src'])) ||
+  if (canonicalJson(bundle) !== canonicalJson(await bundleFiles(target)) ||
       canonicalJson(schemas) !== canonicalJson(await projectFiles(target, ['schemas', 'migrations']))) throw new Error('extension changed during sealing')
+  const originalPack = initialManifest ? null : await preflightPackSeal(target,manifest)
   const temporary = path.join(target, `.extension-seal-${randomUUID()}.json`)
   try {
     await writeFile(temporary, JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx' })
@@ -226,6 +246,7 @@ export async function sealProject(directory, initialManifest) {
     } else {
       if (!(await lstat(manifestFile)).isFile() || await readFile(manifestFile, 'utf8') !== originalManifest)
         throw new Error('extension manifest changed during sealing')
+      if(await preflightPackSeal(target,manifest)!==originalPack)throw new Error('extension pack changed during sealing')
       await rename(temporary, manifestFile)
     }
   } finally { await rm(temporary, { force: true }) }
@@ -237,7 +258,7 @@ export async function validateProject(directory) {
   const manifestFile = path.join(target, manifestName)
   if (!(await lstat(manifestFile)).isFile()) throw new Error('extension manifest must be a regular file')
   const manifest = parseManifest(JSON.parse(await readFile(manifestFile, 'utf8')))
-  if (manifest.releaseDigest !== releaseDigest(manifest) || manifest.deployment.bundleDigest !== hash(canonicalJson(await projectFiles(target, ['package.json', 'src']))) ||
+  if (manifest.releaseDigest !== releaseDigest(manifest) || manifest.deployment.bundleDigest !== hash(canonicalJson(await bundleFiles(target))) ||
       manifest.deployment.schemaDigest !== hash(canonicalJson(await projectFiles(target, ['schemas', 'migrations'])))) throw new Error('extension seal is stale')
   for (const action of manifest.actions) {
     for (const name of ['inputSchemaRef', 'outputSchemaRef']) JSON.parse(await readFile(path.join(target, action[name]), 'utf8'))

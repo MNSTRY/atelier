@@ -145,3 +145,27 @@ test('schema and runtime measure manifest string limits in Unicode code points',
     assert.equal(validate(invalid),false);assert.throws(()=>parseManifest(invalid))
   }
 })
+
+
+test('seals include compiler configuration and present dependency lockfiles', async t=>{
+  const {project}=await directory(t);await scaffoldPostgres({directory:project})
+  const file=path.join(project,'tsconfig.json');const original=await readFile(file,'utf8')
+  await writeFile(file,original+'\n');await assert.rejects(validateProject(project),/stale/)
+  await sealProject(project);await validateProject(project)
+  await writeFile(path.join(project,'package-lock.json'),'{}\n')
+  await assert.rejects(validateProject(project),/stale/);await sealProject(project);await validateProject(project)
+  await writeFile(path.join(project,'package-lock.json'),'{"lockfileVersion":3}\n')
+  await assert.rejects(validateProject(project),/stale/)
+})
+
+test('deterministic pack failures leave the prior manifest bytes intact', async t=>{
+  const {root,project}=await directory(t);await scaffoldPostgres({directory:project})
+  const manifest=path.join(project,'extension.manifest.json');const before=await readFile(manifest,'utf8')
+  const backend=path.join(project,'src/backend.ts');await writeFile(backend,(await readFile(backend,'utf8'))+'\n// owned edit\n')
+  const file=path.join(project,'atelier.extension-pack.json');const pack=JSON.parse(await readFile(file))
+  pack.id='another.component';await writeFile(file,JSON.stringify(pack))
+  await assert.rejects(sealProject(project));assert.equal(await readFile(manifest,'utf8'),before)
+  await rm(file);await assert.rejects(sealProject(project));assert.equal(await readFile(manifest,'utf8'),before)
+  const external=path.join(root,'external.json');await writeFile(external,'{}');await symlink(external,file)
+  await assert.rejects(sealProject(project));assert.equal(await readFile(manifest,'utf8'),before)
+})

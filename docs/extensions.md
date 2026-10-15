@@ -50,3 +50,12 @@ the resulting local tarball in the generated project with
 `npm run typecheck` and reseal the reviewed project. Do not expect the unpublished
 version to install from the public registry. String length limits use Unicode
 code points, matching JSON Schema; ill-formed surrogate sequences remain refused.
+
+The source seal covers package.json, tsconfig.json, src/, present npm lockfiles,
+and present Drizzle/Prisma configuration and Prisma schema files. Installing or
+changing a lockfile requires an explicit reseal. It does not cover an arbitrary
+external host or deployed image. Schema bytes cover schemas/ and migrations/.
+Each source file is limited to 1 MiB; each canonical digest map is limited to
+128 KiB. Deterministic invalid pack state refuses before rewriting the manifest.
+The manifest and pack remain separate files: an interruption between their writes
+is detected as stale by validation and requires an explicit reseal.
