@@ -1,4 +1,4 @@
-import { canonicalJson, ExtensionError } from './contracts.mjs'
+import { ExtensionError } from './contracts.mjs'
 import { assertVerifiedScope, digest } from './server.mjs'
 import { assertApplicationRole, boundedSqlResult } from './sql-scope.mjs'
 

@@ -201,6 +201,24 @@ export async function scaffoldSqlProject({ directory, extensionId = 'sample.coun
     throw error
   }
 }
+async function boundedSourceBytes(file,expected) {
+  if(!expected.isFile()||expected.size>1024*1024)throw new Error('extension source file exceeds 1 MiB or is not regular')
+  const handle=await open(file,fsConstants.O_RDONLY|(fsConstants.O_NOFOLLOW??0)|(fsConstants.O_NONBLOCK??0))
+  try {
+    const actual=await handle.stat({bigint:true})
+    if(!actual.isFile()||actual.dev!==expected.dev||actual.ino!==expected.ino)throw new Error('extension source changed while opening')
+    const chunks=[];let length=0
+    for(;;) {
+      const buffer=Buffer.alloc(64*1024)
+      const {bytesRead}=await handle.read(buffer,0,buffer.length,null)
+      if(bytesRead===0)break
+      length+=bytesRead
+      if(length>1024*1024)throw new Error('extension source file exceeds 1 MiB')
+      chunks.push(buffer.subarray(0,bytesRead))
+    }
+    return Buffer.concat(chunks,length)
+  } finally { await handle.close() }
+}
 async function projectFiles(root, subpath) {
   const result = {}
   const base = await realpath(root)
@@ -210,14 +228,13 @@ async function projectFiles(root, subpath) {
     try { const stat=await lstat(path.join(base,name),{bigint:true}); if(stat.isFile())metadata.add(identity(stat)) }
     catch(error) { if(error.code!=='ENOENT')throw error }
   }
-  async function checked(relative) {
-    const parts=relative.split(/[\\/]/u)
+  async function checked(parts) {
     let file=base, stat
     for(const part of parts) {
       const folded=part.toLowerCase()
-      if(!part||part==='.'||part==='..'||folded==='node_modules'||
+      if(!part||/[\\/\u0000-\u001f\u007f]/u.test(part)||part==='.'||part==='..'||folded==='node_modules'||
         (part.startsWith('.')&&!['.gitignore','.gitattributes'].includes(folded)))
-        throw new Error('extension source contains an unsupported hidden or dependency path')
+        throw new Error('extension source contains an unsupported hidden or dependency path or filename')
       file=path.join(file,part);stat=await lstat(file,{bigint:true})
       if(stat.isSymbolicLink())throw new Error('extension project symlinks are unsupported')
     }
@@ -225,30 +242,26 @@ async function projectFiles(root, subpath) {
     if(stat.isFile()&&metadata.has(identity(stat)))throw new Error('extension source cannot include generated identity files')
     return {file,stat,key:parts.join('/')}
   }
-  async function walk(relative) {
-    const {file,stat,key}=await checked(relative)
+  async function walk(parts) {
+    const {file,stat,key}=await checked(parts)
     if(stat.isDirectory()) {
-      for(const entry of (await readdir(file)).sort())await walk(path.join(relative,entry))
+      for(const entry of (await readdir(file)).sort())await walk([...parts,entry])
     } else if(stat.isFile()) {
-      if(stat.size>1024*1024)throw new Error('extension source file exceeds 1 MiB')
-      const handle=await open(file,fsConstants.O_RDONLY|(fsConstants.O_NOFOLLOW??0))
-      try {
-        if(identity(await handle.stat({bigint:true}))!==identity(stat))throw new Error('extension source changed while opening')
-        const bytes=await handle.readFile()
-        if(identity((await checked(relative)).stat)!==identity(stat))throw new Error('extension source changed while reading')
-        result[key]=hash(bytes)
-      } finally { await handle.close() }
+      if(Object.hasOwn(result,key))throw new Error('extension source inputs contain a duplicate path')
+      const bytes=await boundedSourceBytes(file,stat)
+      if(identity((await checked(parts)).stat)!==identity(stat))throw new Error('extension source changed while reading')
+      result[key]=hash(bytes)
     } else throw new Error('extension project requires regular files')
   }
-  for(const relative of subpath)await walk(relative)
+  for(const relative of subpath)await walk(relative.split('/'))
   return result
 }
 async function bundleFiles(target) {
   const paths=['package.json','tsconfig.json','src']
   const packageFile=path.join(target,'package.json')
-  const packageStat=await lstat(packageFile)
+  const packageStat=await lstat(packageFile,{bigint:true})
   if(!packageStat.isFile()||packageStat.size>1024*1024)throw new Error('extension package must be a bounded regular file')
-  const pkg=JSON.parse(await readFile(packageFile,'utf8'))
+  const pkg=JSON.parse((await boundedSourceBytes(packageFile,packageStat)).toString('utf8'))
   if(pkg.files!==undefined){
     if(!Array.isArray(pkg.files)||pkg.files.length>128)throw new Error('invalid extension source inputs')
     for(const file of pkg.files){

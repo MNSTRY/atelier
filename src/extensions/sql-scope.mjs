@@ -8,7 +8,7 @@ export async function assertApplicationRole(sql) {
       WHERE n.nspname='extension_data' AND c.relkind IN ('r','p')
         AND (pg_has_role(r.oid,c.relowner,'MEMBER') OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)) AS unsafe_tables
     FROM pg_roles r WHERE r.rolname=current_user`
-  if (!role || role.rolsuper || role.rolbypassrls || role.unsafe_membership || role.unsafe_tables) throw new ExtensionError('forbidden', 403)
+  if (!role || role.rolsuper !== false || role.rolbypassrls !== false || role.unsafe_membership !== false || role.unsafe_tables !== false) throw new ExtensionError('forbidden', 403)
 }
 
 export function boundedSqlResult(value) {

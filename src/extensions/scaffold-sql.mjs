@@ -104,7 +104,7 @@ const scopedWhere=(scope:VerifiedScope)=>and(eq(counters.installationId,scope.in
   if(drizzle){
     // Drizzle Kit 0.31 emits an extensionless local relation import. Preserve
     // the native generated schema and normalize only that Node ESM specifier.
-    files['src/normalize-introspection.mjs']=`import {lstat,readFile,rename,writeFile} from 'node:fs/promises'
+    files['src/normalize-introspection.mjs']=`import {lstat,readFile,rename,rm,writeFile} from 'node:fs/promises'
 import {randomUUID} from 'node:crypto'
 const file=new URL('./introspected/relations.ts',import.meta.url)
 const identity=await lstat(file)
@@ -113,10 +113,12 @@ const before=await readFile(file,'utf8')
 const after=before.replaceAll('from "./schema"','from "./schema.js"').replaceAll("from './schema'","from './schema.js'")
 if(after!==before){
   const temporary=new URL('./introspected/.relations-'+randomUUID()+'.tmp',import.meta.url)
-  await writeFile(temporary,after,{flag:'wx'})
-  const current=await lstat(file)
-  if(!current.isFile()||current.isSymbolicLink()||current.ino!==identity.ino||await readFile(file,'utf8')!==before)throw new Error('Generated relations changed concurrently')
-  await rename(temporary,file)
+  try {
+    await writeFile(temporary,after,{flag:'wx'})
+    const current=await lstat(file)
+    if(!current.isFile()||current.isSymbolicLink()||current.dev!==identity.dev||current.ino!==identity.ino||await readFile(file,'utf8')!==before)throw new Error('Generated relations changed concurrently')
+    await rename(temporary,file)
+  } finally { await rm(temporary,{force:true}) }
 }
 `
     files[`src/${profile==='drizzle-db-first'?'introspected/':''}schema.ts`]=drizzleSchema

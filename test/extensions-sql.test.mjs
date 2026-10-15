@@ -92,3 +92,30 @@ test('identity case aliases, hardlink aliases and nested credential/dependency p
     assert.equal(await readFile(path.join(directory,'extension.manifest.json'),'utf8'),before)
   }
 })
+
+
+test('source identity refuses literal backslashes, controls and overlapping input keys',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'atelier-input-literal-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const directory=path.join(root,'custom');await scaffoldSqlProject({directory,profile:'drizzle-code-first'})
+  const manifest=path.join(directory,'extension.manifest.json');const before=await readFile(manifest,'utf8')
+  await mkdir(path.join(directory,'src','x'));await writeFile(path.join(directory,'src','x','y.ts'),'export const y=1')
+  if(process.platform!=='win32')for(const name of ['x\\y.ts','control\n.ts']){
+    const entry=path.join(directory,'src',name);await writeFile(entry,'export const other=2')
+    await assert.rejects(sealProject(directory),/filename/);await assert.rejects(validateProject(directory),/filename/)
+    assert.equal(await readFile(manifest,'utf8'),before);await rm(entry)
+  }
+  const file=path.join(directory,'package.json');const pkg=JSON.parse(await readFile(file))
+  await writeFile(file,JSON.stringify({...pkg,files:['src/x/y.ts']}))
+  await assert.rejects(sealProject(directory),/duplicate path/)
+  assert.equal(await readFile(manifest,'utf8'),before)
+})
+
+test('native SQL role checks refuse missing or transformed flags',async()=>{
+  const {assertApplicationRole}=await import('../src/extensions/sql-scope.mjs')
+  const safe={rolsuper:false,rolbypassrls:false,unsafe_membership:false,unsafe_tables:false}
+  await assertApplicationRole(async()=>[safe])
+  for(const key of Object.keys(safe))for(const value of [true,undefined,null,0]){
+    await assert.rejects(assertApplicationRole(async()=>[{...safe,[key]:value}]),error=>error.code==='forbidden')
+  }
+  await assert.rejects(assertApplicationRole(async()=>[{rolsuper:false,rolbypassrls:false,unsafeMembership:false,unsafeTables:false}]),error=>error.code==='forbidden')
+})
