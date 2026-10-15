@@ -177,3 +177,9 @@ test('installation binding rejects accessors without invoking them and numeric g
   assert.equal(called,false)
   const r=runtime(); assert.equal((await r.request({generation:1})).status,401)
 })
+
+
+test('declared actions require an own implementation even for inherited object names',()=>{
+  const m=manifest();m.actions[0].id='constructor';m.releaseDigest=releaseDigest(m)
+  assert.throws(()=>defineExtension({manifest:m,verifier:{consume:async()=>true},actions:{}}),error=>error.code==='invalid-input')
+})

@@ -1,8 +1,10 @@
+import { constants as fsConstants } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, open, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, parseManifest } from './contracts.mjs'
+import { sqlProjectFiles } from './scaffold-sql.mjs'
 import { releaseDigest } from './server.mjs'
 import { loadExtensionPacks, RESERVED_NAMESPACE_PATTERN } from '../extension-packs/loader.mjs'
 
@@ -135,9 +137,10 @@ Run atelier extension validate --directory . after edits. Run atelier extension 
 Sealing records bytes; it does not establish trust, deployment, health or qualification.
 The sample deletes its live rows and earlier provider receipts; backup retention remains
 the operator's responsibility. Provider qualification and actual Web/native acceptance
-are separate from scaffolding. Drizzle, Prisma and Convex profiles remain pending.
+are separate from scaffolding. Drizzle and Prisma have native project profiles. Convex remains pending.
 `
-export async function scaffoldPostgres({ directory, extensionId = 'sample.counter' }) {
+export async function scaffoldSqlProject({ directory, extensionId = 'sample.counter', profile = 'postgres-sql' }) {
+  if(!['postgres-sql','drizzle-db-first','drizzle-code-first','prisma-7-postgres'].includes(profile))throw new Error('unsupported SQL profile')
   if (extensionId.length > 128 || !/^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/.test(extensionId) || RESERVED_NAMESPACE_PATTERN.test(extensionId.split('.')[0])) throw new Error('invalid extension id')
   const target = path.resolve(directory)
   await mkdir(target) // Exclusive reservation: an existing directory is never adopted or overwritten.
@@ -147,11 +150,22 @@ export async function scaffoldPostgres({ directory, extensionId = 'sample.counte
     const kit = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
     const files = {
       'package.json': JSON.stringify({ name: extensionId, version: '1.0.0', private: true, type: 'module',
-        scripts: { typecheck: 'tsc --noEmit' }, dependencies: { '@mnstry/atelier': kit.version, postgres: '3.4.7' },
+        files: ['src','tsconfig.json'], scripts: { typecheck: 'tsc --noEmit' }, dependencies: { '@mnstry/atelier': kit.version, postgres: '3.4.7' },
         devDependencies: { typescript: '5.8.3', '@types/node': '22.18.0' }, engines: { node: '>=22.18.0 <23' } }, null, 2) + '\n',
       'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', noEmit: true, skipLibCheck: true }, include: ['src/**/*.ts'] }, null, 2) + '\n',
       'src/backend.ts': backend, 'migrations/001-initial.sql': migration, 'README.md': readme,
       '.gitignore': 'node_modules/\n.env\n.env.*\n!env.example\n', 'env.example': '# Backend secret reference only; do not commit credentials.\nEXTENSION_DATABASE_URL=\n',
+    }
+    if(profile!=='postgres-sql') {
+      const provider=sqlProjectFiles(profile,backend,migration)
+      Object.assign(files,provider.files)
+      const pkg=JSON.parse(files['package.json'])
+      delete pkg.dependencies.postgres
+      Object.assign(pkg.dependencies,provider.dependencies)
+      Object.assign(pkg.devDependencies,provider.devDependencies)
+      Object.assign(pkg.scripts,provider.scripts)
+      files['package.json']=JSON.stringify(pkg,null,2)+'\n'
+      files['README.md']=provider.instructions+'\n\n'+readme.replace('login and apply migrations/001-initial.sql with a separate migration role.','login and apply the reviewed native-profile migrations described above.')
     }
     const resultSchemas = {
       set: counterSchema, get: counterSchema,
@@ -173,44 +187,96 @@ export async function scaffoldPostgres({ directory, extensionId = 'sample.counte
     }
     const manifest = { schema: 'mnstry.extension-manifest/v1', extensionId, releaseVersion: '1.0.0', releaseDigest: '0'.repeat(64), protocol: 'mnstry.extension/v1',
       compatibility: { sdkMajor: 1, rootContracts: ['extension.result.record/v1'], hosts: ['web'] },
-      deployment: { profile: 'postgres-sql', bundleDigest: '0'.repeat(64), schemaDigest: '0'.repeat(64) },
+      deployment: { profile, bundleDigest: '0'.repeat(64), schemaDigest: '0'.repeat(64) },
       actions: ['set', 'get', 'export', 'delete', 'lookup'].map(action => ({ id: `counter.${action}`,
         effect: ['set', 'delete'].includes(action) ? 'write' : 'read', scope: 'member',
         inputSchemaRef: `schemas/counter-${action}-input.json`, outputSchemaRef: `schemas/counter-${action}-output.json`, timeoutMs: 10000 })),
       recovery: { lookupActionId: 'counter.lookup' }, permissions: { rootReads: [], rootWrites: ['extension.result.record/v1'], egress: [] }, surfaces: [],
       data: { classes: ['sample.counter'], retention: 'until-user-delete', exportVersion: 1, schemaVersion: '1', readableSchemaVersions: ['1'] } }
     const result = await sealProject(target, manifest)
-    return { directory: target, profile: 'postgres-sql', releaseDigest: result.releaseDigest, qualified: false }
+    return { directory: target, profile, releaseDigest: result.releaseDigest, qualified: false }
   } catch (error) {
     const current = await lstat(target).catch(() => null)
     if (current?.isDirectory() && current.dev === identity.dev && current.ino === identity.ino) await rm(target, { recursive: true })
     throw error
   }
 }
+async function boundedSourceBytes(file,expected) {
+  if(!expected.isFile()||expected.size>1024*1024)throw new Error('extension source file exceeds 1 MiB or is not regular')
+  const handle=await open(file,fsConstants.O_RDONLY|(fsConstants.O_NOFOLLOW??0)|(fsConstants.O_NONBLOCK??0))
+  try {
+    const actual=await handle.stat({bigint:true})
+    if(!actual.isFile()||actual.dev!==expected.dev||actual.ino!==expected.ino)throw new Error('extension source changed while opening')
+    const chunks=[];let length=0
+    for(;;) {
+      const buffer=Buffer.alloc(64*1024)
+      const {bytesRead}=await handle.read(buffer,0,buffer.length,null)
+      if(bytesRead===0)break
+      length+=bytesRead
+      if(length>1024*1024)throw new Error('extension source file exceeds 1 MiB')
+      chunks.push(buffer.subarray(0,bytesRead))
+    }
+    return Buffer.concat(chunks,length)
+  } finally { await handle.close() }
+}
 async function projectFiles(root, subpath) {
-  const result = {}
+  const result = new Map()
   const base = await realpath(root)
-  async function walk(relative) {
-    const file = path.join(base, relative)
-    const stat = await lstat(file)
-    if (stat.isSymbolicLink()) throw new Error('extension project symlinks are unsupported')
-    if (stat.isDirectory()) {
-      for (const entry of (await readdir(file)).sort()) await walk(path.join(relative, entry))
-    } else if (stat.isFile()) {
-      if (stat.size > 1024 * 1024) throw new Error('extension source file exceeds 1 MiB')
-      result[relative.split(path.sep).join('/')] = hash(await readFile(file))
+  const identity = stat => `${stat.dev}:${stat.ino}`
+  const metadata = new Set()
+  for(const name of [manifestName,packName]) {
+    try { const stat=await lstat(path.join(base,name),{bigint:true}); if(stat.isFile())metadata.add(identity(stat)) }
+    catch(error) { if(error.code!=='ENOENT')throw error }
+  }
+  async function checked(parts) {
+    let file=base, stat
+    for(const part of parts) {
+      const folded=part.toLowerCase()
+      if(!part||/[\\/\u0000-\u001f\u007f]/u.test(part)||part==='.'||part==='..'||folded==='node_modules'||
+        (part.startsWith('.')&&!['.gitignore','.gitattributes'].includes(folded)))
+        throw new Error('extension source contains an unsupported hidden or dependency path or filename')
+      file=path.join(file,part);stat=await lstat(file,{bigint:true})
+      if(stat.isSymbolicLink())throw new Error('extension project symlinks are unsupported')
+    }
+    if(await realpath(file)!==file)throw new Error('extension source path is outside its literal project path or has different casing')
+    if(stat.isFile()&&metadata.has(identity(stat)))throw new Error('extension source cannot include generated identity files')
+    return {file,stat,key:parts.join('/')}
+  }
+  async function walk(parts) {
+    const {file,stat,key}=await checked(parts)
+    if(stat.isDirectory()) {
+      for(const entry of (await readdir(file)).sort())await walk([...parts,entry])
+    } else if(stat.isFile()) {
+      if(result.has(key))throw new Error('extension source inputs contain a duplicate path')
+      const bytes=await boundedSourceBytes(file,stat)
+      if(identity((await checked(parts)).stat)!==identity(stat))throw new Error('extension source changed while reading')
+      result.set(key,hash(bytes))
     } else throw new Error('extension project requires regular files')
   }
-  for (const relative of subpath) await walk(relative)
-  return result
+  for(const relative of subpath)await walk(relative.split('/'))
+  return Object.fromEntries(result)
 }
 async function bundleFiles(target) {
   const paths=['package.json','tsconfig.json','src']
+  const packageFile=path.join(target,'package.json')
+  const packageStat=await lstat(packageFile,{bigint:true})
+  if(!packageStat.isFile()||packageStat.size>1024*1024)throw new Error('extension package must be a bounded regular file')
+  const pkg=JSON.parse((await boundedSourceBytes(packageFile,packageStat)).toString('utf8'))
+  if(pkg.files!==undefined){
+    if(!Array.isArray(pkg.files)||pkg.files.length>128)throw new Error('invalid extension source inputs')
+    for(const file of pkg.files){
+      if(typeof file!=='string'||!/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(file)||
+        file.split('/').some(part=>part==='.'||part==='..'||part.startsWith('.'))||
+        [manifestName,packName].includes(file.toLowerCase())||file.split('/').some(part=>part.toLowerCase()==='node_modules'))
+        throw new Error('extension source inputs require literal project-relative paths')
+      paths.push(file)
+    }
+  }
   for(const file of ['package-lock.json','npm-shrinkwrap.json','drizzle.config.ts','drizzle-introspect.config.ts','prisma.config.ts','prisma']) {
     try { await lstat(path.join(target,file)); paths.push(file) }
     catch(error) { if(error.code!=='ENOENT')throw error }
   }
-  return projectFiles(target,paths)
+  return projectFiles(target,[...new Set(paths)])
 }
 async function preflightPackSeal(target,manifest) {
   const file=path.join(target,packName)
@@ -309,3 +375,5 @@ async function validatePackProjection(target,manifest) {
   if(canonicalJson(pack.ext?.['mnstry.atelier']?.runtimeManifest)!==canonicalJson(await runtimeReference(target,manifest)))
     throw new Error('extension pack runtime reference is stale')
 }
+
+export function scaffoldPostgres(options) { return scaffoldSqlProject({...options,profile:'postgres-sql'}) }

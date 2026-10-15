@@ -87,7 +87,7 @@ export function defineAction(definition) {
 }
 export function defineExtension({ manifest, verifier, actions }) {
   const pinned = parseManifest(manifest)
-  if (pinned.releaseDigest !== releaseDigest(pinned) || pinned.actions.some(action => !actions[action.id]) ||
+  if (pinned.releaseDigest !== releaseDigest(pinned) || pinned.actions.some(action => !Object.hasOwn(actions,action.id)) ||
       Object.keys(actions).some(id => !pinned.actions.some(action => action.id === id)) || typeof verifier.consume !== 'function') throw new ExtensionError('invalid-input')
   const runtime = Object.freeze({ manifest: freezeJson(pinned), verifier: Object.freeze({ ...verifier, keys: new Map(verifier.keys) }),
     actions: Object.freeze(Object.fromEntries(Object.entries(actions).map(([id, action]) => [id, defineAction(action)]))) })
@@ -110,7 +110,7 @@ export function createExtensionHandler(handle) {
           claims.releaseDigest !== extension.verifier.releaseDigest || claims.rootWrites.length !== manifest.permissions.rootWrites.length ||
           claims.rootWrites.some(value => !manifest.permissions.rootWrites.includes(value))) return unauthorized()
       const declared = manifest.actions.find(action => action.id === claims.actionId)
-      const action = extension.actions[claims.actionId]
+      const action = Object.hasOwn(extension.actions,claims.actionId) ? extension.actions[claims.actionId] : null
       if (!declared || !action) return unauthorized()
       const body = request.body?.getReader()
       if (!body) throw new ExtensionError('invalid-input')
