@@ -40,7 +40,7 @@ export function canonicalJson(value) {
   return encoded
 }
 export function text(value, limit = 128) {
-  if (typeof value !== 'string' || !value.length || value.length > limit || /[\u0000-\u001f]/u.test(value)) return reject()
+  if (typeof value !== 'string' || !value.length || [...value].length > limit || /[\u0000-\u001f]/u.test(value)) return reject()
   canonicalJson(value)
   return value
 }
@@ -118,6 +118,7 @@ export function parseInstallationBinding(value) {
   return { ...value }
 }
 export function parseOperationReceipt(value) {
+  value = JSON.parse(canonicalJson(value))
   exact(value, ['operationId', 'state'], ['result', 'resultDigest'])
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(text(value.operationId)) || !['pending', 'admitted', 'succeeded', 'unknown', 'failed'].includes(value.state)) return reject()
   if (value.state === 'succeeded') {

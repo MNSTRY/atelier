@@ -125,3 +125,23 @@ test('generated runtime component reuses the existing non-executing pack identit
   await sealProject(project);assert.equal((await validateProject(project)).valid,true)
   assert.equal(JSON.parse(await readFile(file)).terms[0].id,'sample.counter:custom')
 })
+
+
+test('schema and runtime measure manifest string limits in Unicode code points', async t => {
+  const {project}=await directory(t);await scaffoldPostgres({directory:project})
+  const base=JSON.parse(await readFile(path.join(project,'extension.manifest.json')))
+  const schema=JSON.parse(await readFile(new URL('../contracts/atelier-extension-manifest.v1.schema.json',import.meta.url)))
+  const validate=new Ajv2020({strict:true}).compile(schema)
+  for (const [limit,assign] of [
+    [256,(m,v)=>{m.data.classes=[v]}],
+    [256,(m,v)=>{m.compatibility.rootContracts=[v]}],
+    ...['rootReads','rootWrites','egress'].map(key=>[256,(m,v)=>{m.permissions[key]=[v]}]),
+    [128,(m,v)=>{m.data.schemaVersion=v;m.data.readableSchemaVersions=[v]}],
+    [256,(m,v)=>{m.data.readableSchemaVersions.push(v)}],
+  ]) {
+    const valid=structuredClone(base);assign(valid,'😀'.repeat(limit))
+    assert.equal(validate(valid),true,JSON.stringify(validate.errors));assert.deepEqual(parseManifest(valid),valid)
+    const invalid=structuredClone(base);assign(invalid,'😀'.repeat(limit+1))
+    assert.equal(validate(invalid),false);assert.throws(()=>parseManifest(invalid))
+  }
+})

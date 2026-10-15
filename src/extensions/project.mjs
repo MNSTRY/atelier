@@ -102,7 +102,12 @@ const readme = `# Custom counter extension
 This project owns its custom data. Atelier generated files only; no account, database,
 process, listener, deployment or root installation was created.
 
-1. Run npm install and npm run typecheck. Keep the generated lockfile.
+1. Install the SDK and run npm run typecheck. Keep the generated lockfile.
+   The candidate SDK 0.2.0-alpha.15 is unpublished. Until its release, run
+   npm pack --ignore-scripts in the reviewed Atelier checkout and install its
+   resulting tarball here with npm install /absolute/path/to/mnstry-atelier-0.2.0-alpha.15.tgz.
+   After reviewing that dependency edit, run atelier extension seal --directory .
+   Once the pinned SDK version is published, ordinary npm install can resolve it.
 2. Select a customer-owned PostgreSQL 17 database. Create a restricted extension_app
    login and apply migrations/001-initial.sql with a separate migration role.
    Keep its DSN in your backend secret store. Do not use the root runtime database.
