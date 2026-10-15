@@ -195,7 +195,8 @@ export async function sealProject(directory, initialManifest) {
   const target = path.resolve(directory)
   const manifestFile = path.join(target, manifestName)
   if (!initialManifest && !(await lstat(manifestFile)).isFile()) throw new Error('extension manifest must be a regular file')
-  const manifest = parseManifest(initialManifest ?? JSON.parse(await readFile(manifestFile, 'utf8')))
+  const originalManifest = initialManifest ? null : await readFile(manifestFile, 'utf8')
+  const manifest = parseManifest(initialManifest ?? JSON.parse(originalManifest))
   const bundle = await projectFiles(target, ['package.json', 'src'])
   const schemas = await projectFiles(target, ['schemas', 'migrations'])
   manifest.deployment.bundleDigest = hash(canonicalJson(bundle)); manifest.deployment.schemaDigest = hash(canonicalJson(schemas))
@@ -209,7 +210,11 @@ export async function sealProject(directory, initialManifest) {
     if (initialManifest) {
       // Creation keeps an exclusive manifest reservation as well.
       await writeFile(manifestFile, await readFile(temporary), { flag: 'wx' })
-    } else await rename(temporary, manifestFile)
+    } else {
+      if (!(await lstat(manifestFile)).isFile() || await readFile(manifestFile, 'utf8') !== originalManifest)
+        throw new Error('extension manifest changed during sealing')
+      await rename(temporary, manifestFile)
+    }
   } finally { await rm(temporary, { force: true }) }
   return manifest
 }

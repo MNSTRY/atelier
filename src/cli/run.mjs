@@ -261,6 +261,12 @@ Writes a minimal <file>.kg.json sidecar next to every .html, .pdf and .docx docu
   ${c} readiness export --dry-run [--project ./atelier.project.json]
 
 Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet drafts stay in ignored .atelier-local/readiness/ unless explicitly materialized by a reviewed future flow.`,
+    extension: `Usage:
+  ${c} extension init --directory NEW_PATH [--id sample.counter] [--profile postgres-sql] [--json]
+  ${c} extension validate --directory PATH [--json]
+  ${c} extension seal --directory PATH [--json]
+
+Generate a customer-owned Postgres project or validate/seal its source digests. Init requires a new directory. These commands create no account, database, process, deployment or installation. See docs/extensions.md.`,
     'extension-pack': `Usage:
   ${c} extension-pack validate [--json] [--project ./atelier.project.json]
   ${c} extension-pack list [--json] [--project ./atelier.project.json]
@@ -380,7 +386,7 @@ export async function runCli({
 
   const [command, ...rest] = normalized.args
   if (rest[0] === '--help' || rest[0] === '-h') {
-    stdout(buildCommandHelpText(command, brand))
+    stdout(buildCommandHelpText(command.startsWith('extension:') ? 'extension' : command, brand))
     return 0
   }
   const target = commandMap.get(command)
