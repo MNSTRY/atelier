@@ -35,10 +35,10 @@ A valid seal identifies bytes; it proves neither publisher trust nor deployment.
 Keep the package lockfile after installation. Lost write replies require explicit
 lookup/recovery; neither client silently retries or refreshes a generation.
 
-Scaffold profiles include postgres-sql, drizzle-db-first, drizzle-code-first and
-prisma-7-postgres. Drizzle retains its native query builder and transaction API;
-Prisma retains its native generated client and pg adapter. Convex remains pending,
-and Prisma 8 remains an unqualified separate experiment. Scaffolding, synthetic
+Scaffold profiles include postgres-sql, drizzle-db-first, drizzle-code-first,
+prisma-7-postgres and convex-native. Drizzle retains its native query builder and transaction API;
+Prisma retains its native generated client and pg adapter. Convex uses the native
+starter described below. Prisma 8 remains an unqualified separate experiment. Scaffolding, synthetic
 protocol tests, real provider tests, actual supported hosts, public release and
 customer acceptance carry separate evidence. Private runtime bindings are not
 distributed in this package.
@@ -106,3 +106,45 @@ contract can require a different schema and narrower bounds. Author that result
 explicitly, update its action output schema, review and reseal it, and request the
 host's separate permission before recording it. Declaring a root-write permission
 alone does not make an arbitrary action result compatible.
+
+## Native Convex starter
+
+Use `atelier extension init --profile convex-native --directory ./custom-extension`
+for a TypeScript project pinned to Convex 1.46.0. This optional adapter uses native
+Convex schema/functions, indexes and OCC transactions. It installs no SQL driver
+and adds no Convex dependency to Atelier itself. Import native backend helpers
+from `@mnstry/atelier/extensions/convex`; browser clients use the same portable
+`/extensions/client` interface as the SQL profiles.
+
+The HTTP action verifies the original Root delegation and consumes admission
+once. It then passes that token and the canonical payload to an **internal
+mutation**, which verifies them again. A serialized scope or an `admitted`
+boolean is not authority. Native writes and the indexed operation result commit
+in one mutation. Output validators refuse invalid values and preserve canonical
+result bytes, so response and durable lookup cannot diverge. Root callbacks and provider commits remain separate. A lost
+reply requires a new admitted lookup operation, without repeating the write.
+No ordinary public mutation/query exposes the generated member tables. `GET /health`
+reports only the immutable release/schema health envelope after native index checks.
+
+The customer owns its Convex project and deployment. Set the public verification
+keys, issuer, exact invocation audience, opaque installation reference and Root
+admission origin in that deployment. Keep admin keys and member identities out
+of the browser and runtime request. HTTPS is required by default. The explicit
+local test option additionally requires both provider deployment URLs to be
+literal loopback addresses; Convex can set `NODE_ENV` to production even locally.
+
+The versioned native schema is `migrations/001-schema.ts`; `convex/schema.ts`
+re-exports it. The existing schema digest binds those migration bytes. Native
+source and generated code are sealed as bundle inputs. Generate provider code,
+strictly typecheck, seal, validate and export the bundle; validate again after
+deployment. Any changed generated input requires resealing and requalification.
+Atelier's CLI performs no provider login, process startup or deployment.
+
+The sample supports scoped set/get/export/delete and durable lookup. Deletion
+atomically clears live sample rows and older operation results for up to 500
+operations; larger histories refuse and need an explicit paginated erasure design.
+Backups remain subject to the operator's retention policy. In-flight admitted
+mutations may finish after disable. Public reactive feeds, revocation on feed
+reconnect, schema backfills, portability and complete host/privacy acceptance
+remain unqualified. The native starter's provider proof does not enable a
+receiving host's Convex profile or establish a complete customer journey.
