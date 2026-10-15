@@ -1,5 +1,7 @@
 # MNSTRY Atelier
 
+The `0.2.0-alpha.15` candidate adds an [extension SDK and Postgres project workflow](docs/extensions.md). Publication and native host qualification are separate release gates.
+
 **Turn a repository into a living, governed system.**
 
 Important bodies of work often begin as files: methods, research, programs,

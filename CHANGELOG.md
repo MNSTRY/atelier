@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0-alpha.15
+
+- Add portable typed extension contracts, authenticated host clients, signed server admission and native Postgres transaction/receipt helpers under the existing package.
+- Add `atelier extension init|validate|seal` for a customer-owned Postgres TypeScript project. Generation and sealing do not deploy or authorize an installation. Drizzle, Prisma and Convex integrations remain pending.
+
 ## 0.2.0-alpha.14
 
 - The Obsidian maintenance service's log no longer gets a `status-project-loaded` line for every failure and recovery, or every slow load, of the plugin's status read while its loads come less than a minute apart and fail, or are slow, every other load or every third. Before, any load that answered ended a row of failures, and any load in time a row of slow loads. Now a row of failures ends only at a load that answers a minute or more after its last failure, with a line that names how many failures it held, and a row of slow loads only at a load in time a minute or more after the last slow one. Such a loader writes one row, less and less often. While a project is kept, it is loaded again every two and a half minutes, so there a row of failures ends at the next reload that answers. A loader that answers at least one reload between two failures still writes each failure and the load that ends its row, and one that fails at every reload and answers only at its retry keeps one row. Each slow load is still written there. A load at every request is now written too, when each load names the files it started over. That happens while a file that decides the views vouches for nothing, or while loads never agree, and before it showed only as a growing count. A load after which nothing is kept, though it named the files it started over, is written from the second in a row, on the same doubling row (`notKept`, with `vouched`); a load that named other files, as after a new confirmed selection, neither counts nor ends that row. `statusLoads` in the status document counts these loads as `notKept`, one at a start and one after each change on a healthy service.
