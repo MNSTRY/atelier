@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.14",
+  "version": "0.2.0-alpha.15",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
@@ -146,7 +146,12 @@
     "./ingestion/jev": "./src/ingestion/optional/jev/composition-binding.mjs",
     "./ingestion/jev/judgments": "./src/ingestion/optional/jev/judgments.mjs",
     "./ingestion/graphify": "./src/ingestion/optional/graphify/composition-binding.mjs",
-    "./ingestion/lightrag": "./src/ingestion/optional/lightrag/composition-binding.mjs"
+    "./ingestion/lightrag": "./src/ingestion/optional/lightrag/composition-binding.mjs",
+    "./extensions": "./src/extensions/contracts.mjs",
+    "./extensions/client": "./src/extensions/client.mjs",
+    "./extensions/server": "./src/extensions/server.mjs",
+    "./extensions/postgres": "./src/extensions/postgres.mjs",
+    "./contracts/atelier-extension-manifest.v1.schema.json": "./contracts/atelier-extension-manifest.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

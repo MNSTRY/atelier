@@ -1,0 +1,412 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mnstry.extension-manifest/v1"
+    },
+    "extensionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        }
+      ]
+    },
+    "releaseVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        }
+      ]
+    },
+    "releaseDigest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-f0-9]{64}$",
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        }
+      ]
+    },
+    "protocol": {
+      "const": "mnstry.extension/v1"
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sdkMajor": {
+          "const": 1
+        },
+        "rootContracts": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
+          }
+        },
+        "hosts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "web",
+              "native"
+            ]
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "sdkMajor",
+        "rootContracts",
+        "hosts"
+      ]
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "enum": [
+            "postgres-sql",
+            "drizzle-db-first",
+            "drizzle-code-first",
+            "prisma-7-postgres",
+            "prisma-8-postgres-experimental",
+            "convex-native"
+          ]
+        },
+        "bundleDigest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          ]
+        },
+        "schemaDigest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "profile",
+        "bundleDigest",
+        "schemaDigest"
+      ]
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+            "not": {
+              "pattern": "^(?:lifecycle|installation|extension)\\."
+            },
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
+          },
+          "effect": {
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "scope": {
+            "enum": [
+              "member",
+              "tenant"
+            ]
+          },
+          "inputSchemaRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^schemas/[a-zA-Z0-9._-]+\\.json$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
+          },
+          "outputSchemaRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^schemas/[a-zA-Z0-9._-]+\\.json$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30000
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0
+          }
+        },
+        "required": [
+          "id",
+          "effect",
+          "scope",
+          "inputSchemaRef",
+          "outputSchemaRef",
+          "timeoutMs"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lookupActionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "lookupActionId"
+      ]
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rootReads": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
+          }
+        },
+        "rootWrites": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
+          }
+        },
+        "egress": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "rootReads",
+        "rootWrites",
+        "egress"
+      ]
+    },
+    "surfaces": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
+          },
+          "compositionDigest": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
+          },
+          "actionIds": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0
+          }
+        },
+        "required": [
+          "id",
+          "compositionDigest",
+          "actionIds"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "classes": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
+          }
+        },
+        "retention": {
+          "const": "until-user-delete"
+        },
+        "exportVersion": {
+          "const": 1
+        },
+        "schemaVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "readableSchemaVersions": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "classes",
+        "retention",
+        "exportVersion",
+        "schemaVersion",
+        "readableSchemaVersions"
+      ]
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$",
+      "maxLength": 128
+    },
+    "ext": {
+      "type": "object",
+      "maxProperties": 0
+    }
+  },
+  "required": [
+    "schema",
+    "extensionId",
+    "releaseVersion",
+    "releaseDigest",
+    "protocol",
+    "compatibility",
+    "deployment",
+    "actions",
+    "permissions",
+    "surfaces",
+    "data"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-extension-manifest.v1.schema.json",
+  "$comment": "contract revision 1.0.0; Runtime parseManifest additionally enforces total byte/depth limits, unique action/surface IDs, declared surface action references, recovery read/member binding, current readable schema inclusion and well-formed Unicode. Hosts must apply it after JSON Schema validation.",
+  "title": "Portable database extension manifest"
+}
