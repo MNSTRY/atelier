@@ -1,4 +1,4 @@
-import { canonicalJson, ExtensionError } from './contracts.mjs'
+import { canonicalJson, ExtensionError, text } from './contracts.mjs'
 
 export async function assertApplicationRole(sql) {
   const [role] = await sql`SELECT r.rolsuper, r.rolbypassrls,
@@ -15,4 +15,8 @@ export function boundedSqlResult(value) {
   const encoded=canonicalJson(value)
   if(Buffer.byteLength(encoded)>60*1024)throw new ExtensionError('invalid-input')
   return JSON.parse(encoded)
+}
+
+export function assertSqlOperationId(value) {
+  if(!/^[A-Za-z0-9_-]{16,128}$/.test(text(value)))throw new ExtensionError('invalid-input')
 }

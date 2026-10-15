@@ -1,7 +1,7 @@
 import { ExtensionError } from './contracts.mjs'
 import { assertVerifiedScope, digest } from './server.mjs'
 
-import { assertApplicationRole, boundedSqlResult } from './sql-scope.mjs'
+import { assertApplicationRole, boundedSqlResult, assertSqlOperationId } from './sql-scope.mjs'
 
 // The callback receives the provider's native transaction, retaining its query APIs.
 export async function withPostgresScope(database, scope, run) {
@@ -42,6 +42,8 @@ export async function oncePostgresOperation(database, scope, input, run) {
   })
 }
 export async function lookupPostgresOperation(database, scope, operationId) {
+  assertVerifiedScope(scope)
+  assertSqlOperationId(operationId)
   return withPostgresScope(database, scope, async sql => {
     const [row] = await sql`SELECT operation_id,action_id,generation::text,release_digest,payload_digest,result
       FROM extension_data.operations WHERE installation_id=${scope.installationId} AND tenant_ref=${scope.tenantRef}

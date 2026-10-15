@@ -137,7 +137,7 @@ Run atelier extension validate --directory . after edits. Run atelier extension 
 Sealing records bytes; it does not establish trust, deployment, health or qualification.
 The sample deletes its live rows and earlier provider receipts; backup retention remains
 the operator's responsibility. Provider qualification and actual Web/native acceptance
-are separate from scaffolding. Drizzle, Prisma and Convex profiles remain pending.
+are separate from scaffolding. Drizzle and Prisma have native project profiles. Convex remains pending.
 `
 export async function scaffoldSqlProject({ directory, extensionId = 'sample.counter', profile = 'postgres-sql' }) {
   if(!['postgres-sql','drizzle-db-first','drizzle-code-first','prisma-7-postgres'].includes(profile))throw new Error('unsupported SQL profile')
@@ -165,7 +165,7 @@ export async function scaffoldSqlProject({ directory, extensionId = 'sample.coun
       Object.assign(pkg.devDependencies,provider.devDependencies)
       Object.assign(pkg.scripts,provider.scripts)
       files['package.json']=JSON.stringify(pkg,null,2)+'\n'
-      files['README.md']=provider.instructions+'\n\n'+readme.replace('Drizzle, Prisma and Convex profiles remain pending.','Convex remains pending; the native SQL profile above requires its own qualification.')
+      files['README.md']=provider.instructions+'\n\n'+readme.replace('login and apply migrations/001-initial.sql with a separate migration role.','login and apply the reviewed native-profile migrations described above.')
     }
     const resultSchemas = {
       set: counterSchema, get: counterSchema,

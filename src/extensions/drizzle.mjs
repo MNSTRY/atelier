@@ -13,17 +13,17 @@ function bridge(database, sqlTag) {
     return callback(query)
   })} }
 }
-export function withDrizzleScope(database, scope, sqlTag, run) {
+export async function withDrizzleScope(database, scope, sqlTag, run) {
   if(typeof run!=='function')throw new ExtensionError('invalid-input')
   const native=bridge(database,sqlTag)
   return withPostgresScope(native.database,scope,query=>run(native.transactions.get(query)))
 }
-export function onceDrizzleOperation(database, scope, input, sqlTag, run) {
+export async function onceDrizzleOperation(database, scope, input, sqlTag, run) {
   if(typeof run!=='function')throw new ExtensionError('invalid-input')
   const native=bridge(database,sqlTag)
   return oncePostgresOperation(native.database,scope,input,query=>run(native.transactions.get(query)))
 }
-export function lookupDrizzleOperation(database,scope,sqlTag,operationId) {
+export async function lookupDrizzleOperation(database,scope,sqlTag,operationId) {
   return lookupPostgresOperation(bridge(database,sqlTag).database,scope,operationId)
 }
 export async function drizzleHealth(driver, profile) {

@@ -181,6 +181,14 @@ test('offline ORM ports preserve native transactions, stored results, conflicts 
     row.payload_digest='f'.repeat(64);assert.equal((await invoke('counter.set',{value:4})).status,409);assert.equal(writes,1);row.payload_digest=digest({value:4})
     const proof=await invoke('counter.lookup',{operationId:original},'operation_lookup_1234567')
     assert.equal(proof.status,200);assert.equal(proof.body.result.operationId,original);assert.equal(proof.body.result.actionId,'counter.set');assert.equal(proof.body.result.payloadDigest,digest({value:4}));assert.deepEqual(proof.body.result.result,first.body.result)
+    assert.equal((await invoke('counter.lookup',{operationId:'bad'},'operation_invalid_12345')).status,409)
     assert.equal(transactions,4)
   })
+})
+
+
+test('Drizzle helpers always return promises for invalid direct-call arguments',async()=>{
+  for(const invoke of [()=>withDrizzleScope(null,null,null,null),()=>onceDrizzleOperation(null,null,null,null,null),()=>lookupDrizzleOperation(null,null,null,null)]){
+    let promise;assert.doesNotThrow(()=>{promise=invoke()});assert.ok(promise instanceof Promise);await assert.rejects(promise)
+  }
 })

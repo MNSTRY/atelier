@@ -1,6 +1,6 @@
 import { ExtensionError } from './contracts.mjs'
 import { assertVerifiedScope, digest } from './server.mjs'
-import { assertApplicationRole, boundedSqlResult } from './sql-scope.mjs'
+import { assertApplicationRole, boundedSqlResult, assertSqlOperationId } from './sql-scope.mjs'
 
 export async function withPrismaScope(database, scope, run) {
   assertVerifiedScope(scope)
@@ -39,6 +39,8 @@ export async function oncePrismaOperation(database, scope, input, run) {
   })
 }
 export async function lookupPrismaOperation(database, scope, operationId) {
+  assertVerifiedScope(scope)
+  assertSqlOperationId(operationId)
   return withPrismaScope(database, scope, async tx => {
     const [row] = await tx.$queryRaw`SELECT operation_id,action_id,generation::text,release_digest,payload_digest,result
       FROM extension_data.operations WHERE installation_id=${scope.installationId} AND tenant_ref=${scope.tenantRef}
