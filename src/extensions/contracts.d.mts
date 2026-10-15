@@ -2,14 +2,16 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export interface InstallationBinding { installationId: string; generation: string; releaseDigest: string }
 export interface Invocation extends InstallationBinding { actionId: string; idempotencyKey: string; input: Json }
 export interface OperationReceipt { operationId: string; state: 'pending' | 'admitted' | 'succeeded' | 'unknown' | 'failed'; result?: Json; resultDigest?: string }
-export interface ActionManifest { id: string; effect: 'read' | 'write'; scope: 'member' | 'tenant'; inputSchemaRef: string; outputSchemaRef: string; timeoutMs: number }
-export interface ExtensionManifest {
+export interface ReservedExtensionFields { ext?: Record<string, never> }
+export interface ActionManifest extends ReservedExtensionFields { id: string; effect: 'read' | 'write'; scope: 'member' | 'tenant'; inputSchemaRef: string; outputSchemaRef: string; timeoutMs: number }
+export interface ExtensionManifest extends ReservedExtensionFields {
+  contractVersion?: string;
   schema: 'mnstry.extension-manifest/v1'; extensionId: string; releaseVersion: string; releaseDigest: string; protocol: 'mnstry.extension/v1';
-  compatibility: { sdkMajor: 1; rootContracts: string[]; hosts: ('web' | 'native')[] };
-  deployment: { profile: string; bundleDigest: string; schemaDigest: string }; actions: ActionManifest[];
-  recovery?: { lookupActionId: string }; permissions: { rootReads: string[]; rootWrites: string[]; egress: string[] };
-  surfaces: { id: string; compositionDigest: string; actionIds: string[] }[];
-  data: { classes: string[]; retention: 'until-user-delete'; exportVersion: 1; schemaVersion: string; readableSchemaVersions: string[] }
+  compatibility: ReservedExtensionFields & { sdkMajor: 1; rootContracts: string[]; hosts: ('web' | 'native')[] };
+  deployment: ReservedExtensionFields & { profile: string; bundleDigest: string; schemaDigest: string }; actions: ActionManifest[];
+  recovery?: ReservedExtensionFields & { lookupActionId: string }; permissions: ReservedExtensionFields & { rootReads: string[]; rootWrites: string[]; egress: string[] };
+  surfaces: (ReservedExtensionFields & { id: string; compositionDigest: string; actionIds: string[] })[];
+  data: ReservedExtensionFields & { classes: string[]; retention: 'until-user-delete'; exportVersion: 1; schemaVersion: string; readableSchemaVersions: string[] }
 }
 export class ExtensionError extends Error { readonly code: string; readonly status: number; constructor(code: string, status?: number) }
 export function canonicalJson(value: unknown): string

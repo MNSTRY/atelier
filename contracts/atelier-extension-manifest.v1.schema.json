@@ -9,18 +9,34 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        }
+      ]
     },
     "releaseVersion": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 128
+      "maxLength": 128,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        }
+      ]
     },
     "releaseDigest": {
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
-      "pattern": "^[a-f0-9]{64}$"
+      "pattern": "^[a-f0-9]{64}$",
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        }
+      ]
     },
     "protocol": {
       "const": "mnstry.extension/v1"
@@ -39,7 +55,8 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
           }
         },
         "hosts": {
@@ -53,6 +70,10 @@
               "native"
             ]
           }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       },
       "required": [
@@ -79,13 +100,27 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "pattern": "^[a-f0-9]{64}$"
+          "pattern": "^[a-f0-9]{64}$",
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          ]
         },
         "schemaDigest": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "pattern": "^[a-f0-9]{64}$"
+          "pattern": "^[a-f0-9]{64}$",
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       },
       "required": [
@@ -106,7 +141,15 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+            "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+            "not": {
+              "pattern": "^(?:lifecycle|installation|extension)\\."
+            },
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
           },
           "effect": {
             "enum": [
@@ -124,18 +167,32 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 256,
-            "pattern": "^schemas/[a-zA-Z0-9._-]+\\.json$"
+            "pattern": "^schemas/[a-zA-Z0-9._-]+\\.json$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
           },
           "outputSchemaRef": {
             "type": "string",
             "minLength": 1,
             "maxLength": 256,
-            "pattern": "^schemas/[a-zA-Z0-9._-]+\\.json$"
+            "pattern": "^schemas/[a-zA-Z0-9._-]+\\.json$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
           },
           "timeoutMs": {
             "type": "integer",
             "minimum": 1,
             "maximum": 30000
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0
           }
         },
         "required": [
@@ -146,7 +203,8 @@
           "outputSchemaRef",
           "timeoutMs"
         ]
-      }
+      },
+      "uniqueItems": true
     },
     "recovery": {
       "type": "object",
@@ -156,7 +214,16 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
-          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       },
       "required": [
@@ -174,7 +241,8 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
           }
         },
         "rootWrites": {
@@ -184,7 +252,8 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
           }
         },
         "egress": {
@@ -194,8 +263,13 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
           }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       },
       "required": [
@@ -215,13 +289,23 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+            "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
           },
           "compositionDigest": {
             "type": "string",
             "minLength": 1,
             "maxLength": 64,
-            "pattern": "^[a-f0-9]{64}$"
+            "pattern": "^[a-f0-9]{64}$",
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000-\\u001f]*$"
+              }
+            ]
           },
           "actionIds": {
             "type": "array",
@@ -230,8 +314,13 @@
             "items": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 256
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f]*$"
             }
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0
           }
         },
         "required": [
@@ -239,7 +328,8 @@
           "compositionDigest",
           "actionIds"
         ]
-      }
+      },
+      "uniqueItems": true
     },
     "data": {
       "type": "object",
@@ -252,7 +342,8 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
           }
         },
         "retention": {
@@ -264,7 +355,8 @@
         "schemaVersion": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f]*$"
         },
         "readableSchemaVersions": {
           "type": "array",
@@ -273,8 +365,13 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f]*$"
           }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       },
       "required": [
@@ -284,6 +381,15 @@
         "schemaVersion",
         "readableSchemaVersions"
       ]
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$",
+      "maxLength": 128
+    },
+    "ext": {
+      "type": "object",
+      "maxProperties": 0
     }
   },
   "required": [
@@ -300,5 +406,7 @@
     "data"
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.ai/contracts/atelier-extension-manifest.v1.schema.json"
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-extension-manifest.v1.schema.json",
+  "$comment": "contract revision 1.0.0; Runtime parseManifest additionally enforces total byte/depth limits, unique action/surface IDs, declared surface action references, recovery read/member binding, current readable schema inclusion and well-formed Unicode. Hosts must apply it after JSON Schema validation.",
+  "title": "Portable database extension manifest"
 }

@@ -41,7 +41,10 @@ export async function oncePostgresOperation(database, scope, input, run) {
     if (!row || row.action_id !== scope.actionId || row.generation !== scope.generation ||
         row.release_digest !== scope.releaseDigest || row.payload_digest !== scope.payloadDigest) throw new ExtensionError('idempotency-conflict', 409)
     if (row.completed) return row.result
-    const result = JSON.parse(canonicalJson(await run(sql)))
+    const encoded = canonicalJson(await run(sql))
+    // Leave room for the original-operation proof inside the 64 KiB action reply.
+    if (Buffer.byteLength(encoded) > 60 * 1024) throw new ExtensionError('invalid-input')
+    const result = JSON.parse(encoded)
     await sql`UPDATE extension_data.operations SET completed=true,result=${sql.json(result)}
       WHERE installation_id=${scope.installationId} AND tenant_ref=${scope.tenantRef}
         AND subject_ref=${scope.subjectRef} AND operation_id=${scope.operationId}`

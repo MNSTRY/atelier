@@ -21,7 +21,13 @@ The Postgres driver is installed in the generated project, not in Atelier.
 Studio installation and member permission are separate. An authenticated host
 owns membership, consent and product access. The manifest declares requested
 capabilities; it grants none. Root-bound results use a separate authorized action.
-The extension-pack loader remains non-executing and is separate from these APIs.
+The generated `atelier.extension-pack.json` reuses Atelier's canonical pack identity,
+loader and lock adoption. Its namespaced `runtimeManifest` field pins this component's
+manifest file and release digest. The runtime manifest describes the backend protocol;
+it does not create another pack identity. Declare the emitted pack in your existing
+project and adopt it with the normal validation/lock workflow. Pack loading remains
+non-executing and grants no backend or root authority. Standalone hosts can consume
+the portable SDK without an Atelier project.
 
 Use `extension validate --directory ...` to check source/schema/release digests.
 After reviewing an edit, use `extension seal --directory ...` to update them.
@@ -34,3 +40,5 @@ native integrations and are not advertised as qualified. Scaffolding, synthetic
 protocol tests, real provider tests, actual supported hosts, public release and
 customer acceptance carry separate evidence. Private runtime bindings are not
 distributed in this package.
+
+The runtime parser is required after JSON Schema validation: it enforces unique IDs and cross-references, recovery scope/effect, current-schema readability, Unicode and total JSON bounds. Native Postgres operation results are capped at 60 KiB inside the transaction, leaving room for the original-operation recovery proof within the 64 KiB action output bound. Every failure after successful admission remains an uncertain operation; inspect its durable receipt before deciding what to do next.

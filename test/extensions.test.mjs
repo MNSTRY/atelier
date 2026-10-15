@@ -22,7 +22,7 @@ function signed(claims, key, kid = 'synthetic-key') {
   const data = `${header}.${body}`
   return `${data}.${sign('sha256', Buffer.from(data), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`
 }
-function runtime({ consume, run, timeoutMs = 10000 } = {}) {
+function runtime({ consume, run, output = value => value, timeoutMs = 10000 } = {}) {
   const keys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
   const m = manifest(); m.actions[0].timeoutMs = timeoutMs; m.releaseDigest = releaseDigest(m)
   const now = Math.floor(Date.now() / 1000)
@@ -33,7 +33,7 @@ function runtime({ consume, run, timeoutMs = 10000 } = {}) {
   let calls = 0
   const extension = defineExtension({ manifest: m, verifier: { issuer: claims.iss, audience: claims.aud, keys: new Map([['synthetic-key', keys.publicKey]]),
     installationId: binding.installationId, releaseDigest: m.releaseDigest, consume: consume ?? (async () => { calls++; return true }) },
-    actions: { 'counter.set': defineAction({ input: value => { assert.deepEqual(value, { value: 4 }); return value }, output: value => value,
+    actions: { 'counter.set': defineAction({ input: value => { assert.deepEqual(value, { value: 4 }); return value }, output,
       run: run ?? (async ({ scope }) => { assertVerifiedScope(scope); return { accepted: true } }) }) } })
   const handler = createExtensionHandler(extension)
   const request = (change = {}, input = { value: 4 }) => handler(new Request(claims.aud, { method: 'POST', headers: {
@@ -142,4 +142,38 @@ test('wire JSON bounds size/depth and refuses hidden object state', () => {
   let deep = null; for (let n = 0; n < 18; n++) deep = { value: deep }
   assert.throws(() => canonicalJson(deep), ExtensionError)
   assert.throws(() => canonicalJson(Object.defineProperty({}, 'hidden', { value: 'non-json-state' })), ExtensionError)
+})
+
+
+test('post-admission failures and invalid output remain uncertain without action-selected statuses', async () => {
+  for (const run of [async () => { throw new Error('simulated lost COMMIT reply') },
+    async () => { throw new ExtensionError('forbidden', 200) },
+    async () => 'x'.repeat(65537), async () => 'x'.repeat(131073)]) {
+    const r = runtime({ run }); const response = await r.request()
+    assert.equal(response.status, 409); assert.deepEqual(await response.json(), { code: 'operation-unknown' })
+  }
+  let completed = false
+  const r = runtime({ run: async () => { completed = true; return { accepted:true } },
+    output: () => { throw new ExtensionError('invalid-input') } })
+  const response = await r.request(); assert.equal(completed,true)
+  assert.equal(response.status,409); assert.equal((await response.json()).code,'operation-unknown')
+})
+test('client and direct transport reject dot segments before any credentialed host access', async () => {
+  let called = 0
+  const transport = createHttpHostTransport(async () => { called++; throw new Error('must not fetch') })
+  const client = createExtensionClient(transport)
+  for (const id of ['.', '..', '%2e%2e', 'x/../y', 'x\\..\\y']) {
+    await assert.rejects(transport.getInstallation(id), ExtensionError)
+    await assert.rejects(client.getInstallation(id), ExtensionError)
+    await assert.rejects(transport.invoke({ ...binding, actionId:id, input:{}, idempotencyKey:'key' }), ExtensionError)
+    await assert.rejects(client.invoke(binding,id,{},'key'), ExtensionError)
+    await assert.rejects(transport.recordResult(id), ExtensionError)
+  }
+  assert.equal(called,0)
+})
+test('installation binding rejects accessors without invoking them and numeric generations refuse admission', async () => {
+  let called = false
+  assert.throws(() => parseInstallationBinding({ ...binding, get generation() { called=true; return '1' } }),ExtensionError)
+  assert.equal(called,false)
+  const r=runtime(); assert.equal((await r.request({generation:1})).status,401)
 })

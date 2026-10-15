@@ -44,7 +44,7 @@ function verifiedClaims(delegation, options) {
         claims.exp <= now || claims.exp <= claims.iat || claims.exp - claims.iat > 60) return unauthorized()
     for (const field of ['jti', 'installationId', 'operationId', 'tenantRef', 'subjectRef']) if (!opaque(claims[field])) return unauthorized()
     text(claims.actionId)
-    if (!/^[1-9][0-9]{0,18}$/.test(claims.generation) || BigInt(claims.generation) > 9223372036854775807n ||
+    if (typeof claims.generation !== 'string' || typeof claims.releaseDigest !== 'string' || typeof claims.payloadDigest !== 'string' || !/^[1-9][0-9]{0,18}$/.test(claims.generation) || BigInt(claims.generation) > 9223372036854775807n ||
         !/^[a-f0-9]{64}$/.test(claims.releaseDigest) || !/^[a-f0-9]{64}$/.test(claims.payloadDigest) ||
         !Array.isArray(claims.rootWrites) || claims.rootWrites.length > 64 || new Set(claims.rootWrites).size !== claims.rootWrites.length) return unauthorized()
     claims.rootWrites.forEach(value => text(value, 256))
@@ -99,6 +99,7 @@ export function createExtensionHandler(handle) {
   const extension = extensionDefinitions.get(handle)
   if (!extension) throw new ExtensionError('invalid-input')
   return async request => {
+    let admitted = false
     try {
       if (request.method !== 'POST' || request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return new Response(null, { status: 415 })
       const delegation = request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_.-]+)$/)?.[1]
@@ -130,6 +131,7 @@ export function createExtensionHandler(handle) {
       input = action.input(input)
       if (digest(input) !== claims.payloadDigest) throw new ExtensionError('invalid-input')
       if (!await extension.verifier.consume(claims, delegation)) throw new ExtensionError('forbidden', 403)
+      admitted = true
       const scope = Object.freeze({ installationId: claims.installationId, generation: claims.generation, releaseDigest: claims.releaseDigest,
         operationId: claims.operationId, actionId: claims.actionId, payloadDigest: claims.payloadDigest,
         tenantRef: claims.tenantRef, subjectRef: claims.subjectRef, rootWrites: claims.rootWrites })
@@ -148,7 +150,9 @@ export function createExtensionHandler(handle) {
       if (Buffer.byteLength(canonicalJson(result)) > 65536) throw new ExtensionError('operation-unknown', 409)
       return Response.json({ operationId: claims.operationId, state: 'succeeded', result, resultDigest: digest(result) }, { headers: { 'cache-control': 'no-store' } })
     } catch (error) {
-      return Response.json({ code: error instanceof ExtensionError ? error.code : 'unavailable' }, { status: error instanceof ExtensionError ? error.status : 503,
+      const statuses = { 'invalid-input': 400, unauthorized: 401, forbidden: 403, 'operation-unknown': 409, unavailable: 503 }
+      const code = admitted ? 'operation-unknown' : error instanceof ExtensionError && Object.hasOwn(statuses, error.code) ? error.code : 'unavailable'
+      return Response.json({ code }, { status: statuses[code],
         headers: { 'cache-control': 'no-store' } })
     }
   }

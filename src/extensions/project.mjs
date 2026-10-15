@@ -4,9 +4,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, parseManifest } from './contracts.mjs'
 import { releaseDigest } from './server.mjs'
+import { loadExtensionPacks, RESERVED_NAMESPACE_PATTERN } from '../extension-packs/loader.mjs'
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const manifestName = 'extension.manifest.json'
+const packName = 'atelier.extension-pack.json'
 const backend = `import type { Sql } from 'postgres'
 import { exact, ExtensionError, parseProviderOperationProof, type ExtensionManifest, type Json } from '@mnstry/atelier/extensions'
 import { createExtensionHandler, createRootAdmissionConsumer, defineAction, defineExtension, type VerifierOptions } from '@mnstry/atelier/extensions/server'
@@ -117,6 +119,12 @@ process, listener, deployment or root installation was created.
    replay the write or refresh a stale generation. Disable before upgrading; verify
    the new release before enabling it. Retain-data removal and explicit deletion differ.
 
+Atelier keeps this component under the existing non-executing extension-pack system.
+Declare atelier.extension-pack.json in your project's existing
+ext["mnstry.atelier"].extensionPacks, then use the normal pack validation and lock
+adoption workflow. Its pack identity matches the extension ID. The pack's runtime
+manifest reference is a digest-bound projection; loading it never runs the backend
+or grants root access. Init does not edit another project's configuration or lock.
 Run atelier extension validate --directory . after edits. Run atelier extension seal
 --directory . to regenerate source/schema/release digests after reviewing those edits.
 Sealing records bytes; it does not establish trust, deployment, health or qualification.
@@ -125,7 +133,7 @@ the operator's responsibility. Provider qualification and actual Web/native acce
 are separate from scaffolding. Drizzle, Prisma and Convex profiles remain pending.
 `
 export async function scaffoldPostgres({ directory, extensionId = 'sample.counter' }) {
-  if (!/^[a-z0-9][a-z0-9._-]{2,127}$/.test(extensionId)) throw new Error('invalid extension id')
+  if (extensionId.length > 128 || !/^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/.test(extensionId) || RESERVED_NAMESPACE_PATTERN.test(extensionId.split('.')[0])) throw new Error('invalid extension id')
   const target = path.resolve(directory)
   await mkdir(target) // Exclusive reservation: an existing directory is never adopted or overwritten.
   const identity = await lstat(target)
@@ -216,6 +224,7 @@ export async function sealProject(directory, initialManifest) {
       await rename(temporary, manifestFile)
     }
   } finally { await rm(temporary, { force: true }) }
+  await writePackProjection(target, manifest, Boolean(initialManifest))
   return manifest
 }
 export async function validateProject(directory) {
@@ -228,5 +237,49 @@ export async function validateProject(directory) {
   for (const action of manifest.actions) {
     for (const name of ['inputSchemaRef', 'outputSchemaRef']) JSON.parse(await readFile(path.join(target, action[name]), 'utf8'))
   }
-  return { valid: true, profile: manifest.deployment.profile, extensionId: manifest.extensionId, releaseDigest: manifest.releaseDigest, qualified: false }
+  await validatePackProjection(target, manifest)
+  return { valid: true, profile: manifest.deployment.profile, extensionId: manifest.extensionId, releaseDigest: manifest.releaseDigest, qualified: false, packAdoption: 'pending' }
+}
+
+function packProject(target, manifest) {
+  return { configDir: target, config: { ext: { 'mnstry.atelier': { extensionPacks: [
+    { id: manifest.extensionId, version: 'v1', path: packName, enabled: true },
+  ] } } } }
+}
+async function runtimeReference(target, manifest) {
+  return { schema: manifest.schema, path: manifestName, releaseDigest: manifest.releaseDigest,
+    fileDigest: hash(await readFile(path.join(target,manifestName))) }
+}
+async function writePackProjection(target, manifest, initial) {
+  const file=path.join(target,packName)
+  let previous=null, pack
+  if (initial) {
+    pack={ schema:'mnstry-atelier-extension-pack@v1',id:manifest.extensionId,namespace:manifest.extensionId.split('.')[0],version:'v1',
+      terms:[],migrations:[],fixtures:[manifestName],lenses:[],readinessRules:[],actionRules:[],exportMappings:[] }
+  } else {
+    if (!(await lstat(file)).isFile()) throw new Error('extension pack must be a regular file')
+    previous=await readFile(file,'utf8'); pack=JSON.parse(previous)
+    loadExtensionPacks(packProject(target,manifest),{verifyLock:false})
+  }
+  pack.ext ??= {}; pack.ext['mnstry.atelier'] ??= {}
+  pack.ext['mnstry.atelier'].runtimeManifest=await runtimeReference(target,manifest)
+  const temporary=path.join(target,`.extension-pack-${randomUUID()}.json`)
+  try {
+    await writeFile(temporary,JSON.stringify(pack,null,2)+'\n',{flag:'wx'})
+    if(initial) await writeFile(file,await readFile(temporary),{flag:'wx'})
+    else {
+      if(!(await lstat(file)).isFile() || await readFile(file,'utf8')!==previous) throw new Error('extension pack changed during sealing')
+      await rename(temporary,file)
+    }
+  } finally { await rm(temporary,{force:true}) }
+  await validatePackProjection(target,manifest)
+}
+async function validatePackProjection(target,manifest) {
+  const file=path.join(target,packName)
+  if(!(await lstat(file)).isFile()) throw new Error('extension pack must be a regular file')
+  const report=loadExtensionPacks(packProject(target,manifest),{verifyLock:false})
+  if(report.packs.length!==1) throw new Error('extension pack projection is invalid')
+  const pack=JSON.parse(await readFile(file,'utf8'))
+  if(canonicalJson(pack.ext?.['mnstry.atelier']?.runtimeManifest)!==canonicalJson(await runtimeReference(target,manifest)))
+    throw new Error('extension pack runtime reference is stale')
 }

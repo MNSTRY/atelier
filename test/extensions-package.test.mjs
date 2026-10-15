@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { execNpmSync } from '../scripts/npm-cli.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 test('packed extension API has its exact declarations and imports from an isolated consumer', async t => {
   const dir = await mkdtemp(path.join(tmpdir(), 'atelier-extension-package-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
-  const [pack] = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--cache', path.join(dir, 'cache'), '--pack-destination', dir], {
+  const [pack] = JSON.parse(execNpmSync(['pack', '--json', '--ignore-scripts', '--cache', path.join(dir, 'cache'), '--pack-destination', dir], {
     cwd: root, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
   }))
   const destination = path.join(dir, 'node_modules/@mnstry/atelier')

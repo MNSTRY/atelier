@@ -59,25 +59,30 @@ const schemaRef = value => {
   if (!/^schemas\/[a-zA-Z0-9._-]+\.json$/.test(value) || value.startsWith('/') || value.split('/').some(x => !x || x === '.' || x === '..')) return reject()
   return value
 }
+function manifestObject(value, required, optional = []) {
+  exact(value, required, [...optional, 'ext'])
+  if (value.ext !== undefined) exact(value.ext, [])
+}
 export function parseManifest(value) {
   const m = JSON.parse(canonicalJson(value))
-  exact(m, ['schema', 'extensionId', 'releaseVersion', 'releaseDigest', 'protocol', 'compatibility', 'deployment', 'actions', 'permissions', 'surfaces', 'data'], ['recovery'])
+  manifestObject(m, ['schema', 'extensionId', 'releaseVersion', 'releaseDigest', 'protocol', 'compatibility', 'deployment', 'actions', 'permissions', 'surfaces', 'data'], ['recovery', 'contractVersion'])
+  if (m.contractVersion !== undefined && !/^1\.[0-9]+\.[0-9]+$/.test(text(m.contractVersion))) return reject()
   if (m.schema !== 'mnstry.extension-manifest/v1' || m.protocol !== 'mnstry.extension/v1' ||
       !/^[a-z0-9][a-z0-9._-]{2,127}$/.test(text(m.extensionId)) ||
       !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(text(m.releaseVersion))) return reject()
   const prerelease = m.releaseVersion.split('+')[0].split('-').slice(1).join('-')
   if (prerelease.split('.').some(part => /^0\d+$/.test(part))) return reject()
   digest(m.releaseDigest)
-  exact(m.compatibility, ['sdkMajor', 'rootContracts', 'hosts'])
+  manifestObject(m.compatibility, ['sdkMajor', 'rootContracts', 'hosts'])
   if (m.compatibility.sdkMajor !== 1 || !m.compatibility.hosts.length || strings(m.compatibility.hosts).some(x => !['web', 'native'].includes(x))) return reject()
   strings(m.compatibility.rootContracts)
-  exact(m.deployment, ['profile', 'bundleDigest', 'schemaDigest'])
+  manifestObject(m.deployment, ['profile', 'bundleDigest', 'schemaDigest'])
   if (!['postgres-sql', 'drizzle-db-first', 'drizzle-code-first', 'prisma-7-postgres', 'prisma-8-postgres-experimental', 'convex-native'].includes(text(m.deployment.profile))) return reject()
   digest(m.deployment.bundleDigest); digest(m.deployment.schemaDigest)
   if (!Array.isArray(m.actions) || !m.actions.length || m.actions.length > 64) return reject()
   const actions = new Map()
   for (const action of m.actions) {
-    exact(action, ['id', 'effect', 'scope', 'inputSchemaRef', 'outputSchemaRef', 'timeoutMs'])
+    manifestObject(action, ['id', 'effect', 'scope', 'inputSchemaRef', 'outputSchemaRef', 'timeoutMs'])
     text(action.id)
     if (!/^[a-z0-9][a-z0-9._-]{2,127}$/.test(action.id) || actions.has(action.id) || /^(?:lifecycle|installation|extension)\./.test(action.id) ||
         !['read', 'write'].includes(action.effect) || !['member', 'tenant'].includes(action.scope) ||
@@ -85,26 +90,27 @@ export function parseManifest(value) {
     schemaRef(action.inputSchemaRef); schemaRef(action.outputSchemaRef); actions.set(action.id, action)
   }
   if (m.recovery !== undefined) {
-    exact(m.recovery, ['lookupActionId'])
+    manifestObject(m.recovery, ['lookupActionId'])
     const action = actions.get(m.recovery.lookupActionId)
     if (!action || action.effect !== 'read' || action.scope !== 'member') return reject()
   }
-  exact(m.permissions, ['rootReads', 'rootWrites', 'egress'])
-  for (const list of Object.values(m.permissions)) strings(list)
+  manifestObject(m.permissions, ['rootReads', 'rootWrites', 'egress'])
+  for (const key of ['rootReads', 'rootWrites', 'egress']) strings(m.permissions[key])
   if (!Array.isArray(m.surfaces) || m.surfaces.length > 32) return reject()
   const surfaces = new Set()
   for (const surface of m.surfaces) {
-    exact(surface, ['id', 'compositionDigest', 'actionIds']); text(surface.id); digest(surface.compositionDigest)
+    manifestObject(surface, ['id', 'compositionDigest', 'actionIds']); text(surface.id); digest(surface.compositionDigest)
     if (!/^[a-z0-9][a-z0-9._-]{2,127}$/.test(surface.id) || surfaces.has(surface.id) || strings(surface.actionIds).some(id => !actions.has(id))) return reject()
     surfaces.add(surface.id)
   }
-  exact(m.data, ['classes', 'retention', 'exportVersion', 'schemaVersion', 'readableSchemaVersions'])
+  manifestObject(m.data, ['classes', 'retention', 'exportVersion', 'schemaVersion', 'readableSchemaVersions'])
   strings(m.data.classes); text(m.data.schemaVersion)
   if (m.data.retention !== 'until-user-delete' || m.data.exportVersion !== 1 ||
       !strings(m.data.readableSchemaVersions).includes(m.data.schemaVersion)) return reject()
   return m
 }
 export function parseInstallationBinding(value) {
+  value = JSON.parse(canonicalJson(value))
   exact(value, ['installationId', 'generation', 'releaseDigest'])
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(text(value.installationId)) ||
       !/^[1-9][0-9]{0,18}$/.test(text(value.generation)) || BigInt(value.generation) > 9223372036854775807n) return reject()

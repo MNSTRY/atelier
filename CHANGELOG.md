@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+The alpha.15 source version below is an unpublished candidate reservation. Shipping requires the maintainer's separate release PR and decision.
+
 ## 0.2.0-alpha.15
 
 - Add portable typed extension contracts, authenticated host clients, signed server admission and native Postgres transaction/receipt helpers under the existing package.

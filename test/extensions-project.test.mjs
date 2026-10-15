@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { parseManifest } from '../src/extensions/contracts.mjs'
+import { loadExtensionPacks } from '../src/extension-packs/loader.mjs'
 import { scaffoldPostgres, sealProject, validateProject } from '../src/extensions/project.mjs'
 
 async function directory(t) {
@@ -73,4 +75,53 @@ test('CLI resolves the real extension command and keeps failures content-free', 
   const refused = run(['init', '--directory', project, '--profile', 'convex-native'])
   assert.equal(refused.status, 1)
   assert.ok(!refused.stderr.includes(project))
+})
+
+
+test('published manifest schema rejects all expressible runtime-invalid cases', async t => {
+  const { project } = await directory(t); await scaffoldPostgres({ directory:project })
+  const valid = JSON.parse(await readFile(path.join(project,'extension.manifest.json')))
+  const schema = JSON.parse(await readFile(new URL('../contracts/atelier-extension-manifest.v1.schema.json',import.meta.url)))
+  const validate = new Ajv2020({strict:true}).compile(schema)
+  for (const change of [m => m.releaseVersion='not-semver',m => m.releaseVersion='01.0.0',m => m.releaseVersion='1.0.0-01',
+    m => m.actions[0].id='extension.disable',m => m.actions[0].id='lifecycle.enable',
+    m => m.actions[0].inputSchemaRef='../input.json',m => m.permissions.rootReads=['bad\u0000scope'],
+    m => m.data.classes=['bad\u001fscope'],m => m.actions.push({...m.actions[0]})]) {
+    const invalid = structuredClone(valid);change(invalid)
+    assert.throws(() => parseManifest(invalid));assert.equal(validate(invalid),false,JSON.stringify(invalid))
+  }
+  for (const change of [m => m.actions[1].id=m.actions[0].id,m => m.recovery.lookupActionId='counter.set',
+    m => m.surfaces=[{id:'sample.panel',compositionDigest:'a'.repeat(64),actionIds:['unknown.action']}],
+    m => m.data.readableSchemaVersions=['other']]) {
+    const invalid=structuredClone(valid);change(invalid);assert.throws(()=>parseManifest(invalid))
+  }
+})
+
+
+test('reserved extension containers remain empty and optional contract version binds major one', async t => {
+  const {project}=await directory(t);await scaffoldPostgres({directory:project})
+  const manifest=JSON.parse(await readFile(path.join(project,'extension.manifest.json')))
+  const schema=JSON.parse(await readFile(new URL('../contracts/atelier-extension-manifest.v1.schema.json',import.meta.url)))
+  const validate=new Ajv2020({strict:true}).compile(schema)
+  manifest.contractVersion='1.0.0';manifest.ext={};manifest.actions[0].ext={};manifest.data.ext={}
+  manifest.permissions.ext={};manifest.compatibility.ext={};manifest.deployment.ext={};manifest.recovery.ext={}
+  assert.equal(validate(manifest),true);assert.deepEqual(parseManifest(manifest),manifest)
+  for(const change of [m=>m.ext={authority:true},m=>m.actions[0].ext={authority:true},m=>m.contractVersion='2.0.0',m=>m.contractVersion='1.bad']) {
+    const invalid=structuredClone(manifest);change(invalid);assert.equal(validate(invalid),false);assert.throws(()=>parseManifest(invalid))
+  }
+})
+
+
+test('generated runtime component reuses the existing non-executing pack identity and loader', async t => {
+  const {project}=await directory(t);await scaffoldPostgres({directory:project})
+  const file=path.join(project,'atelier.extension-pack.json');const pack=JSON.parse(await readFile(file))
+  assert.equal(pack.schema,'mnstry-atelier-extension-pack@v1');assert.equal(pack.id,'sample.counter')
+  const loaded=loadExtensionPacks({configDir:project,config:{ext:{'mnstry.atelier':{extensionPacks:[{id:pack.id,version:pack.version,path:'atelier.extension-pack.json',enabled:true}]}}}},{verifyLock:false})
+  assert.equal(loaded.packs.length,1);assert.equal(loaded.protocols.length,0)
+  assert.equal((await validateProject(project)).packAdoption,'pending')
+  pack.ext['mnstry.atelier'].runtimeManifest.releaseDigest='f'.repeat(64)
+  pack.terms.push({id:'sample.counter:custom',label:'Invented custom concept',kind:'concept'})
+  await writeFile(file,JSON.stringify(pack));await assert.rejects(validateProject(project),/stale/)
+  await sealProject(project);assert.equal((await validateProject(project)).valid,true)
+  assert.equal(JSON.parse(await readFile(file)).terms[0].id,'sample.counter:custom')
 })
