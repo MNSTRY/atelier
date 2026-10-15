@@ -78,6 +78,6 @@ generated package.json `files` array as literal project-relative files or direct
 This reuses the project's native package input list; it adds no second project catalog
 and never executes a TypeScript config during sealing. The list itself is sealed.
 Conventional generated paths and present npm locks are included automatically.
-Globs, parent paths, dependency directories, environment files and self-referential
+Globs, parent paths, dependency directories, hidden environment paths and self-referential
 manifest/pack inputs refuse. The seal identifies these declared inputs; it does not
 claim an arbitrary external host, build artifact or dependency outside the project.

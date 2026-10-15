@@ -220,7 +220,7 @@ async function boundedSourceBytes(file,expected) {
   } finally { await handle.close() }
 }
 async function projectFiles(root, subpath) {
-  const result = {}
+  const result = new Map()
   const base = await realpath(root)
   const identity = stat => `${stat.dev}:${stat.ino}`
   const metadata = new Set()
@@ -247,14 +247,14 @@ async function projectFiles(root, subpath) {
     if(stat.isDirectory()) {
       for(const entry of (await readdir(file)).sort())await walk([...parts,entry])
     } else if(stat.isFile()) {
-      if(Object.hasOwn(result,key))throw new Error('extension source inputs contain a duplicate path')
+      if(result.has(key))throw new Error('extension source inputs contain a duplicate path')
       const bytes=await boundedSourceBytes(file,stat)
       if(identity((await checked(parts)).stat)!==identity(stat))throw new Error('extension source changed while reading')
-      result[key]=hash(bytes)
+      result.set(key,hash(bytes))
     } else throw new Error('extension project requires regular files')
   }
   for(const relative of subpath)await walk(relative.split('/'))
-  return result
+  return Object.fromEntries(result)
 }
 async function bundleFiles(target) {
   const paths=['package.json','tsconfig.json','src']
