@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, parseManifest, parseReleaseBundle } from './contracts.mjs'
 import { sqlProjectFiles } from './scaffold-sql.mjs'
+import { convexProjectFiles } from './scaffold-convex.mjs'
 import { releaseDigest } from './server.mjs'
 import { loadExtensionPacks, RESERVED_NAMESPACE_PATTERN } from '../extension-packs/loader.mjs'
 
@@ -137,10 +138,10 @@ Run atelier extension validate --directory . after edits. Run atelier extension 
 Sealing records bytes; it does not establish trust, deployment, health or qualification.
 The sample deletes its live rows and earlier provider receipts; backup retention remains
 the operator's responsibility. Provider qualification and actual Web/native acceptance
-are separate from scaffolding. Drizzle and Prisma have native project profiles. Convex remains pending.
+are separate from scaffolding. Drizzle and Prisma have native project profiles. The native Convex starter has separate provider and host qualification requirements.
 `
-export async function scaffoldSqlProject({ directory, extensionId = 'sample.counter', profile = 'postgres-sql' }) {
-  if(!['postgres-sql','drizzle-db-first','drizzle-code-first','prisma-7-postgres'].includes(profile))throw new Error('unsupported SQL profile')
+async function scaffoldProject({ directory, extensionId = 'sample.counter', profile = 'postgres-sql' }) {
+  if(!['postgres-sql','drizzle-db-first','drizzle-code-first','prisma-7-postgres','convex-native'].includes(profile))throw new Error('unsupported profile')
   if (extensionId.length > 128 || !/^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/.test(extensionId) || RESERVED_NAMESPACE_PATTERN.test(extensionId.split('.')[0])) throw new Error('invalid extension id')
   const target = path.resolve(directory)
   await mkdir(target) // Exclusive reservation: an existing directory is never adopted or overwritten.
@@ -156,7 +157,7 @@ export async function scaffoldSqlProject({ directory, extensionId = 'sample.coun
       'src/backend.ts': backend, 'migrations/001-initial.sql': migration, 'README.md': readme,
       '.gitignore': 'node_modules/\n.env\n.env.*\n!env.example\n', 'env.example': '# Backend secret reference only; do not commit credentials.\nEXTENSION_DATABASE_URL=\n',
     }
-    if(profile!=='postgres-sql') {
+    if(profile!=='postgres-sql' && profile!=='convex-native') {
       const provider=sqlProjectFiles(profile,backend,migration)
       Object.assign(files,provider.files)
       const pkg=JSON.parse(files['package.json'])
@@ -166,6 +167,20 @@ export async function scaffoldSqlProject({ directory, extensionId = 'sample.coun
       Object.assign(pkg.scripts,provider.scripts)
       files['package.json']=JSON.stringify(pkg,null,2)+'\n'
       files['README.md']=provider.instructions+'\n\n'+readme.replace('login and apply migrations/001-initial.sql with a separate migration role.','login and apply the reviewed native-profile migrations described above.')
+    }
+    if(profile==='convex-native') {
+      const provider=convexProjectFiles()
+      delete files['src/backend.ts']
+      delete files['migrations/001-initial.sql']
+      Object.assign(files,provider.files)
+      const pkg=JSON.parse(files['package.json'])
+      delete pkg.dependencies.postgres
+      Object.assign(pkg.dependencies,provider.dependencies)
+      pkg.files.push('convex','convex.json','migrations')
+      pkg.scripts.typecheck='tsc --noEmit && tsc --noEmit -p convex/tsconfig.json'
+      files['package.json']=JSON.stringify(pkg,null,2)+'\n'
+      files['.gitignore']+='convex/_generated/\n.convex/\n'
+      files['migrations/001-initial.json']=JSON.stringify({schemaVersion:'1',profile:'convex-native',strategy:'native-declarative-schema',backfill:'none'},null,2)+'\n'
     }
     const resultSchemas = {
       set: counterSchema, get: counterSchema,
@@ -409,3 +424,9 @@ export async function exportReleaseBundle(directory) {
   await validatePackProjection(target,manifest)
   return result
 }
+
+export function scaffoldSqlProject(options) {
+  if(options?.profile==='convex-native')return Promise.reject(new Error('unsupported SQL profile'))
+  return scaffoldProject(options)
+}
+export function scaffoldConvexProject(options) { return scaffoldProject({...options,profile:'convex-native'}) }

@@ -1,5 +1,7 @@
 import { createHash, verify } from 'node:crypto'
-import { canonicalJson, exact, ExtensionError, parseManifest, text } from './contracts.mjs'
+import { canonicalJson, ExtensionError, parseManifest } from './contracts.mjs'
+import { assertDelegationBinding, decodeDelegation, unauthorized, validateDelegationClaims } from './delegation.mjs'
+export { createRootAdmissionConsumer } from './admission.mjs'
 
 export const digest = value => createHash('sha256').update(canonicalJson(value)).digest('hex')
 export function releaseDigest(value) {
@@ -15,71 +17,14 @@ function freezeJson(value) {
 export function assertVerifiedScope(scope) {
   if (!scope || !admittedScopes.get(scope)?.()) throw new ExtensionError('unauthorized', 401)
 }
-const unauthorized = () => { throw new ExtensionError('unauthorized', 401) }
-const claimNames = ['iss', 'aud', 'iat', 'nbf', 'exp', 'jti', 'purpose', 'installationId', 'tenantRef', 'subjectRef', 'generation', 'releaseDigest', 'operationId', 'actionId', 'payloadDigest', 'rootWrites']
-const opaque = value => /^[A-Za-z0-9_-]{16,128}$/.test(text(value))
-function decode(part) {
-  if (!/^[A-Za-z0-9_-]+$/.test(part)) return unauthorized()
-  const bytes = Buffer.from(part, 'base64url')
-  if (bytes.toString('base64url') !== part) return unauthorized()
-  const string = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  return JSON.parse(string)
-}
 function verifiedClaims(delegation, options) {
   try {
-    text(delegation, 16384)
-    const parts = delegation.split('.')
-    if (parts.length !== 3) return unauthorized()
-    const header = exact(decode(parts[0]), ['alg', 'typ', 'kid'])
-    if (header.alg !== 'ES256' || header.typ !== 'JWT') return unauthorized()
-    const key = options.keys.get(text(header.kid))
-    if (!key || key.type !== 'public' || key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') return unauthorized()
-    const signature = Buffer.from(parts[2], 'base64url')
-    if (signature.length !== 64 || signature.toString('base64url') !== parts[2] ||
-        !verify('sha256', Buffer.from(`${parts[0]}.${parts[1]}`), { key, dsaEncoding: 'ieee-p1363' }, signature)) return unauthorized()
-    const claims = exact(decode(parts[1]), claimNames)
-    const now = Math.floor((options.now?.() ?? Date.now()) / 1000)
-    if (claims.iss !== options.issuer || claims.aud !== options.audience || claims.purpose !== 'extension.invoke/v1' ||
-        ![claims.iat, claims.nbf, claims.exp].every(Number.isSafeInteger) || claims.iat > now || claims.nbf !== claims.iat ||
-        claims.exp <= now || claims.exp <= claims.iat || claims.exp - claims.iat > 60) return unauthorized()
-    for (const field of ['jti', 'installationId', 'operationId', 'tenantRef', 'subjectRef']) if (!opaque(claims[field])) return unauthorized()
-    text(claims.actionId)
-    if (typeof claims.generation !== 'string' || typeof claims.releaseDigest !== 'string' || typeof claims.payloadDigest !== 'string' || !/^[1-9][0-9]{0,18}$/.test(claims.generation) || BigInt(claims.generation) > 9223372036854775807n ||
-        !/^[a-f0-9]{64}$/.test(claims.releaseDigest) || !/^[a-f0-9]{64}$/.test(claims.payloadDigest) ||
-        !Array.isArray(claims.rootWrites) || claims.rootWrites.length > 64 || new Set(claims.rootWrites).size !== claims.rootWrites.length) return unauthorized()
-    claims.rootWrites.forEach(value => text(value, 256))
-    return Object.freeze({ ...claims, rootWrites: Object.freeze([...claims.rootWrites]) })
+    const decoded = decodeDelegation(delegation)
+    const key = options.keys.get(decoded.header.kid)
+    if (!key || key.type !== 'public' || key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1' ||
+        !verify('sha256', decoded.signed, { key, dsaEncoding: 'ieee-p1363' }, decoded.signature)) return unauthorized()
+    return validateDelegationClaims(decoded.claims, options)
   } catch { return unauthorized() }
-}
-export function createRootAdmissionConsumer({ origin, allowLocalTesting = false, fetch: hostFetch = globalThis.fetch }) {
-  const target = new URL(origin)
-  const local = allowLocalTesting && ['test', 'development'].includes(process.env.NODE_ENV) &&
-    target.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(target.hostname)
-  if ((target.protocol !== 'https:' && !local) || target.username || target.password || target.pathname !== '/' || target.search || target.hash) throw new ExtensionError('invalid-input')
-  const endpoint = new URL('/api/root-runtime/extensions/admissions/consume', target)
-  return async (_claims, delegation) => {
-    const response = await hostFetch(endpoint, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
-      headers: { 'content-type': 'application/json' }, body: canonicalJson({ delegation }) })
-    if (response.status === 401 || response.status === 403) return false
-    if (response.status != 200 || response.headers.get('content-type')?.split(';')[0] !== 'application/json') throw new ExtensionError('unavailable', 503)
-    const reader = response.body?.getReader()
-    if (!reader) throw new ExtensionError('unavailable', 503)
-    try {
-      let size = 0
-      const chunks = []
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        size += value.byteLength
-        if (size > 1024) throw new ExtensionError('unavailable', 503)
-        chunks.push(value)
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-      exact(body, ['admitted'])
-      if (body.admitted !== true) throw new ExtensionError('unavailable', 503)
-      return true
-    } catch { throw new ExtensionError('unavailable', 503) } finally { await reader.cancel().catch(() => {}) }
-  }
 }
 export function defineAction(definition) {
   if (!definition || ['input', 'output', 'run'].some(key => typeof definition[key] !== 'function')) throw new ExtensionError('invalid-input')
@@ -106,9 +51,7 @@ export function createExtensionHandler(handle) {
       if (!delegation) return unauthorized()
       const claims = verifiedClaims(delegation, extension.verifier)
       const manifest = extension.manifest
-      if (claims.installationId !== extension.verifier.installationId || claims.releaseDigest !== manifest.releaseDigest ||
-          claims.releaseDigest !== extension.verifier.releaseDigest || claims.rootWrites.length !== manifest.permissions.rootWrites.length ||
-          claims.rootWrites.some(value => !manifest.permissions.rootWrites.includes(value))) return unauthorized()
+      assertDelegationBinding(claims, manifest, extension.verifier)
       const declared = manifest.actions.find(action => action.id === claims.actionId)
       const action = Object.hasOwn(extension.actions,claims.actionId) ? extension.actions[claims.actionId] : null
       if (!declared || !action) return unauthorized()

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add the optional native Convex backend adapter and TypeScript starter through the existing extension init/seal/validate/bundle workflow. HTTP admission and private native mutations reuse the delegation contract; indexed operation results commit with custom writes. Native provider qualification remains separate from reactive lifecycle and complete host/customer acceptance.
+
 - Add native Drizzle DB-first/code-first and Prisma 7 project profiles, prepared scoped transactions and provider receipt recovery. Optional provider dependencies stay in the generated app; Root and supported-host acceptance remain separate gates.
 
 The alpha.15 source version below is an unpublished candidate reservation. Shipping requires the maintainer's separate release PR and decision.
@@ -9,7 +11,7 @@ The alpha.15 source version below is an unpublished candidate reservation. Shipp
 ## 0.2.0-alpha.15
 
 - Add portable typed extension contracts, authenticated host clients, signed server admission and native Postgres transaction/receipt helpers under the existing package.
-- Add `atelier extension init|validate|seal` for a customer-owned Postgres TypeScript project. Generation and sealing do not deploy or authorize an installation. Drizzle, Prisma and Convex integrations remain pending.
+- Add `atelier extension init|validate|seal` for a customer-owned Postgres TypeScript project. Generation and sealing do not deploy or authorize an installation. Provider and supported-host qualification carry separate evidence.
 
 ## 0.2.0-alpha.14
 
