@@ -1,0 +1,227 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { canonicalJson, parseManifest } from './contracts.mjs'
+import { releaseDigest } from './server.mjs'
+
+const hash = bytes => createHash('sha256').update(bytes).digest('hex')
+const manifestName = 'extension.manifest.json'
+const backend = `import type { Sql } from 'postgres'
+import { exact, ExtensionError, parseProviderOperationProof, type ExtensionManifest, type Json } from '@mnstry/atelier/extensions'
+import { createExtensionHandler, createRootAdmissionConsumer, defineAction, defineExtension, type VerifierOptions } from '@mnstry/atelier/extensions/server'
+import { lookupPostgresOperation, oncePostgresOperation, postgresHealth, withPostgresScope } from '@mnstry/atelier/extensions/postgres'
+
+function counter(value: unknown): { value: number } {
+  const input = exact(value, ['value'])
+  if (!Number.isSafeInteger(input.value) || Number(input.value) < 0 || Number(input.value) > 1000000) throw new ExtensionError('invalid-input')
+  return { value: Number(input.value) }
+}
+const empty = (value: unknown) => { exact(value, []); return {} }
+const json = (value: unknown) => value as Json
+/** The consuming host owns process startup, verified public keys, deployment and secrets. */
+export function createBackend(options: { database: Sql; manifest: ExtensionManifest; rootOrigin: string;
+  verifier: Omit<VerifierOptions, 'consume'>; allowLocalTesting?: boolean }) {
+  const database = options.database
+  const extension = defineExtension({ manifest: options.manifest,
+    verifier: { ...options.verifier, consume: createRootAdmissionConsumer({ origin: options.rootOrigin, allowLocalTesting: options.allowLocalTesting }) },
+    actions: {
+      'counter.set': defineAction({ input: counter, output: counter, run: ({ scope }, input) => oncePostgresOperation(database, scope, input, async sql => {
+        await sql\`INSERT INTO extension_data.counters (installation_id,tenant_ref,subject_ref,value)
+          VALUES (\${scope.installationId},\${scope.tenantRef},\${scope.subjectRef},\${input.value})
+          ON CONFLICT (installation_id,tenant_ref,subject_ref) DO UPDATE SET value=excluded.value\`
+        return input
+      }) }),
+      'counter.get': defineAction({ input: empty, output: counter, run: ({ scope }) => withPostgresScope(database, scope, async sql => {
+        const [row] = await sql\`SELECT value FROM extension_data.counters WHERE installation_id=\${scope.installationId}
+          AND tenant_ref=\${scope.tenantRef} AND subject_ref=\${scope.subjectRef}\`
+        return { value: row?.value ?? 0 }
+      }) }),
+      'counter.export': defineAction({ input: empty, output: json, run: ({ scope }) => withPostgresScope(database, scope, async sql => {
+        const [row] = await sql\`SELECT value FROM extension_data.counters WHERE installation_id=\${scope.installationId}
+          AND tenant_ref=\${scope.tenantRef} AND subject_ref=\${scope.subjectRef}\`
+        return { schema: 'sample.counter-export/v1', value: row?.value ?? 0 }
+      }) }),
+      'counter.delete': defineAction({ input: empty, output: json, run: ({ scope }, input) => oncePostgresOperation(database, scope, input, async sql => {
+        const rows = await sql\`DELETE FROM extension_data.counters WHERE installation_id=\${scope.installationId}
+          AND tenant_ref=\${scope.tenantRef} AND subject_ref=\${scope.subjectRef} RETURNING value\`
+        await sql\`DELETE FROM extension_data.operations WHERE installation_id=\${scope.installationId}
+          AND tenant_ref=\${scope.tenantRef} AND subject_ref=\${scope.subjectRef} AND operation_id<>\${scope.operationId}\`
+        return { deleted: rows.length, retention: 'provider-live-rows-deleted', backups: 'operator-policy' }
+      }) }),
+      'counter.lookup': defineAction({ input: value => { const input = exact(value, ['operationId']);
+        if (typeof input.operationId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(input.operationId)) throw new ExtensionError('invalid-input')
+        return { operationId: input.operationId } }, output: value => value === null ? null : parseProviderOperationProof(value),
+        run: ({ scope }, input) => lookupPostgresOperation(database, scope, input.operationId) }),
+    },
+  })
+  return { handler: createExtensionHandler(extension), health: () => postgresHealth(database) }
+}
+`
+const migration = `-- Apply only to the customer-owned extension database with a separate migration role.
+-- Create extension_app LOGIN and its secret outside this file. Never use a root runtime DSN.
+CREATE SCHEMA extension_data;
+REVOKE ALL ON SCHEMA extension_data FROM PUBLIC;
+CREATE TABLE extension_data.counters (
+  installation_id text NOT NULL, tenant_ref text NOT NULL, subject_ref text NOT NULL,
+  value integer NOT NULL CHECK(value BETWEEN 0 AND 1000000),
+  PRIMARY KEY(installation_id,tenant_ref,subject_ref)
+);
+CREATE TABLE extension_data.operations (
+  installation_id text NOT NULL, tenant_ref text NOT NULL, subject_ref text NOT NULL,
+  operation_id text NOT NULL, action_id text NOT NULL, generation bigint NOT NULL CHECK(generation>0),
+  release_digest text NOT NULL CHECK(release_digest ~ '^[a-f0-9]{64}$'),
+  payload_digest text NOT NULL CHECK(payload_digest ~ '^[a-f0-9]{64}$'),
+  completed boolean NOT NULL DEFAULT false, result jsonb,
+  PRIMARY KEY(installation_id,tenant_ref,subject_ref,operation_id)
+);
+ALTER TABLE extension_data.counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE extension_data.counters FORCE ROW LEVEL SECURITY;
+ALTER TABLE extension_data.operations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE extension_data.operations FORCE ROW LEVEL SECURITY;
+CREATE POLICY counter_scope ON extension_data.counters TO extension_app
+  USING(installation_id=current_setting('extension.installation_id',true) AND tenant_ref=current_setting('extension.tenant_ref',true)
+    AND subject_ref=current_setting('extension.subject_ref',true))
+  WITH CHECK(installation_id=current_setting('extension.installation_id',true) AND tenant_ref=current_setting('extension.tenant_ref',true)
+    AND subject_ref=current_setting('extension.subject_ref',true));
+CREATE POLICY operation_scope ON extension_data.operations TO extension_app
+  USING(installation_id=current_setting('extension.installation_id',true) AND tenant_ref=current_setting('extension.tenant_ref',true)
+    AND subject_ref=current_setting('extension.subject_ref',true))
+  WITH CHECK(installation_id=current_setting('extension.installation_id',true) AND tenant_ref=current_setting('extension.tenant_ref',true)
+    AND subject_ref=current_setting('extension.subject_ref',true));
+REVOKE ALL ON ALL TABLES IN SCHEMA extension_data FROM PUBLIC;
+GRANT USAGE ON SCHEMA extension_data TO extension_app;
+GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA extension_data TO extension_app;
+`
+const schema = (properties, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, properties, required })
+const counterSchema = schema({ value: { type: 'integer', minimum: 0, maximum: 1000000 } })
+const readme = `# Custom counter extension
+
+This project owns its custom data. Atelier generated files only; no account, database,
+process, listener, deployment or root installation was created.
+
+1. Run npm install and npm run typecheck. Keep the generated lockfile.
+2. Select a customer-owned PostgreSQL 17 database. Create a restricted extension_app
+   login and apply migrations/001-initial.sql with a separate migration role.
+   Keep its DSN in your backend secret store. Do not use the root runtime database.
+3. Call createBackend from src/backend.ts in your own host. Supply the pinned manifest,
+   verified root public keys and installation binding. Mount handler and health using
+   your host's lifecycle. This generated module never starts a server.
+4. Register the endpoint through your studio's supported connection workflow. Use the
+   authenticated admin SDK to configure, verify and enable its exact release. Installation
+   does not grant member consent or paid-product access.
+5. Supply your supported host's authenticated fetch to createHttpHostTransport. Invoke
+   counter.set/get/export/delete with the installation generation and release digest.
+   Record a result only after the member permits that separate root action.
+6. When a reply is lost, use lookupOperation/recoverOperation. Never automatically
+   replay the write or refresh a stale generation. Disable before upgrading; verify
+   the new release before enabling it. Retain-data removal and explicit deletion differ.
+
+Run atelier extension validate --directory . after edits. Run atelier extension seal
+--directory . to regenerate source/schema/release digests after reviewing those edits.
+Sealing records bytes; it does not establish trust, deployment, health or qualification.
+The sample deletes its live rows and earlier provider receipts; backup retention remains
+the operator's responsibility. Provider qualification and actual Web/native acceptance
+are separate from scaffolding. Drizzle, Prisma and Convex profiles remain pending.
+`
+export async function scaffoldPostgres({ directory, extensionId = 'sample.counter' }) {
+  if (!/^[a-z0-9][a-z0-9._-]{2,127}$/.test(extensionId)) throw new Error('invalid extension id')
+  const target = path.resolve(directory)
+  await mkdir(target) // Exclusive reservation: an existing directory is never adopted or overwritten.
+  const identity = await lstat(target)
+  try {
+    const packageRoot = fileURLToPath(new URL('../..', import.meta.url))
+    const kit = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+    const files = {
+      'package.json': JSON.stringify({ name: extensionId, version: '1.0.0', private: true, type: 'module',
+        scripts: { typecheck: 'tsc --noEmit' }, dependencies: { '@mnstry/atelier': kit.version, postgres: '3.4.7' },
+        devDependencies: { typescript: '5.8.3', '@types/node': '22.18.0' }, engines: { node: '>=22.18.0 <23' } }, null, 2) + '\n',
+      'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', noEmit: true, skipLibCheck: true }, include: ['src/**/*.ts'] }, null, 2) + '\n',
+      'src/backend.ts': backend, 'migrations/001-initial.sql': migration, 'README.md': readme,
+      '.gitignore': 'node_modules/\n.env\n.env.*\n!env.example\n', 'env.example': '# Backend secret reference only; do not commit credentials.\nEXTENSION_DATABASE_URL=\n',
+    }
+    const resultSchemas = {
+      set: counterSchema, get: counterSchema,
+      export: schema({ schema: { const: 'sample.counter-export/v1' }, value: counterSchema.properties.value }),
+      delete: schema({ deleted: { type: 'integer', minimum: 0, maximum: 1 }, retention: { const: 'provider-live-rows-deleted' }, backups: { const: 'operator-policy' } }),
+      lookup: { anyOf: [{ type: 'null' }, schema({ schema: { const: 'mnstry.extension-provider-operation/v1' },
+        installationId: { type: 'string', pattern: '^[A-Za-z0-9_-]{16,128}$' }, operationId: { type: 'string', pattern: '^[A-Za-z0-9_-]{16,128}$' },
+        actionId: { type: 'string' }, generation: { type: 'string', pattern: '^[1-9][0-9]{0,18}$' },
+        releaseDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' }, payloadDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+        resultDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' }, result: {} })] },
+    }
+    for (const action of ['set', 'get', 'export', 'delete', 'lookup']) {
+      const input = action === 'set' ? counterSchema : action === 'lookup' ? schema({ operationId: { type: 'string', pattern: '^[A-Za-z0-9_-]{16,128}$' } }) : schema({})
+      files[`schemas/counter-${action}-input.json`] = JSON.stringify(input, null, 2) + '\n'
+      files[`schemas/counter-${action}-output.json`] = JSON.stringify(resultSchemas[action], null, 2) + '\n'
+    }
+    for (const [relative, contents] of Object.entries(files)) {
+      const file = path.join(target, relative); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, contents, { flag: 'wx' })
+    }
+    const manifest = { schema: 'mnstry.extension-manifest/v1', extensionId, releaseVersion: '1.0.0', releaseDigest: '0'.repeat(64), protocol: 'mnstry.extension/v1',
+      compatibility: { sdkMajor: 1, rootContracts: ['extension.result.record/v1'], hosts: ['web'] },
+      deployment: { profile: 'postgres-sql', bundleDigest: '0'.repeat(64), schemaDigest: '0'.repeat(64) },
+      actions: ['set', 'get', 'export', 'delete', 'lookup'].map(action => ({ id: `counter.${action}`,
+        effect: ['set', 'delete'].includes(action) ? 'write' : 'read', scope: 'member',
+        inputSchemaRef: `schemas/counter-${action}-input.json`, outputSchemaRef: `schemas/counter-${action}-output.json`, timeoutMs: 10000 })),
+      recovery: { lookupActionId: 'counter.lookup' }, permissions: { rootReads: [], rootWrites: ['extension.result.record/v1'], egress: [] }, surfaces: [],
+      data: { classes: ['sample.counter'], retention: 'until-user-delete', exportVersion: 1, schemaVersion: '1', readableSchemaVersions: ['1'] } }
+    const result = await sealProject(target, manifest)
+    return { directory: target, profile: 'postgres-sql', releaseDigest: result.releaseDigest, qualified: false }
+  } catch (error) {
+    const current = await lstat(target).catch(() => null)
+    if (current?.isDirectory() && current.dev === identity.dev && current.ino === identity.ino) await rm(target, { recursive: true })
+    throw error
+  }
+}
+async function projectFiles(root, subpath) {
+  const result = {}
+  const base = await realpath(root)
+  async function walk(relative) {
+    const file = path.join(base, relative)
+    const stat = await lstat(file)
+    if (stat.isSymbolicLink()) throw new Error('extension project symlinks are unsupported')
+    if (stat.isDirectory()) {
+      for (const entry of (await readdir(file)).sort()) await walk(path.join(relative, entry))
+    } else if (stat.isFile()) {
+      if (stat.size > 1024 * 1024) throw new Error('extension source file exceeds 1 MiB')
+      result[relative.split(path.sep).join('/')] = hash(await readFile(file))
+    } else throw new Error('extension project requires regular files')
+  }
+  for (const relative of subpath) await walk(relative)
+  return result
+}
+export async function sealProject(directory, initialManifest) {
+  const target = path.resolve(directory)
+  const manifestFile = path.join(target, manifestName)
+  if (!initialManifest && !(await lstat(manifestFile)).isFile()) throw new Error('extension manifest must be a regular file')
+  const manifest = parseManifest(initialManifest ?? JSON.parse(await readFile(manifestFile, 'utf8')))
+  const bundle = await projectFiles(target, ['package.json', 'src'])
+  const schemas = await projectFiles(target, ['schemas', 'migrations'])
+  manifest.deployment.bundleDigest = hash(canonicalJson(bundle)); manifest.deployment.schemaDigest = hash(canonicalJson(schemas))
+  manifest.releaseDigest = releaseDigest(manifest)
+  // Re-read before committing the digest; concurrent edits cannot produce a knowingly stale seal.
+  if (canonicalJson(bundle) !== canonicalJson(await projectFiles(target, ['package.json', 'src'])) ||
+      canonicalJson(schemas) !== canonicalJson(await projectFiles(target, ['schemas', 'migrations']))) throw new Error('extension changed during sealing')
+  const temporary = path.join(target, `.extension-seal-${randomUUID()}.json`)
+  try {
+    await writeFile(temporary, JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx' })
+    if (initialManifest) {
+      // Creation keeps an exclusive manifest reservation as well.
+      await writeFile(manifestFile, await readFile(temporary), { flag: 'wx' })
+    } else await rename(temporary, manifestFile)
+  } finally { await rm(temporary, { force: true }) }
+  return manifest
+}
+export async function validateProject(directory) {
+  const target = path.resolve(directory)
+  const manifestFile = path.join(target, manifestName)
+  if (!(await lstat(manifestFile)).isFile()) throw new Error('extension manifest must be a regular file')
+  const manifest = parseManifest(JSON.parse(await readFile(manifestFile, 'utf8')))
+  if (manifest.releaseDigest !== releaseDigest(manifest) || manifest.deployment.bundleDigest !== hash(canonicalJson(await projectFiles(target, ['package.json', 'src']))) ||
+      manifest.deployment.schemaDigest !== hash(canonicalJson(await projectFiles(target, ['schemas', 'migrations'])))) throw new Error('extension seal is stale')
+  for (const action of manifest.actions) {
+    for (const name of ['inputSchemaRef', 'outputSchemaRef']) JSON.parse(await readFile(path.join(target, action[name]), 'utf8'))
+  }
+  return { valid: true, profile: manifest.deployment.profile, extensionId: manifest.extensionId, releaseDigest: manifest.releaseDigest, qualified: false }
+}

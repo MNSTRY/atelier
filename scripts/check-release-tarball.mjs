@@ -41,6 +41,8 @@ const allowedFiles = [
   // The decision contract's declarations are part of its public typed API.
   // Other declaration paths still require their own reviewed admission.
   /^src\/decisions\/contracts\.d\.mts$/,
+  // Exact declarations for the portable extension wire, host client and server APIs.
+  /^src\/extensions\/(contracts|client|server|postgres)\.d\.mts$/,
   // Optional native supplier adapters are text and receive the same content scan.
   // Admit only these runtime modules; native SDKs, caches and fixtures stay outside.
   /^src\/ingestion\/optional\/graphify\/(?:json_bridge|graphify_supplier|query_receiving|composition_receiving)\.py$/,

@@ -48,6 +48,10 @@ export const commandMap = new Map([
   ['config', ['src/commands/config.mjs']],
   ['config:check', ['src/commands/config.mjs']],
   ['manifest', ['src/commands/config.mjs']],
+  ['extension', ['src/commands/extension.mjs']],
+  ['extension:init', ['src/commands/extension.mjs', 'init']],
+  ['extension:validate', ['src/commands/extension.mjs', 'validate']],
+  ['extension:seal', ['src/commands/extension.mjs', 'seal']],
   ['extension-pack', ['src/commands/extension-pack.mjs']],
   ['extension-pack:validate', ['src/commands/extension-pack.mjs', 'validate']],
   ['extension-pack:list', ['src/commands/extension-pack.mjs', 'list']],
@@ -168,6 +172,9 @@ Core commands:
   learn capture|propose|decide|activate|withdraw Manage scoped lessons and their evidence.
   ingest plan|run|status|query     Preserve selected sources and search bounded evidence.
   config check                    Validate project config.
+  extension init                 Scaffold a custom database extension.
+  extension validate             Check extension source and release digests.
+  extension seal                 Seal reviewed extension edits.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
   distribution check              Check a distribution for MNSTRY attribution.

@@ -32,7 +32,12 @@
     "./export-contract",
     "./dry-run",
     "./contracts/atelier-export.v1.schema.json",
-    "./fixtures/atelier-export/sample-studio-offer.v1.json"
+    "./fixtures/atelier-export/sample-studio-offer.v1.json",
+    "./extensions",
+    "./extensions/client",
+    "./extensions/server",
+    "./extensions/postgres",
+    "./contracts/atelier-extension-manifest.v1.schema.json"
   ],
   "requiredModuleExports": {
     ".": ["ALLOWED_RUNTIME_TARGETS", "ATELIER_LOCK_SCHEMA", "ATELIER_MIGRATION_SCHEMA", "ATELIER_READINESS_SCHEMA", "BASE_MIGRATIONS", "BOUNDARY_POLICY_SCHEMA", "LOCAL_AUDIENCES", "MNSTRY_READINESS_PACK_SCHEMA", "OBJECT_CLASSES", "PROJECT_CONFIG_SCHEMA", "READINESS_PROTOCOL_IDS", "READINESS_PROTOCOL_SLUGS", "RUNTIME_OWNERS", "RUNTIME_VISIBILITIES", "analysisAdapterDryRun", "applyUpgrade", "buildAtelierLock", "buildGraph", "buildProjectProjection", "buildReadiness", "buildSupportBundlePreview", "bundledMnstryReadinessPackV1", "bundledReadinessPack", "bundledReadinessProtocols", "checkAtelierLock", "checkBoundaryPolicy", "checkForbiddenEgress", "contextEnvelope", "createAtelierSidecarServer", "createPromoteEvent", "getBundledReadinessProtocol", "installBoundaryHooks", "loadAtelierLock", "loadBoundaryPolicy", "planUpgrade", "protocolById", "resolveProjectConfig", "validateAtelierExportContract", "validateAtelierExportDryRun", "validateAtelierExportDryRunFile", "validateBoundaryPolicy", "validateJsonSchema", "validateMigrationRecord", "validateProjectConfigDoc", "validateSchemaShape", "validateSupportBundlePayload", "writeAtelierLock"],
@@ -52,6 +57,10 @@
     "./extension-packs": ["ATELIER_EXT_NAMESPACE", "EXTENSION_PACK_SCHEMA", "PROTOCOL_POSTURE_POINTS", "RESERVED_NAMESPACE", "RESERVED_NAMESPACE_PATTERN", "computePackDigest", "createProtocolRegistry", "loadExtensionPacks"],
     "./analysis/adapter": ["analysisAdapterDryRun", "runAnalysisAdapterCommand"],
     "./export-contract": ["ALLOWED_RUNTIME_TARGETS", "LOCAL_AUDIENCES", "OBJECT_CLASSES", "RUNTIME_OWNERS", "RUNTIME_VISIBILITIES", "validateAtelierExportContract", "validateJsonSchema", "validateSchemaShape"],
-    "./dry-run": ["main", "validateAtelierExportDryRun", "validateAtelierExportDryRunFile"]
+    "./dry-run": ["main", "validateAtelierExportDryRun", "validateAtelierExportDryRunFile"],
+    "./extensions": ["ExtensionError", "canonicalJson", "exact", "parseInstallationBinding", "parseManifest", "parseOperationReceipt", "text", "parseProviderOperationProof"],
+    "./extensions/client": ["createExtensionAdminClient", "createExtensionClient", "createHttpHostTransport"],
+    "./extensions/server": ["assertVerifiedScope", "createExtensionHandler", "createRootAdmissionConsumer", "defineAction", "defineExtension", "digest", "releaseDigest"],
+    "./extensions/postgres": ["lookupPostgresOperation", "oncePostgresOperation", "postgresHealth", "withPostgresScope"]
   }
 }
