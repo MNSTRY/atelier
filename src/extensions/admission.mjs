@@ -6,6 +6,16 @@ function joinBytes(chunks, size) {
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
   return bytes
 }
+async function cancelResponseBody(body) {
+  if (!body) return
+  let timer
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => body.cancel()).catch(() => {}),
+      new Promise(resolve => { timer = setTimeout(resolve, 100) }),
+    ])
+  } finally { clearTimeout(timer) }
+}
 export async function readInvocationBody(request) {
   const body = request.body?.getReader()
   if (!body) throw new ExtensionError('invalid-input')
@@ -35,16 +45,16 @@ export function createAdmissionConsumer({ origin, fetch: hostFetch = globalThis.
     // Convex supports AbortController and action timers, but not every runtime
     // implements AbortSignal.timeout. The deadline includes the response body.
     const controller = new AbortController()
-    let timer
+    let timer, response, reader
     const expired = new Promise((_, reject) => {
       timer = setTimeout(() => { controller.abort(); reject(new ExtensionError('unavailable', 503)) }, 5000)
     })
     const consume = async () => {
-      const response = await hostFetch(endpoint, { method: 'POST', redirect: 'error', signal: controller.signal,
+      response = await hostFetch(endpoint, { method: 'POST', redirect: 'error', signal: controller.signal,
         headers: { 'content-type': 'application/json' }, body: canonicalJson({ delegation }) })
       if (response.status === 401 || response.status === 403) return false
       if (response.status != 200 || response.headers.get('content-type')?.split(';')[0] !== 'application/json') throw new ExtensionError('unavailable', 503)
-      const reader = response.body?.getReader()
+      reader = response.body?.getReader()
       if (!reader) throw new ExtensionError('unavailable', 503)
       try {
         let size = 0
@@ -60,8 +70,14 @@ export function createAdmissionConsumer({ origin, fetch: hostFetch = globalThis.
         exact(body, ['admitted'])
         if (body.admitted !== true) throw new ExtensionError('unavailable', 503)
         return true
-      } catch { throw new ExtensionError('unavailable', 503) } finally { await reader.cancel().catch(() => {}) }
+      } catch { throw new ExtensionError('unavailable', 503) }
     }
-    try { return await Promise.race([consume(), expired]) } finally { clearTimeout(timer) }
+    try { return await Promise.race([consume(), expired]) } finally {
+      clearTimeout(timer)
+      // Also close refusal/error responses, whose body reader was never acquired.
+      // Abort first; a broken/custom stream cancellation cannot extend transport.
+      controller.abort()
+      await cancelResponseBody(reader ?? response?.body)
+    }
   }
 }

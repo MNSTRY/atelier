@@ -134,7 +134,7 @@ test('Convex loopback admission requires an explicit test option and both local 
   }
 })
 
-test('admission transport works without AbortSignal.timeout and keeps a bounded refusal response', async () => {
+test('admission transport works without AbortSignal.timeout', async () => {
   const original = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout')
   const env = Object.fromEntries(['CONVEX_CLOUD_URL', 'CONVEX_SITE_URL'].map(key => [key, process.env[key]]))
   try {
@@ -154,4 +154,34 @@ test('native output validators cannot diverge from the durable canonical result'
     const f = fixture({ output })
     await assert.rejects(runConvexInvocation(f.extension, {}, { delegation: f.mintDelegation(), payload: { value: 4 } }), ExtensionError)
   }
+})
+
+for (const [status, contentType] of [[401, 'application/json'], [403, 'application/json'], [500, 'application/json'], [200, 'text/plain']]) {
+  test(`admission ${status}/${contentType} aborts and bounds cancellation of a pending response body`, async () => {
+    let signal, cancelled = 0
+    const body = new ReadableStream({ cancel() { cancelled++; return new Promise(() => {}) } })
+    const consume = createRootAdmissionConsumer({ origin: 'https://root.synthetic.invalid', fetch: async (_url, options) => {
+      signal = options.signal
+      return new Response(body, { status, headers: { 'content-type': contentType } })
+    } })
+    const started = Date.now()
+    if (status === 401 || status === 403) assert.equal(await consume({}, 'synthetic'), false)
+    else await assert.rejects(consume({}, 'synthetic'), error => error instanceof ExtensionError && error.code === 'unavailable')
+    assert.equal(signal.aborted, true); assert.equal(cancelled, 1)
+    assert.ok(Date.now() - started < 2500, 'a refusal must not await an uncooperative body indefinitely')
+  })
+}
+test('admission deadline covers a pending successful response body and aborts before bounded cleanup', async () => {
+  let signal, cancelled = 0
+  const body = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{')) },
+    cancel() { cancelled++; return new Promise(() => {}) } })
+  const consume = createRootAdmissionConsumer({ origin: 'https://root.synthetic.invalid', fetch: async (_url, options) => {
+    signal = options.signal
+    return new Response(body, { headers: { 'content-type': 'application/json' } })
+  } })
+  const started = Date.now()
+  await assert.rejects(consume({}, 'synthetic'), error => error instanceof ExtensionError && error.code === 'unavailable')
+  assert.equal(signal.aborted, true); assert.equal(cancelled, 1)
+  assert.ok(Date.now() - started >= 4500)
+  assert.ok(Date.now() - started < 12000, 'the full-response deadline and cleanup must stay bounded')
 })
