@@ -262,7 +262,7 @@ Writes a minimal <file>.kg.json sidecar next to every .html, .pdf and .docx docu
 
 Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet drafts stay in ignored .atelier-local/readiness/ unless explicitly materialized by a reviewed future flow.`,
     extension: `Usage:
-  ${c} extension init --directory NEW_PATH [--id sample.counter] [--profile postgres-sql] [--json]
+  ${c} extension init --directory NEW_PATH [--id sample.counter] [--profile postgres-sql|drizzle-db-first|drizzle-code-first|prisma-7-postgres] [--json]
   ${c} extension validate --directory PATH [--json]
   ${c} extension seal --directory PATH [--json]
 

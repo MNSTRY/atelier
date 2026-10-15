@@ -1,4 +1,4 @@
-import type { Json } from './contracts.mjs'
+import type { Json, ProviderOperationProof } from './contracts.mjs'
 import type { VerifiedScope } from './server.mjs'
 export interface PrismaTransaction {
   $queryRaw<T=unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>
@@ -9,5 +9,5 @@ export interface PrismaDatabase<Transaction extends PrismaTransaction> {
 }
 export function withPrismaScope<Transaction extends PrismaTransaction,T>(database:PrismaDatabase<Transaction>,scope:VerifiedScope,run:(transaction:Transaction)=>Promise<T>):Promise<T>
 export function oncePrismaOperation<Transaction extends PrismaTransaction>(database:PrismaDatabase<Transaction>,scope:VerifiedScope,input:Json,run:(transaction:Transaction)=>Promise<Json>):Promise<Json>
-export function lookupPrismaOperation<Transaction extends PrismaTransaction>(database:PrismaDatabase<Transaction>,scope:VerifiedScope,operationId:string):Promise<Json>
+export function lookupPrismaOperation<Transaction extends PrismaTransaction>(database:PrismaDatabase<Transaction>,scope:VerifiedScope,operationId:string):Promise<ProviderOperationProof|null>
 export function prismaHealth<Transaction extends PrismaTransaction>(database:PrismaDatabase<Transaction>):Promise<{ready:true;profile:'prisma-7-postgres';postgresMajor:17}>

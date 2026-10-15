@@ -1,5 +1,6 @@
+import { constants as fsConstants } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, open, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, parseManifest } from './contracts.mjs'
@@ -203,31 +204,57 @@ export async function scaffoldSqlProject({ directory, extensionId = 'sample.coun
 async function projectFiles(root, subpath) {
   const result = {}
   const base = await realpath(root)
+  const identity = stat => `${stat.dev}:${stat.ino}`
+  const metadata = new Set()
+  for(const name of [manifestName,packName]) {
+    try { const stat=await lstat(path.join(base,name),{bigint:true}); if(stat.isFile())metadata.add(identity(stat)) }
+    catch(error) { if(error.code!=='ENOENT')throw error }
+  }
+  async function checked(relative) {
+    const parts=relative.split(/[\\/]/u)
+    let file=base, stat
+    for(const part of parts) {
+      const folded=part.toLowerCase()
+      if(!part||part==='.'||part==='..'||folded==='node_modules'||
+        (part.startsWith('.')&&!['.gitignore','.gitattributes'].includes(folded)))
+        throw new Error('extension source contains an unsupported hidden or dependency path')
+      file=path.join(file,part);stat=await lstat(file,{bigint:true})
+      if(stat.isSymbolicLink())throw new Error('extension project symlinks are unsupported')
+    }
+    if(await realpath(file)!==file)throw new Error('extension source path is outside its literal project path or has different casing')
+    if(stat.isFile()&&metadata.has(identity(stat)))throw new Error('extension source cannot include generated identity files')
+    return {file,stat,key:parts.join('/')}
+  }
   async function walk(relative) {
-    const file = path.join(base, relative)
-    const stat = await lstat(file)
-    if (stat.isSymbolicLink()) throw new Error('extension project symlinks are unsupported')
-    if (stat.isDirectory()) {
-      for (const entry of (await readdir(file)).sort()) await walk(path.join(relative, entry))
-    } else if (stat.isFile()) {
-      if (stat.size > 1024 * 1024) throw new Error('extension source file exceeds 1 MiB')
-      result[relative.split(path.sep).join('/')] = hash(await readFile(file))
+    const {file,stat,key}=await checked(relative)
+    if(stat.isDirectory()) {
+      for(const entry of (await readdir(file)).sort())await walk(path.join(relative,entry))
+    } else if(stat.isFile()) {
+      if(stat.size>1024*1024)throw new Error('extension source file exceeds 1 MiB')
+      const handle=await open(file,fsConstants.O_RDONLY|(fsConstants.O_NOFOLLOW??0))
+      try {
+        if(identity(await handle.stat({bigint:true}))!==identity(stat))throw new Error('extension source changed while opening')
+        const bytes=await handle.readFile()
+        if(identity((await checked(relative)).stat)!==identity(stat))throw new Error('extension source changed while reading')
+        result[key]=hash(bytes)
+      } finally { await handle.close() }
     } else throw new Error('extension project requires regular files')
   }
-  for (const relative of subpath) await walk(relative)
+  for(const relative of subpath)await walk(relative)
   return result
 }
 async function bundleFiles(target) {
   const paths=['package.json','tsconfig.json','src']
   const packageFile=path.join(target,'package.json')
-  if(!(await lstat(packageFile)).isFile())throw new Error('extension package must be a regular file')
+  const packageStat=await lstat(packageFile)
+  if(!packageStat.isFile()||packageStat.size>1024*1024)throw new Error('extension package must be a bounded regular file')
   const pkg=JSON.parse(await readFile(packageFile,'utf8'))
   if(pkg.files!==undefined){
     if(!Array.isArray(pkg.files)||pkg.files.length>128)throw new Error('invalid extension source inputs')
     for(const file of pkg.files){
       if(typeof file!=='string'||!/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(file)||
         file.split('/').some(part=>part==='.'||part==='..'||part.startsWith('.'))||
-        [manifestName,packName].includes(file)||file==='node_modules'||file.startsWith('node_modules/'))
+        [manifestName,packName].includes(file.toLowerCase())||file.split('/').some(part=>part.toLowerCase()==='node_modules'))
         throw new Error('extension source inputs require literal project-relative paths')
       paths.push(file)
     }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { scaffoldSqlProject, sealProject, validateProject } from '../extensions/project.mjs'
 
-const usage = 'Usage: atelier extension init|validate|seal --directory PATH [--id sample.counter] [--profile postgres-sql] [--json]'
+const usage = 'Usage: atelier extension init|validate|seal --directory PATH [--id sample.counter] [--profile postgres-sql|drizzle-db-first|drizzle-code-first|prisma-7-postgres] [--json]'
 const [command, ...args] = process.argv.slice(2)
 try {
   if (command === '--help' || command === '-h' || !command) { console.log(usage) }
