@@ -85,3 +85,24 @@ claim an arbitrary external host, build artifact or dependency outside the proje
 Prisma interactive transactions use a 12-second transaction timeout and a 10-second
 SQL statement timeout. A manifest may allow up to 30 seconds, but the native
 transaction can roll back sooner and the handler then reports operation unknown.
+
+
+After reviewing and sealing a project, `atelier extension bundle --directory
+./custom-extension --json` writes its registration bundle to stdout. It contains
+the pinned manifest, exact schema strings and migration hashes. It uses the same
+file checks as sealing and refuses stale inputs. It creates no account, database,
+process or installation and applies no migration.
+
+Pass this bundle to `createExtensionAdminClient(transport).registerRelease(bundle)`
+through the consuming host's authenticated transport, then configure the returned
+release using the existing connection and lifecycle methods. The receiving host
+must independently verify every release and file digest and apply its publisher
+policy. A registration receipt is separate from health, enablement and consent.
+An older host without registration refuses with `unavailable`; clients do not
+silently enable or repeat the operation.
+
+A generic counter response is custom application data. A host's result-recording
+contract can require a different schema and narrower bounds. Author that result
+explicitly, update its action output schema, review and reseal it, and request the
+host's separate permission before recording it. Declaring a root-write permission
+alone does not make an arbitrary action result compatible.

@@ -87,6 +87,7 @@ Core commands:
   extension init                 Scaffold a custom database extension.
   extension validate             Check extension source and release digests.
   extension seal                 Seal reviewed extension edits.
+  extension bundle               Export a sealed host-registration bundle.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
   distribution check              Check a distribution for MNSTRY attribution.
@@ -127,9 +128,10 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('ingest'), ['src/commands/ingest.mjs'])
   assert.deepEqual(commandMap.get('enroll'), ['src/commands/enroll.mjs'])
   assert.deepEqual(commandMap.get('knowledge'), ['src/commands/knowledge.mjs'])
-  assert.equal(commandMap.size, 71)
+  assert.equal(commandMap.size, 72)
   assert.deepEqual(commandMap.get('extension'), ['src/commands/extension.mjs'])
   assert.deepEqual(commandMap.get('extension:init'), ['src/commands/extension.mjs', 'init'])
+  assert.deepEqual(commandMap.get('extension:bundle'), ['src/commands/extension.mjs', 'bundle'])
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {

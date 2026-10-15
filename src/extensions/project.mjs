@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { lstat, open, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { canonicalJson, parseManifest } from './contracts.mjs'
+import { canonicalJson, parseManifest, parseReleaseBundle } from './contracts.mjs'
 import { sqlProjectFiles } from './scaffold-sql.mjs'
 import { releaseDigest } from './server.mjs'
 import { loadExtensionPacks, RESERVED_NAMESPACE_PATTERN } from '../extension-packs/loader.mjs'
@@ -219,7 +219,7 @@ async function boundedSourceBytes(file,expected) {
     return Buffer.concat(chunks,length)
   } finally { await handle.close() }
 }
-async function projectFiles(root, subpath) {
+async function projectFiles(root, subpath, collectBytes) {
   const result = new Map()
   const base = await realpath(root)
   const identity = stat => `${stat.dev}:${stat.ino}`
@@ -251,6 +251,7 @@ async function projectFiles(root, subpath) {
       const bytes=await boundedSourceBytes(file,stat)
       if(identity((await checked(parts)).stat)!==identity(stat))throw new Error('extension source changed while reading')
       result.set(key,hash(bytes))
+      collectBytes?.(key,bytes)
     } else throw new Error('extension project requires regular files')
   }
   for(const relative of subpath)await walk(relative.split('/'))
@@ -377,3 +378,29 @@ async function validatePackProjection(target,manifest) {
 }
 
 export function scaffoldPostgres(options) { return scaffoldSqlProject({...options,profile:'postgres-sql'}) }
+
+
+/** Export the exact sealed schema bytes and migration digests through the same
+ * checked file walk used by sealing. No new file inventory or host is created. */
+export async function exportReleaseBundle(directory) {
+  const target=await realpath(path.resolve(directory))
+  await validateProject(target)
+  const manifestFile=path.join(target,manifestName), stat=await lstat(manifestFile,{bigint:true})
+  const original=(await boundedSourceBytes(manifestFile,stat)).toString('utf8')
+  const manifest=parseManifest(JSON.parse(original)), schemaFiles=new Map()
+  let schemaBytes=0
+  const digests=await projectFiles(target,['schemas','migrations'],(name,bytes)=>{
+    if(!name.startsWith('schemas/'))return
+    schemaBytes+=bytes.length
+    if(bytes.length>65536||schemaBytes>131072)throw new Error('extension registration schema bundle is too large')
+    schemaFiles.set(name,new TextDecoder('utf-8',{fatal:true}).decode(bytes))
+  })
+  if(manifest.releaseDigest!==releaseDigest(manifest)||manifest.deployment.schemaDigest!==hash(canonicalJson(digests))||
+    manifest.deployment.bundleDigest!==hash(canonicalJson(await bundleFiles(target))))throw new Error('extension seal is stale')
+  const migrationDigests=new Map(Object.entries(digests).filter(([name])=>name.startsWith('migrations/')))
+  const result=parseReleaseBundle({manifest,schemaFiles:Object.fromEntries(schemaFiles),migrationDigests:Object.fromEntries(migrationDigests)})
+  if((await boundedSourceBytes(manifestFile,await lstat(manifestFile,{bigint:true}))).toString('utf8')!==original||
+    canonicalJson(digests)!==canonicalJson(await projectFiles(target,['schemas','migrations'])))throw new Error('extension changed during export')
+  await validatePackProjection(target,manifest)
+  return result
+}

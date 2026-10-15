@@ -52,6 +52,7 @@ export const commandMap = new Map([
   ['extension:init', ['src/commands/extension.mjs', 'init']],
   ['extension:validate', ['src/commands/extension.mjs', 'validate']],
   ['extension:seal', ['src/commands/extension.mjs', 'seal']],
+  ['extension:bundle', ['src/commands/extension.mjs', 'bundle']],
   ['extension-pack', ['src/commands/extension-pack.mjs']],
   ['extension-pack:validate', ['src/commands/extension-pack.mjs', 'validate']],
   ['extension-pack:list', ['src/commands/extension-pack.mjs', 'list']],
@@ -175,6 +176,7 @@ Core commands:
   extension init                 Scaffold a custom database extension.
   extension validate             Check extension source and release digests.
   extension seal                 Seal reviewed extension edits.
+  extension bundle               Export a sealed host-registration bundle.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
   distribution check              Check a distribution for MNSTRY attribution.
@@ -265,6 +267,7 @@ Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet dr
   ${c} extension init --directory NEW_PATH [--id sample.counter] [--profile postgres-sql|drizzle-db-first|drizzle-code-first|prisma-7-postgres] [--json]
   ${c} extension validate --directory PATH [--json]
   ${c} extension seal --directory PATH [--json]
+  ${c} extension bundle --directory PATH [--json]
 
 Generate a customer-owned Postgres project or validate/seal its source digests. Init requires a new directory. These commands create no account, database, process, deployment or installation. See docs/extensions.md.`,
     'extension-pack': `Usage:

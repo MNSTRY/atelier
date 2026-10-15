@@ -1,4 +1,4 @@
-import type { ExtensionManifest, InstallationBinding, Invocation, Json, OperationReceipt } from './contracts.mjs'
+import type { ExtensionReleaseBundle, ExtensionReleaseRegistration, ExtensionManifest, InstallationBinding, Invocation, Json, OperationReceipt } from './contracts.mjs'
 export interface HostTransport {
   getInstallation(id: string): Promise<InstallationBinding>;
   invoke(request: Invocation): Promise<OperationReceipt>;
@@ -7,6 +7,7 @@ export interface HostTransport {
   recordResult(operationId: string): Promise<void>;
 }
 export interface AdminHostTransport {
+  registerRelease?(bundle: ExtensionReleaseBundle): Promise<ExtensionReleaseRegistration>;
   configure(manifest: ExtensionManifest, connectionRef: string, environment: 'development' | 'staging' | 'production'): Promise<InstallationBinding>;
   transition(binding: InstallationBinding, transition: 'verify' | 'enable' | 'disable' | 'remove'): Promise<InstallationBinding>;
   upgrade(binding: InstallationBinding, manifest: ExtensionManifest): Promise<InstallationBinding>;
@@ -19,4 +20,4 @@ export function createExtensionClient(transport: HostTransport): {
   recoverOperation(binding: InstallationBinding, key: string, action: string): Promise<OperationReceipt>;
   recordResult(operationId: string): Promise<void>;
 }
-export function createExtensionAdminClient(transport: AdminHostTransport): Omit<AdminHostTransport, 'configure'> & { configure(manifest: ExtensionManifest, connectionRef: string, environment?: 'development' | 'staging' | 'production'): Promise<InstallationBinding> }
+export function createExtensionAdminClient(transport: AdminHostTransport): Omit<AdminHostTransport, 'configure' | 'registerRelease'> & { registerRelease(bundle: ExtensionReleaseBundle): Promise<ExtensionReleaseRegistration>; configure(manifest: ExtensionManifest, connectionRef: string, environment?: 'development' | 'staging' | 'production'): Promise<InstallationBinding> }
