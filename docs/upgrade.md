@@ -15,18 +15,52 @@ through a browser view.
 candidate's own dependency closure before an upgrade. It reads the candidate's
 lockfile and manifests only and runs no npm command. Exit code 3 is a completed
 plan and exit code 2 a refusal; the command never exits 0, because a plan is not
-proof of an offline reinstall. See
-[Consumer dependency closure plan](#consumer-dependency-closure-plan).
+proof of an offline reinstall. It refuses `--__proto__` as an unsupported flag.
+See [Consumer dependency closure plan](#consumer-dependency-closure-plan).
 
 This release also introduces `@mnstry/atelier/ui`, a tenant-neutral control
 grammar for local Atelier tooling and compatible downstream interfaces. Existing
 consumers do not need to change. Consumers that adopt it map the
 `--system-control-*` custom properties to their own theme.
 
-No existing command, schema or stored record changes in this release. A package
-update supplies no interpretation approval, source-write permission, publication
-authority or runtime activation. Rehearse this exact installed version in a
-disposable workspace before client use.
+No schema or stored record format changes in this release. The boundary checks
+now judge work they used to miss, so a commit or push that passed on
+0.2.0-alpha.13 can be refused, and a few other results change:
+
+- Reinstall the boundary hooks with `atelier boundary install-hooks`. The new
+  pre-push hook passes the remote Git names, so history held only by another
+  remote is judged on its way to a new one. The push check judges every commit
+  the remote's tracking refs do not hold, each against its parent, binaries
+  included. A push carrying more than 1000 such commits or more than the
+  evidence budget is refused with `content-scan-incomplete`; push it in
+  smaller parts.
+- The pre-commit check reads the index and work tree Git names, so
+  `git commit -a`, `git commit <paths>` and commits from a linked worktree are
+  judged. It blocks with `pre-commit-repo-unresolved` when no single declared
+  repository is being committed, as the push check does.
+- The content scan pins its diff format, so an external diff, a textconv
+  driver, changed prefixes or quoted paths no longer leave a change unscanned.
+  A staged or pushed deletion of a binary file no longer blocks.
+- The semantic-field review takes only an added review marker as approval; a
+  removed marker, or one in a file name, approves nothing. `atelier upgrade`
+  applies the same rule.
+- `extract-structure` refuses `parallel: true` with `NATIVE_WORKERS_UNATTESTED`.
+- Knowledge Health regenerates its rule identity for the two graph files: the
+  `check` each assessment carries names a new `version`, `sourceTree` and
+  `graphBlob`. The rule it applies is unchanged. A workshop contribution
+  started on 0.2.0-alpha.13, completed or not, cannot start Review on this
+  release (`finding changed; refresh before selecting a new draft`); start
+  Review before upgrading, or record a new contribution.
+- `runMaintenanceService` from `@mnstry/atelier/obsidian` refuses a project
+  loader that answers with a promise when no `locateProject` is given
+  (`service-loader-not-synchronous`); on 0.2.0-alpha.13 such a service
+  protected no repository. Pass a synchronous `locateProject`, which answers
+  a project naming its folder, to keep an asynchronous loader (see
+  [Obsidian](obsidian.md)).
+
+A package update supplies no interpretation approval, source-write permission,
+publication authority or runtime activation. Rehearse this exact installed
+version in a disposable workspace before client use.
 
 ## Upgrading to 0.2.0-alpha.13
 
