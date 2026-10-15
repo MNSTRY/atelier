@@ -35,8 +35,10 @@ A valid seal identifies bytes; it proves neither publisher trust nor deployment.
 Keep the package lockfile after installation. Lost write replies require explicit
 lookup/recovery; neither client silently retries or refreshes a generation.
 
-The initial scaffold profile is Postgres. Drizzle, Prisma and Convex are planned
-native integrations and are not advertised as qualified. Scaffolding, synthetic
+Scaffold profiles include postgres-sql, drizzle-db-first, drizzle-code-first and
+prisma-7-postgres. Drizzle retains its native query builder and transaction API;
+Prisma retains its native generated client and pg adapter. Convex remains pending,
+and Prisma 8 remains an unqualified separate experiment. Scaffolding, synthetic
 protocol tests, real provider tests, actual supported hosts, public release and
 customer acceptance carry separate evidence. Private runtime bindings are not
 distributed in this package.
@@ -59,3 +61,23 @@ Each source file is limited to 1 MiB; each canonical digest map is limited to
 128 KiB. Deterministic invalid pack state refuses before rewriting the manifest.
 The manifest and pack remain separate files: an interruption between their writes
 is detected as stale by validation and requires an explicit reseal.
+
+Choose a profile with `atelier extension init --profile drizzle-db-first` (or
+`drizzle-code-first`, `prisma-7-postgres`). DB-first uses native `drizzle-kit pull`
+restricted to extension_data, then normalizes the generated local relation import
+for Node ESM. Review and retain the generated schema before resealing. Code-first
+uses native generation: review and apply its SQL before the explicit forced-RLS
+governance migration. Export the schema declaration so generation creates it.
+Prisma 7 uses native client generation and the explicit application DSN supplied
+by the customer host; the reviewed SQL still installs RLS. Generator output is
+a proposed source change, never permission to mutate a shared or Root database.
+Optional provider dependencies are installed in the generated app, never Atelier.
+
+Custom native configuration, schema and migration locations must be listed in the
+generated package.json `files` array as literal project-relative files or directories.
+This reuses the project's native package input list; it adds no second project catalog
+and never executes a TypeScript config during sealing. The list itself is sealed.
+Conventional generated paths and present npm locks are included automatically.
+Globs, parent paths, dependency directories, environment files and self-referential
+manifest/pack inputs refuse. The seal identifies these declared inputs; it does not
+claim an arbitrary external host, build artifact or dependency outside the project.

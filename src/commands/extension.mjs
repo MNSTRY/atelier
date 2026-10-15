@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { scaffoldPostgres, sealProject, validateProject } from '../extensions/project.mjs'
+import { scaffoldSqlProject, sealProject, validateProject } from '../extensions/project.mjs'
 
 const usage = 'Usage: atelier extension init|validate|seal --directory PATH [--id sample.counter] [--profile postgres-sql] [--json]'
 const [command, ...args] = process.argv.slice(2)
@@ -15,8 +15,8 @@ try {
       options[arg] = args[++i]
     }
     if (!options['--directory'] || (command !== 'init' && (options['--id'] || options['--profile']))) throw new Error('invalid options')
-    if (options['--profile'] && options['--profile'] !== 'postgres-sql') throw new Error('profile not implemented')
-    const result = command === 'init' ? await scaffoldPostgres({ directory: options['--directory'], extensionId: options['--id'] }) :
+    if (options['--profile'] && !['postgres-sql','drizzle-db-first','drizzle-code-first','prisma-7-postgres'].includes(options['--profile'])) throw new Error('profile not implemented')
+    const result = command === 'init' ? await scaffoldSqlProject({ directory: options['--directory'], extensionId: options['--id'], profile: options['--profile'] }) :
       command === 'validate' ? await validateProject(options['--directory']) : await sealProject(options['--directory']).then(manifest => ({ releaseDigest: manifest.releaseDigest, qualified: false }))
     console.log(options.json ? JSON.stringify(result) : `${command}: ${result.releaseDigest} (qualification pending)`)
   }

@@ -18,21 +18,24 @@ test('packed extension API has its exact declarations and imports from an isolat
   await mkdir(destination, { recursive: true })
   execFileSync('tar', ['-xzf', path.join(dir, pack.filename), '--strip-components=1', '-C', destination])
   const pkg = JSON.parse(await readFile(path.join(destination, 'package.json')))
-  for (const name of ['contracts', 'client', 'server', 'postgres']) {
+  for (const name of ['contracts', 'client', 'server', 'postgres', 'drizzle', 'prisma']) {
     assert.ok(pack.files.some(file => file.path === `src/extensions/${name}.d.mts`))
     assert.ok(pack.files.some(file => file.path === `src/extensions/${name}.mjs`))
   }
-  assert.equal(pkg.dependencies?.postgres, undefined)
+  for(const name of ['postgres','drizzle-orm','drizzle-kit','prisma','@prisma/client','@prisma/adapter-pg','pg']) assert.equal(pkg.dependencies?.[name], undefined)
   const file = path.join(dir, 'consumer.mjs')
   await writeFile(file, `import assert from 'node:assert/strict';
     import { canonicalJson } from '@mnstry/atelier/extensions';
     import { createExtensionClient } from '@mnstry/atelier/extensions/client';
     import { assertVerifiedScope } from '@mnstry/atelier/extensions/server';
     import { withPostgresScope } from '@mnstry/atelier/extensions/postgres';
+    import { withDrizzleScope } from '@mnstry/atelier/extensions/drizzle';
+    import { withPrismaScope } from '@mnstry/atelier/extensions/prisma';
     assert.equal(canonicalJson({b:2,a:1}), '{"a":1,"b":2}');
     assert.equal(typeof createExtensionClient, 'function');
     assert.throws(() => assertVerifiedScope({}));
     assert.equal(typeof withPostgresScope, 'function');
+    assert.equal(typeof withDrizzleScope, 'function');assert.equal(typeof withPrismaScope, 'function');
     await assert.rejects(import('@mnstry/atelier/src/extensions/server.mjs'), {code:'ERR_PACKAGE_PATH_NOT_EXPORTED'});`)
   execFileSync(process.execPath, [file], { cwd: dir, timeout: 10000 })
 })

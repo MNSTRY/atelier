@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add native Drizzle DB-first/code-first and Prisma 7 project profiles, prepared scoped transactions and provider receipt recovery. Optional provider dependencies stay in the generated app; Root and supported-host acceptance remain separate gates.
+
 The alpha.15 source version below is an unpublished candidate reservation. Shipping requires the maintainer's separate release PR and decision.
 
 ## 0.2.0-alpha.15

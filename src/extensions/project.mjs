@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, parseManifest } from './contracts.mjs'
+import { sqlProjectFiles } from './scaffold-sql.mjs'
 import { releaseDigest } from './server.mjs'
 import { loadExtensionPacks, RESERVED_NAMESPACE_PATTERN } from '../extension-packs/loader.mjs'
 
@@ -137,7 +138,8 @@ The sample deletes its live rows and earlier provider receipts; backup retention
 the operator's responsibility. Provider qualification and actual Web/native acceptance
 are separate from scaffolding. Drizzle, Prisma and Convex profiles remain pending.
 `
-export async function scaffoldPostgres({ directory, extensionId = 'sample.counter' }) {
+export async function scaffoldSqlProject({ directory, extensionId = 'sample.counter', profile = 'postgres-sql' }) {
+  if(!['postgres-sql','drizzle-db-first','drizzle-code-first','prisma-7-postgres'].includes(profile))throw new Error('unsupported SQL profile')
   if (extensionId.length > 128 || !/^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/.test(extensionId) || RESERVED_NAMESPACE_PATTERN.test(extensionId.split('.')[0])) throw new Error('invalid extension id')
   const target = path.resolve(directory)
   await mkdir(target) // Exclusive reservation: an existing directory is never adopted or overwritten.
@@ -147,11 +149,22 @@ export async function scaffoldPostgres({ directory, extensionId = 'sample.counte
     const kit = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
     const files = {
       'package.json': JSON.stringify({ name: extensionId, version: '1.0.0', private: true, type: 'module',
-        scripts: { typecheck: 'tsc --noEmit' }, dependencies: { '@mnstry/atelier': kit.version, postgres: '3.4.7' },
+        files: ['src','tsconfig.json'], scripts: { typecheck: 'tsc --noEmit' }, dependencies: { '@mnstry/atelier': kit.version, postgres: '3.4.7' },
         devDependencies: { typescript: '5.8.3', '@types/node': '22.18.0' }, engines: { node: '>=22.18.0 <23' } }, null, 2) + '\n',
       'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', noEmit: true, skipLibCheck: true }, include: ['src/**/*.ts'] }, null, 2) + '\n',
       'src/backend.ts': backend, 'migrations/001-initial.sql': migration, 'README.md': readme,
       '.gitignore': 'node_modules/\n.env\n.env.*\n!env.example\n', 'env.example': '# Backend secret reference only; do not commit credentials.\nEXTENSION_DATABASE_URL=\n',
+    }
+    if(profile!=='postgres-sql') {
+      const provider=sqlProjectFiles(profile,backend,migration)
+      Object.assign(files,provider.files)
+      const pkg=JSON.parse(files['package.json'])
+      delete pkg.dependencies.postgres
+      Object.assign(pkg.dependencies,provider.dependencies)
+      Object.assign(pkg.devDependencies,provider.devDependencies)
+      Object.assign(pkg.scripts,provider.scripts)
+      files['package.json']=JSON.stringify(pkg,null,2)+'\n'
+      files['README.md']=provider.instructions+'\n\n'+readme.replace('Drizzle, Prisma and Convex profiles remain pending.','Convex remains pending; the native SQL profile above requires its own qualification.')
     }
     const resultSchemas = {
       set: counterSchema, get: counterSchema,
@@ -173,14 +186,14 @@ export async function scaffoldPostgres({ directory, extensionId = 'sample.counte
     }
     const manifest = { schema: 'mnstry.extension-manifest/v1', extensionId, releaseVersion: '1.0.0', releaseDigest: '0'.repeat(64), protocol: 'mnstry.extension/v1',
       compatibility: { sdkMajor: 1, rootContracts: ['extension.result.record/v1'], hosts: ['web'] },
-      deployment: { profile: 'postgres-sql', bundleDigest: '0'.repeat(64), schemaDigest: '0'.repeat(64) },
+      deployment: { profile, bundleDigest: '0'.repeat(64), schemaDigest: '0'.repeat(64) },
       actions: ['set', 'get', 'export', 'delete', 'lookup'].map(action => ({ id: `counter.${action}`,
         effect: ['set', 'delete'].includes(action) ? 'write' : 'read', scope: 'member',
         inputSchemaRef: `schemas/counter-${action}-input.json`, outputSchemaRef: `schemas/counter-${action}-output.json`, timeoutMs: 10000 })),
       recovery: { lookupActionId: 'counter.lookup' }, permissions: { rootReads: [], rootWrites: ['extension.result.record/v1'], egress: [] }, surfaces: [],
       data: { classes: ['sample.counter'], retention: 'until-user-delete', exportVersion: 1, schemaVersion: '1', readableSchemaVersions: ['1'] } }
     const result = await sealProject(target, manifest)
-    return { directory: target, profile: 'postgres-sql', releaseDigest: result.releaseDigest, qualified: false }
+    return { directory: target, profile, releaseDigest: result.releaseDigest, qualified: false }
   } catch (error) {
     const current = await lstat(target).catch(() => null)
     if (current?.isDirectory() && current.dev === identity.dev && current.ino === identity.ino) await rm(target, { recursive: true })
@@ -206,11 +219,24 @@ async function projectFiles(root, subpath) {
 }
 async function bundleFiles(target) {
   const paths=['package.json','tsconfig.json','src']
+  const packageFile=path.join(target,'package.json')
+  if(!(await lstat(packageFile)).isFile())throw new Error('extension package must be a regular file')
+  const pkg=JSON.parse(await readFile(packageFile,'utf8'))
+  if(pkg.files!==undefined){
+    if(!Array.isArray(pkg.files)||pkg.files.length>128)throw new Error('invalid extension source inputs')
+    for(const file of pkg.files){
+      if(typeof file!=='string'||!/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(file)||
+        file.split('/').some(part=>part==='.'||part==='..'||part.startsWith('.'))||
+        [manifestName,packName].includes(file)||file==='node_modules'||file.startsWith('node_modules/'))
+        throw new Error('extension source inputs require literal project-relative paths')
+      paths.push(file)
+    }
+  }
   for(const file of ['package-lock.json','npm-shrinkwrap.json','drizzle.config.ts','drizzle-introspect.config.ts','prisma.config.ts','prisma']) {
     try { await lstat(path.join(target,file)); paths.push(file) }
     catch(error) { if(error.code!=='ENOENT')throw error }
   }
-  return projectFiles(target,paths)
+  return projectFiles(target,[...new Set(paths)])
 }
 async function preflightPackSeal(target,manifest) {
   const file=path.join(target,packName)
@@ -309,3 +335,5 @@ async function validatePackProjection(target,manifest) {
   if(canonicalJson(pack.ext?.['mnstry.atelier']?.runtimeManifest)!==canonicalJson(await runtimeReference(target,manifest)))
     throw new Error('extension pack runtime reference is stale')
 }
+
+export function scaffoldPostgres(options) { return scaffoldSqlProject({...options,profile:'postgres-sql'}) }
