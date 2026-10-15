@@ -4,7 +4,7 @@ const opaque = value => { if (!/^[A-Za-z0-9_-]{16,128}$/.test(text(value))) thro
 const actionIdValue = value => { if (!/^[a-z0-9][a-z0-9._-]{2,127}$/.test(text(value)) || /^(?:lifecycle|installation|extension)\./.test(value)) throw new ExtensionError('invalid-input'); return value }
 const codes = new Set(['invalid-input', 'unauthorized', 'forbidden', 'stale-installation', 'disabled', 'idempotency-conflict', 'operation-unknown', 'release-conflict', 'unavailable'])
 const registration = (value, releaseDigest) => {
-  const result=exact(value,['releaseId','releaseDigest'])
+  const result=exact(JSON.parse(canonicalJson(value)),['releaseId','releaseDigest'])
   if(result.releaseDigest!==releaseDigest)throw new ExtensionError('unavailable',503)
   return {releaseId:opaque(result.releaseId),releaseDigest:result.releaseDigest}
 }
@@ -39,8 +39,8 @@ export function createHttpHostTransport(hostFetch) {
   const installation = id => `/installations/${segment(id)}`
   return Object.freeze({
     registerRelease: async input => {
-      const bundle=parseReleaseBundle(input)
-      return registration(await send('/releases',bundle),bundle.manifest.releaseDigest)
+      const bundle=parseReleaseBundle(input), expectedReleaseDigest=bundle.manifest.releaseDigest
+      return registration(await send('/releases',bundle),expectedReleaseDigest)
     },
     getInstallation: async id => parseInstallationBinding(await send(installation(id))),
     invoke: async request => {
@@ -83,8 +83,8 @@ export function createExtensionAdminClient(transport) {
   return Object.freeze({
     registerRelease: async value => {
       if(typeof transport.registerRelease!=='function')throw new ExtensionError('unavailable',503)
-      const bundle=parseReleaseBundle(value)
-      return registration(await transport.registerRelease(bundle),bundle.manifest.releaseDigest)
+      const bundle=parseReleaseBundle(value), expectedReleaseDigest=bundle.manifest.releaseDigest
+      return registration(await transport.registerRelease(bundle),expectedReleaseDigest)
     },
     configure: async (manifest, connectionRef, environment = 'development') => {
       if (!['development', 'staging', 'production'].includes(environment)) throw new ExtensionError('invalid-input')

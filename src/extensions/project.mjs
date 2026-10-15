@@ -393,10 +393,15 @@ export async function exportReleaseBundle(directory) {
     if(!name.startsWith('schemas/'))return
     schemaBytes+=bytes.length
     if(bytes.length>65536||schemaBytes>131072)throw new Error('extension registration schema bundle is too large')
-    schemaFiles.set(name,new TextDecoder('utf-8',{fatal:true}).decode(bytes))
+    const decoded=new TextDecoder('utf-8',{fatal:true}).decode(bytes)
+    // Fatal decoding rejects invalid UTF-8; round-trip equality also refuses
+    // normalization such as BOM removal before exact sealed bytes are exported.
+    if(!Buffer.from(decoded,'utf8').equals(bytes))throw new Error('extension schema encoding changes sealed bytes')
+    schemaFiles.set(name,decoded)
   })
   if(manifest.releaseDigest!==releaseDigest(manifest)||manifest.deployment.schemaDigest!==hash(canonicalJson(digests))||
     manifest.deployment.bundleDigest!==hash(canonicalJson(await bundleFiles(target))))throw new Error('extension seal is stale')
+  for(const [name,bytes] of schemaFiles)if(hash(Buffer.from(bytes,'utf8'))!==digests[name])throw new Error('extension schema export differs from sealed bytes')
   const migrationDigests=new Map(Object.entries(digests).filter(([name])=>name.startsWith('migrations/')))
   const result=parseReleaseBundle({manifest,schemaFiles:Object.fromEntries(schemaFiles),migrationDigests:Object.fromEntries(migrationDigests)})
   if((await boundedSourceBytes(manifestFile,await lstat(manifestFile,{bigint:true}))).toString('utf8')!==original||

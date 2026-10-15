@@ -64,3 +64,40 @@ test('admin registration uses the injected host once and binds its returned rele
   const accessor={...bundle,get schemaFiles(){read=true;return {}}}
   assert.throws(()=>parseReleaseBundle(accessor),{code:'invalid-input'});assert.equal(read,false)
 })
+
+test('registration replies refuse accessors without reading them and retain the original requested identity',async t=>{
+  const {project}=await fixture(t),bundle=await exportReleaseBundle(project)
+  let reads=0
+  const reply={releaseId:'release_synthetic_12345',get releaseDigest(){reads++;return bundle.manifest.releaseDigest}}
+  await assert.rejects(createExtensionAdminClient({registerRelease:async()=>reply}).registerRelease(bundle),{code:'invalid-input'})
+  assert.equal(reads,0)
+  const changed=createExtensionAdminClient({registerRelease:async input=>{
+    input.manifest.releaseDigest='f'.repeat(64)
+    return {releaseId:'release_synthetic_12345',releaseDigest:input.manifest.releaseDigest}
+  }})
+  await assert.rejects(changed.registerRelease(bundle),{code:'unavailable'})
+  assert.notEqual(bundle.manifest.releaseDigest,'f'.repeat(64))
+})
+test('direct authenticated HTTP registration retains the original request identity across an awaited response',async t=>{
+  const {project}=await fixture(t),bundle=await exportReleaseBundle(project),digest=bundle.manifest.releaseDigest
+  const transport=createHttpHostTransport(async()=>{
+    bundle.manifest.releaseDigest='f'.repeat(64)
+    return Response.json({releaseId:'release_synthetic_12345',releaseDigest:bundle.manifest.releaseDigest})
+  })
+  await assert.rejects(transport.registerRelease(bundle),{code:'unavailable'})
+  assert.notEqual(digest,bundle.manifest.releaseDigest)
+})
+test('an additional sealed BOM schema cannot silently change bytes during bundle export',async t=>{
+  const {project}=await fixture(t)
+  await writeFile(path.join(project,'schemas/additional.json'),Buffer.concat([Buffer.from([0xef,0xbb,0xbf]),Buffer.from('{"type":"object"}')]))
+  await sealProject(project)
+  await assert.rejects(exportReleaseBundle(project),/encoding changes sealed bytes/)
+  await writeFile(path.join(project,'schemas/additional.json'),'{"type":"object"}\n')
+  await sealProject(project)
+  const bundle=await exportReleaseBundle(project)
+  assert.deepEqual(Buffer.from(bundle.schemaFiles['schemas/additional.json']),await readFile(path.join(project,'schemas/additional.json')))
+})
+test('registration bounds HTTP reply bytes before returning a typed receipt',async t=>{
+  const {project}=await fixture(t),bundle=await exportReleaseBundle(project)
+  await assert.rejects(createExtensionAdminClient(createHttpHostTransport(async()=>new Response(' '.repeat(131073)))).registerRelease(bundle),{code:'unavailable'})
+})
