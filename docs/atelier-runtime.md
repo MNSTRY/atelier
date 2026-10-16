@@ -20,6 +20,11 @@ The package owns reusable mechanics:
 Project adapters own project facts: repo roster, source roots, read-boundary
 config, extension packs, brand language, and generated project outputs.
 
+Tenant-specific authoring products use the public binding, projection, and
+proposal-only intent seam while keeping their principles, queries, payloads,
+and persistence in the consumer adapter. See
+[Tenant authoring extensions](./tenant-authoring-extensions.md).
+
 ## Local Authority
 
 Local files plus Git are the source authority. Generated JSON, HTML, SQLite,
