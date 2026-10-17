@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The boundary push check names its reason when a push's refs together exceed the evidence budget (`push-evidence-too-large`, with `limitBytes`, as when one ref's commits do), where before that refusal carried no reason. The text output of `atelier boundary check` and `atelier boundary push-check` lists a scan that could not finish (`content-scan-incomplete`, `semantic-field-scan-incomplete`, `repo-unscannable`) before the content findings and says how many findings past the first 50 it leaves out, so a long list no longer hides why a commit or push was refused. The guard documentation says the 1000-commit limit applies to each ref update and what to do with a single commit over the budget on its own.
+
 - Add the optional native Convex backend adapter and TypeScript starter through the existing extension init/seal/validate/bundle workflow. HTTP admission and private native mutations reuse the delegation contract; indexed operation results commit with custom writes. Native provider qualification remains separate from reactive lifecycle and complete host/customer acceptance.
 
 - Add native Drizzle DB-first/code-first and Prisma 7 project profiles, prepared scoped transactions and provider receipt recovery. Optional provider dependencies stay in the generated app; Root and supported-host acceptance remain separate gates.

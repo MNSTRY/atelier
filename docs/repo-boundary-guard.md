@@ -279,9 +279,14 @@ machine for weeks.
   remote's tracking refs, so reinstall it (`atelier boundary install-hooks`)
   for history that only another remote holds to be judged on its way to a new
   one. A brand-new branch is diffed against the empty tree, in SHA-1 and SHA-256
-  repositories alike, so nothing slips through unscanned. A push carrying more
-  than 1000 such commits, or more evidence than the aggregate budget, is
-  refused; push it in smaller parts, an earlier commit first. Each diff reads
+  repositories alike, so nothing slips through unscanned. A ref update carrying
+  more than 1000 such commits, or a push whose refs together carry more
+  evidence than the aggregate budget, is refused with `content-scan-incomplete`;
+  push it in smaller parts, an earlier commit first. A single commit whose
+  evidence alone is over the budget, as a merge bringing in large changes can
+  be, cannot be split that way: merge in smaller steps, or rebase onto the
+  remote, and push again. The text output lists an incomplete scan first and
+  at most 50 findings; `--json` lists every finding. Each diff reads
   what it needs, so a history that swaps large binaries back and forth makes
   the hook slow, within the commit cap and per-diff limits. The remote's
   tracking refs are found by name: a remote whose fetch refspec writes into

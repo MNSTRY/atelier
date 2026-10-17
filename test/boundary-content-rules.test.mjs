@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   BOUNDARY_POLICY_SCHEMA,
   auditContentRules,
@@ -19,6 +20,7 @@ import {
 import {
   DEFAULT_CONTENT_RULES,
   BINARY_FILE_MAX_BYTES,
+  CHECK_AGGREGATE_MAX_BYTES,
   parsePushRefInput,
   diffHeaderPath,
   parseAddedContent,
@@ -1521,4 +1523,63 @@ test('the push guard works from a subdirectory of the repo', (t) => {
   commit(site, 'README.md', '# Site\n', 'docs')
   const report = checkPushContent({ project, policy, updates: pushUpdate(site), cwd: path.join(site, 'src/scripts') })
   assert.equal(report.repo, 'example-site')
+})
+
+test('a push whose refs together exceed the evidence budget names the reason, as one ref does', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  const base = git(site, ['rev-parse', 'origin/main'])
+  const updates = []
+  // Each ref is one commit on the remote's tip, which skips the per-commit scan
+  // and its own budget check, so only the cross-ref total can refuse the push.
+  for (const [offset, name] of ['a', 'b'].entries()) {
+    git(site, ['checkout', '--quiet', '-b', name, base])
+    fs.writeFileSync(path.join(site, `${name}-notes.txt`), `${name} plain words\n`.repeat(Math.floor((14 * 1024 * 1024) / 14)))
+    for (let index = 0; index < 3; index += 1) {
+      fs.writeFileSync(path.join(site, `${name}-photo-${index}.bin`), Buffer.concat([Buffer.from([0, offset, index]), Buffer.alloc(7 * 1024 * 1024, offset * 10 + index + 1)]))
+    }
+    git(site, ['add', '.'])
+    git(site, ['commit', '--quiet', '-m', `${name} assets`])
+    updates.push({ localRef: `refs/heads/${name}`, localSha: git(site, ['rev-parse', 'HEAD']), remoteRef: `refs/heads/${name}`, remoteSha: base })
+  }
+  for (const update of updates) assert.deepEqual(checkPushContent({ project, policy, updates: [update], cwd: site }).errors, [], 'each ref alone is within the budget')
+  const report = checkPushContent({ project, policy, updates, cwd: site })
+  const refused = report.errors.filter((item) => item.code === 'content-scan-incomplete')
+  assert.equal(refused.length, 1, JSON.stringify(report.errors))
+  assert.deepEqual(refused[0].details, { reason: 'push-evidence-too-large', limitBytes: CHECK_AGGREGATE_MAX_BYTES })
+})
+
+test('push-check text output lists an incomplete scan first and counts the findings it leaves out', (t) => {
+  const { root, site } = makeWorkspace(t)
+  for (let index = 0; index < 51; index += 1) {
+    fs.writeFileSync(path.join(site, 'src/scripts', `cart-${String(index).padStart(2, '0')}.ts`), CART_SOURCE)
+  }
+  // A binary over the per-file limit cannot be read, so the scan is incomplete;
+  // its diagnostic comes after the 51 content findings in the report.
+  fs.writeFileSync(path.join(site, 'z-large.bin'), Buffer.concat([Buffer.from([0, 1]), Buffer.alloc(BINARY_FILE_MAX_BYTES + 1, 7)]))
+  git(site, ['add', '.'])
+  git(site, ['commit', '--quiet', '-m', 'many carts and a large binary'])
+  const [update] = pushUpdate(site)
+  const input = `${update.localRef} ${update.localSha} ${update.remoteRef} ${update.remoteSha}\n`
+  // fileURLToPath, not URL.pathname: on Windows the pathname keeps a leading slash before the drive.
+  const cli = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
+  const pushCheck = (extra) => spawnSync(process.execPath, [
+    cli, 'boundary', 'push-check', `--project-config=${path.join(root, 'atelier.project.json')}`, '--remote=origin', ...extra,
+  ], { cwd: site, input, encoding: 'utf8' })
+
+  const json = pushCheck(['--json'])
+  assert.equal(json.status, 1, `${json.stderr}\n${json.stdout}`)
+  const report = JSON.parse(json.stdout)
+  assert.equal(report.findings.filter((item) => item.code === 'content-rule-violation').length, 51, json.stdout)
+  const incomplete = report.findings.filter((item) => item.code === 'content-scan-incomplete')
+  assert.ok(incomplete.length >= 1, json.stdout)
+  assert.ok(report.findings.indexOf(incomplete[0]) >= 50, 'the report lists the incomplete scan after the first 50 findings')
+
+  const text = pushCheck([])
+  assert.equal(text.status, 1, text.stderr)
+  const lines = text.stdout.trim().split('\n')
+  assert.match(lines[0], /^\[boundary:push-check\] blocked/)
+  assert.match(lines[1], /^error content-scan-incomplete: /, text.stdout)
+  const shown = lines.filter((line) => /^error /.test(line))
+  assert.equal(shown.length, 50, text.stdout)
+  assert.ok(lines.includes(`${report.findings.length - 50} more not shown; --json lists every finding`), text.stdout)
 })
