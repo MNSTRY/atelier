@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   BOUNDARY_POLICY_SCHEMA,
   auditContentRules,
@@ -1559,13 +1560,15 @@ test('push-check text output lists an incomplete scan first and counts the findi
   git(site, ['commit', '--quiet', '-m', 'many carts and a large binary'])
   const [update] = pushUpdate(site)
   const input = `${update.localRef} ${update.localSha} ${update.remoteRef} ${update.remoteSha}\n`
+  // fileURLToPath, not URL.pathname: on Windows the pathname keeps a leading slash before the drive.
+  const cli = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
   const pushCheck = (extra) => spawnSync(process.execPath, [
-    path.join(PACKAGE_ROOT, 'bin/atelier.mjs'), 'boundary', 'push-check', `--project-config=${path.join(root, 'atelier.project.json')}`, '--remote=origin', ...extra,
+    cli, 'boundary', 'push-check', `--project-config=${path.join(root, 'atelier.project.json')}`, '--remote=origin', ...extra,
   ], { cwd: site, input, encoding: 'utf8' })
 
   const json = pushCheck(['--json'])
+  assert.equal(json.status, 1, `${json.stderr}\n${json.stdout}`)
   const report = JSON.parse(json.stdout)
-  assert.equal(json.status, 1, json.stderr)
   assert.equal(report.findings.filter((item) => item.code === 'content-rule-violation').length, 51, json.stdout)
   const incomplete = report.findings.filter((item) => item.code === 'content-scan-incomplete')
   assert.ok(incomplete.length >= 1, json.stdout)
