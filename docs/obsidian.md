@@ -1030,17 +1030,25 @@ unit and loader is what it was.
   reports the selection a cut history ends with while the service refuses it.
   A confirmed selection is reported by `status` (`selection`: the generation
   and the number of its record).
-- **The service starts whatever the selection.** A bound project's folder is
-  its private home, so the home alone locates the workspace
-  (`locatePersonalHome`): the service resolves its workspace from that at once
-  and starts, and its engine awaits the loader at each tick. Started by a login
-  item, the service asks the home, not the loader, for its workspace and log.
-  `service status` and `stop`, the ticks `open` asks for, `service unit
-  --remove` and `uninstall` locate the service the same way. When no project
-  loaded (a restart while nothing is confirmed), the engine locates the
-  workspace too, so each view published before says why nothing is published
-  now instead of keeping the previous run's `current`. A service given a loader
-  that answers a promise and no locator is still refused at start with
+- **The service starts whatever the selection.** A bound project's folder is its
+  private home, so the home alone locates the workspace: the service resolves
+  its workspace from that at once and starts, and its engine awaits the loader
+  at each tick. `atelier obsidian --personal-home` does this for a bound home. A
+  program that runs the service itself (`runMaintenanceService` from
+  `@mnstry/atelier/obsidian`) gives it the same through `locateProject`, a
+  synchronous function that answers, without loading anything, a project whose
+  `configDir` is the folder the workspace is resolved from. The workspace is
+  then resolved from that answer alone: a data root named only in the loaded
+  project's local overlay, and not in the answer, is not seen, so the service's
+  state can lie under another data root than the loaded project's. Name the data
+  root through the `dataRoot` option or the workspace pointer instead, which
+  both see. Started by a login item, the service asks the home, not the loader,
+  for its workspace and log. `service status` and `stop`, the ticks `open` asks
+  for, `service unit --remove` and `uninstall` locate the service the same way.
+  When no project loaded (a restart while nothing is confirmed), the engine
+  locates the workspace too, so each view published before says why nothing is
+  published now instead of keeping the previous run's `current`. A service given
+  a loader that answers a promise and no locator is still refused at start with
   `service-loader-not-synchronous`, and so is one whose locator answers a
   promise; a located value that names no folder refuses
   `service-locator-invalid`. The workspace pointer is under the home, so a home
