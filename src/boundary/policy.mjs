@@ -302,6 +302,17 @@ function finding({ severity = 'error', code, message, repo = null, path: itemPat
   return { severity, code, message, repo, path: itemPath, node, details }
 }
 
+// Text output lists at most this many findings. A scan that could not finish is
+// reported after the content findings it did reach, so those come first: a
+// refused commit or push always says why the check stopped. --json lists all.
+const PRINTED_FINDINGS_MAX = 50
+const INCOMPLETE_SCAN_CODES = new Set(['content-scan-incomplete', 'semantic-field-scan-incomplete', 'repo-unscannable'])
+
+function printedFindings(findings) {
+  const ordered = [...findings.filter((item) => INCOMPLETE_SCAN_CODES.has(item.code)), ...findings.filter((item) => !INCOMPLETE_SCAN_CODES.has(item.code))]
+  return { shown: ordered.slice(0, PRINTED_FINDINGS_MAX), hidden: Math.max(0, ordered.length - PRINTED_FINDINGS_MAX) }
+}
+
 function severityFor(policy) {
   return policy?.mode === 'legacy-warning' ? 'warning' : 'error'
 }
@@ -639,6 +650,7 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
         code: 'content-scan-incomplete',
         repo: target.name,
         message: `push evidence exceeds the ${CHECK_AGGREGATE_MAX_BYTES}-byte aggregate limit; push it in smaller parts`,
+        details: { reason: 'push-evidence-too-large', limitBytes: CHECK_AGGREGATE_MAX_BYTES },
       }))
       break
     }
@@ -799,7 +811,9 @@ export function runBoundaryCheckCommand(argv = process.argv.slice(2)) {
   } else {
     const label = report.ok ? 'passed' : 'failed'
     console.log(`[boundary:check] ${label} · ${report.errors.length ?? report.findings.filter((item) => item.severity === 'error').length} errors · ${report.warnings.length ?? report.findings.filter((item) => item.severity !== 'error').length} warnings`)
-    for (const item of report.findings.slice(0, 50)) console.log(`${item.severity ?? 'error'} ${item.code}: ${item.message}`)
+    const { shown, hidden } = printedFindings(report.findings)
+    for (const item of shown) console.log(`${item.severity ?? 'error'} ${item.code}: ${item.message}`)
+    if (hidden) console.log(`${hidden} more not shown; --json lists every finding`)
   }
   process.exit(report.ok ? 0 : 1)
 }
@@ -911,10 +925,12 @@ export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdi
     console.log(JSON.stringify(report, null, 2))
   } else {
     console.log(`[boundary:push-check] ${report.ok ? 'passed' : 'blocked'} · ${report.repo ?? 'unknown repo'} · ${report.errors.length} errors · ${report.warnings.length} warnings`)
-    for (const item of report.findings.slice(0, 50)) {
+    const { shown, hidden } = printedFindings(report.findings)
+    for (const item of shown) {
       const also = item.commits?.length ? ` (also in commits ${item.commits.map((commit) => commit.slice(0, 12)).join(', ')})` : ''
       console.log(`${item.severity} ${item.rule ?? item.code}: ${item.message}${also}`)
     }
+    if (hidden) console.log(`${hidden} more not shown; --json lists every finding`)
     if (!report.ok && report.repo && report.errors.some((item) => item.code === 'content-rule-violation')) {
       console.log('')
       console.log('If this usage is intentional, declare it in the boundary policy:')
