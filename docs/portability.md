@@ -42,17 +42,17 @@ references, not that everything necessary was written down.
 
 The readiness protocols check coverage inputs: a supplied answers file is
 checked against each protocol's required inputs, and the missing ones are
-listed. An answer being present is not evidence that it is right; source
-linkage is checked when a claim is accepted in the review workspace
-(`docs/local-review.md`).
+listed. An answer being present is not evidence that it is right.
 
 ```bash
 atelier readiness run PROTOCOL_ID --answers answers.json --project ./atelier.project.json
 ```
 
-The run is recorded with a proposal (unless `--no-proposal`), and
-`atelier readiness journey` shows each protocol's recorded status. The
-responsible people review coverage; an issuer can record its admission
+That run is an input-completeness check and is not evidence-bound. For
+evidence, `atelier review run PROTOCOL_ID --answers answers.json` records a
+run bound to the declared sources, and accepting one of its claims in the
+review workspace checks that the claim is linked to a source
+(`docs/local-review.md`). The responsible people review coverage; an issuer can record its admission
 decision in an attestation bound to the canonical form of the document it
 judged (`docs/attestation.md`).
 

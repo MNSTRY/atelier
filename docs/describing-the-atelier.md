@@ -90,12 +90,13 @@ Three different things get called "validated". Keep them apart.
 - **Coverage.** The readiness protocols check a supplied answers file
   against each protocol's required inputs and list the ones missing; an
   answer being present is not evidence that it is right. `atelier readiness
-  run PROTOCOL_ID --answers FILE` records a run and a proposal (unless
-  `--no-proposal`), and `atelier readiness journey` shows each protocol's
-  recorded status. Source linkage is checked when a claim is accepted in the
-  review workspace. The responsible people review coverage; an issuer can
-  record its admission decision in an attestation bound to the canonical form
-  of the document it judged (`docs/attestation.md`).
+  run PROTOCOL_ID --answers FILE` is that input-completeness check, and its
+  runs are not evidence-bound. `atelier review run PROTOCOL_ID --answers
+  FILE` records an evidence-bound run, and accepting one of its claims in the
+  review workspace checks its source linkage (`docs/local-review.md`). The
+  responsible people review coverage; an issuer can record its admission
+  decision in an attestation bound to the canonical form of the document it
+  judged (`docs/attestation.md`).
 - **Behavior.** Representative inputs and expected results beside each rule,
   run by whatever executes the rule, show that the documented rules do what
   the record says. The package keeps the cases and links them to their rules
