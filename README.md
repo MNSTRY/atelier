@@ -198,9 +198,10 @@ authoring session, running a readiness review, keeping the public boundary.
 They are delivered from the package as an audited set of skill files,
 installed into the workspace by a plan whose content digest is confirmed
 before it applies, and pinned by a lock, so what an agent follows is known and
-reviewable. Enforcement never rests in a skill. The graph check, the contracts,
-the boundary guard in Git, the export validator and the review ledger run
-whether or not an agent followed its instructions, and they fail closed. See
+reviewable. Enforcement never rests in a skill. Where they are wired into the
+commit path or CI, the graph check, the boundary guard, the export validator
+and the review ledger run whether or not an agent followed its instructions,
+and they fail closed. See
 [Co-authoring with agents](./docs/co-authoring.md) for the loop this makes
 reliable, and [Describing the Atelier](./docs/describing-the-atelier.md) for
 the judgment behind these sentences.

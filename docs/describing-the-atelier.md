@@ -31,15 +31,15 @@ package copy.
 The agent is never in the package. The harness (Claude Code, Codex or another
 coding harness) supplies the agent that edits authored files. The package
 supplies context, checks and collaboration records. What the package will and
-will not do over the network, to a runtime, or to a source is stated once, in
-the README's will-not-do and claims blocks. Embed those blocks or point to
-them; do not restate them, because a looser restatement of a boundary is the
+will not do over the network and to a runtime is stated in the README's
+will-not-do and claims blocks; what it does to a source is stated in README
+section 4, "The local runtime serves people and agents". Embed or point to
+those; do not restate them, because a looser restatement of a boundary is the
 failure the public-source rules single out.
 
 Two sentences about agents are both true and must not be confused. About the
 workflow: where the checks run in the commit path, every change, by a person
-or an agent in the harness, passes the same checks and carries its receipt,
-and that is what makes an agentic process (one where an agent acts inside a
+or an agent in the harness, passes the same checks, and that is what makes an agentic process (one where an agent acts inside a
 governed workflow) reliable. Do not describe that workflow as agents only
 proposing while an owner types the edit; that is neither the design nor the
 practice. About the package: its collaboration surface assembles context and
@@ -53,10 +53,14 @@ authoring session, running a readiness review, keeping the public boundary.
 They are delivered from the package as an audited set of skill files,
 installed into a workspace by a plan whose content digest is confirmed before
 it applies, and pinned by a lock, so what an agent follows is known and
-reviewable. Enforcement never rests in a skill. The graph check, the
-contracts, the boundary guard in Git, the export validator and the review
-ledger run whether or not an agent followed its instructions, and they fail
-closed.
+reviewable. Enforcement never rests in a skill. Where they are wired into the
+commit path or CI, the gates run whether or not an agent followed its
+instructions, and they fail closed: the graph check (`atelier graph --check`),
+the boundary guard (`atelier boundary check`, installed as Git hooks by
+`atelier boundary install-hooks`), the export validator (`atelier dry-run`)
+and the review ledger's refusals. A Git hook runs only where it is installed
+and can be skipped with `git commit --no-verify`; run the same commands in CI
+where that matters.
 
 Never write that a skill "bounds", "limits" or "prevents" an agent. A skill
 is guidance a model may or may not follow. A gate runs regardless. List gates
@@ -71,7 +75,7 @@ drifted. Do not write "never hand-edited" or "always generated". Write what
 the machinery does: it knows where an artifact came from and says when it no
 longer matches.
 
-## Three proofs, three mechanisms
+## Three proofs
 
 Three different things get called "validated". Keep them apart.
 
@@ -86,8 +90,11 @@ Three different things get called "validated". Keep them apart.
   citation per answer, every gap listed by name. The responsible people review
   that coverage, and an attestation records the review bound to the exact
   bytes it judged. `atelier readiness` lists what each protocol still needs.
-- **Behavior.** Representative inputs and expected results beside each rule
-  prove that the documented rules do what the record says.
+- **Behavior.** Representative inputs and expected results beside each rule,
+  run by whatever executes the rule, show that the documented rules do what
+  the record says. The package keeps the cases and links them to their rules
+  in the graph; it does not run them, so name the runner when you cite this
+  proof.
 
 Completeness is coverage plus behavior. No sentence lets one proof stand for
 another. "Passes the validator" never means "enough to rebuild from".
@@ -119,11 +126,11 @@ that was approved for one document is not thereby true in the next one.
 ## The graph is where the work improves
 
 The knowledge graph is an index of what depends on what. It is also the basis
-for iterative authoring and for agentic self-improvement through evals. Each
-round of authoring adds reviewed examples with expected results, and those
-become the evals. An agent runs them against its own drafts, revises its work
-and its instructions where they fail, and runs them again to show the
-improvement. Say so when describing the graph; an index alone undersells it.
+for iterative authoring. By convention each round adds reviewed examples with
+expected results, linked to the rules they test. An agent in the harness can
+run them against its drafts, revise its work and its instructions where they
+fail, and run them again; the package keeps the cases and their links, not the
+runner. Say so when describing the graph; an index alone undersells it.
 
 ## Extensions, stated as possibility
 

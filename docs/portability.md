@@ -49,12 +49,12 @@ attestation records the review bound to the exact bytes it judged
 atelier readiness --project ./atelier.project.json
 ```
 
-The record also carries its own tests. Every documented rule has
-representative inputs and expected results beside it, so the behavior the
-record describes is checkable from the record alone, by anyone who holds it.
+The record also carries its own tests. A complete record gives every
+documented rule representative inputs and expected results beside it, so the
+behavior it describes can be checked from the record by anyone who holds it.
 
-Together the three establish what has been delivered and what remains
-unresolved, and nothing is left to memory. A rebuild also needs the authored
+Together the three show what has been delivered and what remains unresolved,
+in the record rather than in someone's memory. A rebuild also needs the authored
 rules, their representative tests, the data exports, the dependencies and the
 operating instructions, reviewed together against the agreed scope. No
 validator can supply that review.

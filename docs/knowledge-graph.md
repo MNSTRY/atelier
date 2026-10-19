@@ -158,9 +158,10 @@ kg:
 
 From those headers the builder compiles three edges: the policy depends on the
 limits, the limits implement the policy, and the test cases evidence the
-limits. Ask an agent to revise Rule 4 and it follows those edges to the limits
-and the test cases that depend on the rule, then revises the affected files and
-runs the graph check against the result. The graph check refuses a header that
+limits. Ask an agent to revise Rule 4 and it follows those edges from the
+policy to the limits it depends on, and from the limits to the test cases that
+evidence them, then revises the affected files and runs the graph check against
+the result. The graph check refuses a header that
 names a node which does not exist, and the audience on each file decides what
 an export may include.
 
@@ -170,7 +171,8 @@ to the workspace's `content/` directory, not part of the file. Copy a
 that file under `content/` (so the policy lands at
 `content/policy/expenses/approval.md`), then run
 `atelier graph --project ./atelier.project.json` from the copy. With all four
-files present the graph builds with the three edges and no diagnostics, and
+files present the graph builds with no diagnostics, its edges include the
+three above, and
 `atelier graph --check` passes against the result. Remove the limits `.json`
 and the build is refused: the sidecar has no asset (`sidecar has no matching
 source asset`), and the two headers that name the limits no longer resolve.

@@ -4,20 +4,21 @@ A body of work is authored together, in the structure of the work itself
 rather than in a document tool or an email thread. People read and question
 the pages. Agents draft from the graph and the questions. Where the checks
 run in the commit path, every change, by a person or an agent, passes the
-same checks and carries its receipt, and that is what makes the agentic
+same checks, and that is what makes the agentic
 process (an agent acting inside a governed workflow) reliable.
 
 This page describes the loop, the record it leaves, and what has to be in
 place for it to hold. The files are yours. The package supplies the graph,
 the checks and the collaboration records. The harness supplies the agent.
-Nothing here changes the boundary stated in the README's will-not-do block,
-and this page does not restate it.
+Nothing here changes what the package will and will not do to a source:
+README section 4, "The local runtime serves people and agents", states that,
+and the will-not-do block states the rest.
 
 ## The loop
 
 Three actors take part: a person, an agent running in the harness, and the
-package. The package never edits a source and never commits; it records,
-checks and refuses.
+package. In this loop the package records, checks and refuses; the edit and
+the commit are the agent's or the person's.
 
 1. **A person asks on the page.** A reader selects the sentence they mean on
    the projected page and leaves a question, a correction or a discussion. A
@@ -28,10 +29,12 @@ checks and refuses.
    on it, and edits those files in the working tree. The graph check and the
    contracts run against its work as they would against anyone's.
 3. **A person decides, and the change lands.** The decision carries a reason,
-   and the ledger refuses it if a newer question has arrived on the same
-   passage. Accepted, the person or the agent commits the change through the
-   boundary guard, the receipt travels with it, the graph is rebuilt, and the
-   pages built from it follow.
+   and the ledger refuses it if it was made against a stale view: a newer
+   contribution on the same passage, or a document or evidence that changed
+   after it was read. Accepted, the person or the agent commits the change
+   through the boundary guard, the decision stays in the ledger beside the
+   contribution, and the graph and the pages built from it follow on their
+   next build.
 
 The next question starts from the updated source.
 
@@ -83,15 +86,16 @@ external delivery are integrations you configure in the harness.
   the optional review workspace, and `docs/coauthor-session.md` the
   experimental portable session reducer. Neither applies a source change; the
   agent in the harness does, and the checks run against it.
-- **Examples with expected results.** Each round of authoring adds reviewed
-  examples, and those become the evals an agent runs against its own drafts.
-  An agent's work is measured against them, and the record shows whether it
-  improved.
+- **Examples with expected results.** By convention, each round of authoring
+  adds reviewed examples with expected results beside the rules they test. The
+  package keeps them and their links in the graph; it does not run them. An
+  agent in the harness runs them against its drafts, and because they stay in
+  the record, a later draft can be checked against the same cases.
 
 ## What the package does not do here
 
 It does not draft. It does not apply a proposal to a source. It does not
 grant an agent write access. It does not decide. It records the question,
-checks the change, and records the decision, and it refuses a decision made
-against a revision that has moved on. The rest is the harness's work and the
+checks the change, and records the decision, and it refuses a contribution
+made against a stale view (step 3 above). The rest is the harness's work and the
 people's.
