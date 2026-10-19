@@ -196,8 +196,8 @@
     "@types/node": "^22.0.0",
     "esbuild": "0.28.2",
     "playwright": "1.55.1",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "typescript": "5.8.3"
   },
   "license": "Apache-2.0",
