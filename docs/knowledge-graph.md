@@ -70,6 +70,113 @@ a schema-checked JSON sidecar is the trust boundary. Richer format adapters
 that derive metadata from asset contents belong to extension packs
 (`atelier-extension-pack.v1`), not the kit core.
 
+## A worked example
+
+The policy below is invented to show the shape. Once a body of work is
+authored, a policy file looks like this:
+
+```
+policy/expenses/approval.md
+---
+title: Expense approval policy
+summary: Version 3 of who approves an expense claim, with the limits it depends on.
+tags: [policy, expenses]
+kg:
+  id: example:policy:expense-approval
+  type: document
+  status: active
+  audience: team
+  relations:
+    depends_on: [example:limits:expense-approval-v3]
+---
+## Rule 4
+A claim up to the team limit needs one approver, the claimant's lead.
+A claim over the team limit also needs the department head.
+A claim over the department limit also needs the finance lead.
+A claim without a receipt is held: neither approved nor refused.
+```
+
+The limits live in their own file. The file itself is data a product reads:
+
+```
+policy/limits/expense-approval-v3.json
+{ "version": 3, "limits": { "team": 500, "department": 5000 }, "holdWhenReceiptMissing": true }
+```
+
+A sidecar beside it makes it a governed node, so the relationship between
+rule, limits and test cases is declared rather than remembered:
+
+```
+policy/limits/expense-approval-v3.json.kg.json
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "expense-approval-v3.json",
+  "title": "Approval limits, version 3",
+  "summary": "Amount limits and the missing-receipt hold for the expense approval policy.",
+  "tags": ["policy", "limits"],
+  "kg": {
+    "id": "example:limits:expense-approval-v3",
+    "type": "manifest",
+    "domain": "example",
+    "lifecycle": "active",
+    "status": "active",
+    "audience": "team",
+    "relations": {
+      "implements": ["example:policy:expense-approval"]
+    }
+  }
+}
+```
+
+A sidecar carries `lifecycle` as well as `status` because the sidecar
+contract requires both; Markdown headers carry `status` alone.
+
+The test cases are a third source, a table of sample claims with the approvals
+they need, declared as evidence for the limits:
+
+```
+policy/cases/expense-approval-v3.md
+---
+title: Test cases, expense approval v3
+summary: Sample claims with the approvals each one needs under version 3.
+tags: [policy, cases]
+kg:
+  id: example:cases:expense-approval-v3
+  type: evidence
+  status: active
+  audience: team
+  relations:
+    evidences: [example:limits:expense-approval-v3]
+---
+| Claim | Receipt | Approvers |
+| --- | --- | --- |
+| 500 | yes | lead |
+| 1800 | yes | lead, department head |
+| 9000 | yes | lead, department head, finance lead |
+| 300 | missing | none yet; held |
+```
+
+From those headers the builder compiles three edges: the policy depends on the
+limits, the limits implement the policy, and the test cases evidence the
+limits. Ask an agent to revise Rule 4 and it follows those edges to the limits
+and the test cases that depend on the rule, then revises the affected files and
+runs the graph check against the result. The graph check refuses a header that
+names a node which does not exist, and the audience on each file decides what
+an export may include.
+
+To try it: the first line inside each fence above is the file's path relative
+to the workspace's `content/` directory, not part of the file. Copy a
+`fixtures/projects/sample-workspace`, save the lines after each path line as
+that file under `content/` (so the policy lands at
+`content/policy/expenses/approval.md`), then run
+`atelier graph --project ./atelier.project.json` from the copy. With all four
+files present the graph builds with the three edges and no diagnostics, and
+`atelier graph --check` passes against the result. Remove the limits `.json`
+and the build is refused: the sidecar has no asset (`sidecar has no matching
+source asset`), and the two headers that name the limits no longer resolve.
+Point the policy's `depends_on` at an id that does not exist and the build is
+refused (`declared depends_on target ... was not found`).
+
 ## Census Rules
 
 Graph and projection walks skip git-ignored paths. A committed artifact must
