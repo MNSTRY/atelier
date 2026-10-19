@@ -186,7 +186,7 @@ portable by copying the folder that holds the record and its history.
 
 The day-to-day surface is the coding harness you already use, Claude Code,
 Codex or another coding harness, opened on the repository with the Atelier's
-skills loaded. Behind it sits the projection served from your files, and
+skills installed in the workspace. Behind it sits the projection served from your files, and
 beyond it whatever systems you connect through the harness. From one
 conversation an agent reaches the local files, the projected pages, and your
 connected tools. The files are yours. The package supplies the graph, the
@@ -197,11 +197,11 @@ Skills carry the workflows an agent runs: opening a source, guiding an
 authoring session, running a readiness review, keeping the public boundary.
 They are delivered from the package as an audited set of skill files,
 installed into the workspace by a plan whose content digest is confirmed
-before it applies, and pinned by a lock, so what an agent follows is known and
-reviewable. Enforcement never rests in a skill. Where they are wired into the
-commit path or CI, the graph check, the boundary guard, the export validator
-and the review ledger run whether or not an agent followed its instructions,
-and they fail closed. See
+before it applies, and pinned by a lock, so the installed skill files are known
+and reviewable. Whether a given harness discovers and follows them is separate
+evidence. Enforcement never rests in a skill. Where they are wired into the
+commit path or CI, the graph check, the boundary guard and the export validator
+run whether or not an agent followed its instructions, and they fail closed. See
 [Co-authoring with agents](./docs/co-authoring.md) for the loop this makes
 reliable, and [Describing the Atelier](./docs/describing-the-atelier.md) for
 the judgment behind these sentences.

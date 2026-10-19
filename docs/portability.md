@@ -27,8 +27,9 @@ record, including when software executes it.
 Against a published standard, in three parts.
 
 The export validator checks conformance: the record is in the published
-format, every reference resolves to a declared source, and no reference
-reaches outside the audience the export declares.
+format and every reference resolves to a declared source. What it refuses
+across a source's `audience` and an export's `visibility` is stated in the
+README's audience-visibility block.
 
 ```bash
 atelier dry-run ./atelier-export.json
@@ -41,13 +42,16 @@ references, not that everything necessary was written down.
 
 The readiness protocols check coverage: an agreed inventory of what a complete
 definition contains, each answer citing the record it was taken from and each
-gap listed by name. The responsible people review that coverage, and an
-attestation records the review bound to the exact bytes it judged
-(`docs/attestation.md`).
+gap listed by name. The responsible people review that coverage; an issuer
+can record its admission decision in an attestation bound to the exact bytes
+it judged (`docs/attestation.md`).
 
 ```bash
-atelier readiness --project ./atelier.project.json
+atelier readiness journey --project ./atelier.project.json
 ```
+
+The journey shows each protocol's status and what it still needs;
+`atelier readiness run PROTOCOL_ID` names each required answer that is missing.
 
 The record also carries its own tests. A complete record gives every
 documented rule representative inputs and expected results beside it, so the

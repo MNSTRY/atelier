@@ -22,36 +22,42 @@ the commit are the agent's or the person's.
 
 1. **A person asks on the page.** A reader selects the sentence they mean on
    the projected page and leaves a question, a correction or a discussion. A
-   consumer adapter built on the collaboration ledger receipts the note and
-   pins it to that passage and that revision of the source.
+   consumer adapter built on the collaboration ledger records the note and
+   pins it to that passage and to the digest of that revision of the source.
 2. **An agent drafts from the graph.** In the harness it reads the open
    questions on the file, follows the graph to every file declared to depend
-   on it, and edits those files in the working tree. The graph check and the
-   contracts run against its work as they would against anyone's.
-3. **A person decides, and the change lands.** The decision carries a reason,
-   and the ledger refuses it if it was made against a stale view: a newer
-   contribution on the same passage, or a document or evidence that changed
-   after it was read. Accepted, the person or the agent commits the change
-   through the boundary guard, the decision stays in the ledger beside the
-   contribution, and the graph and the pages built from it follow on their
-   next build.
+   on it, and edits those files in the working tree. Where they are wired in,
+   the graph check and the boundary guard run against its work as they would
+   against anyone's.
+3. **A person decides, and the change lands.** The person reviews the draft
+   and, where the workflow records decisions, records one with its rationale.
+   The package does not require or check a decision before a commit. The
+   person or the agent commits the change through the boundary guard, and the
+   graph and the pages built from it follow on their next build.
 
 The next question starts from the updated source.
 
 ## Provenance is built in
 
-Every contribution and decision is a revision-pinned record: who, on which
-document at which revision, anchored to which passage, with the reason given.
-The original contribution stays beside every later decision about it. When
-the source changes, earlier notes stay pinned to the wording they addressed,
-so "what has been questioned about this passage" is a lookup, not a memory.
+The review store keeps two kinds of record. A note is pinned to a document's
+digest and the passage it addresses; it is refused if the document changed
+after it was read. A decision is bound to the evidence it judged and carries
+its rationale; it is refused if that evidence changed, or if another decision
+on the same claim was recorded first. Each record carries the name its author
+gives, which the package records as locally asserted, not authenticated (see
+`docs/local-review.md`). When the source changes, earlier notes stay pinned to
+the wording they addressed, so "what has been questioned about this passage"
+is a lookup, not a memory.
 
-A change by an agent is governed the same way as a change by a person: the
-graph check, the contracts, the audience boundary and a recorded decision.
-That is what makes it reliable to let many people and agents work on the same
-record.
+A change by an agent passes the same checks as a change by a person: the graph
+check and the boundary guard, where they are wired in. A team that wants every
+change to carry a recorded decision adds that rule to its own workflow; the
+package does not enforce it.
 
 ## Giving an agent a job
+
+This section describes the system (the package with a harness and connected
+tools), not the package alone.
 
 You define the outcome and constraints. An agent uses the relevant files,
 works through the task with connected tools and returns work to review.
@@ -66,16 +72,18 @@ update the shared knowledge, so the next task starts from the latest agreed
 material rather than from a fresh briefing.
 
 What has to be connected: the agent, access to the relevant files, and
-whatever website, email, scheduling or other tools the chosen workflow uses,
+whatever other tools the chosen workflow uses,
 plus agreed review responsibilities and action permissions. The package
 organizes source material and review contributions; agent execution and
 external delivery are integrations you configure in the harness.
 
 ## What the loop rests on
 
-- **A harness with the skills loaded.** Claude Code or Codex opened on the
-  repository, with the package's skills installed by `atelier skills sync`
-  from a digest-confirmed plan. See `docs/skill-steward.md`.
+- **A harness with the skills installed.** `atelier skills sync` installs the
+  package's skill files into the workspace from a digest-confirmed plan (by
+  default from the package's `skills/codex` into `.agents/skills`; `--source`
+  and `--target` change that). Whether a harness discovers and follows them
+  is the harness's matter. See `docs/skill-steward.md`.
 - **Gates in the commit path.** The boundary guard hooks
   (`atelier boundary install-hooks`) and the graph check in CI. The sentence
   "every change passes the same checks" is true where the checks run on every
@@ -96,6 +104,7 @@ external delivery are integrations you configure in the harness.
 
 It does not draft. It does not apply a proposal to a source. It does not
 grant an agent write access. It does not decide. It records the question,
-checks the change, and records the decision, and it refuses a contribution
-made against a stale view (step 3 above). The rest is the harness's work and the
+checks the change, and records a decision when one is given, and it refuses
+a note or a decision recorded against a stale view (see "Provenance is built
+in"). The rest is the harness's work and the
 people's.

@@ -14,7 +14,7 @@ distribution built on it, or in materials that name it.
 
 Two people read about the Atelier. An operator installs `@mnstry/atelier`,
 governs a body of work on their own local computer or virtual machine, and runs
-whatever systems they run. A practice on a managed runtime works the same
+whatever systems they run. A team on a managed runtime works the same
 repository from a harness that also reaches that runtime, and cares about what
 it retains.
 
@@ -52,13 +52,14 @@ Skills carry the workflows an agent runs: opening a source, guiding an
 authoring session, running a readiness review, keeping the public boundary.
 They are delivered from the package as an audited set of skill files,
 installed into a workspace by a plan whose content digest is confirmed before
-it applies, and pinned by a lock, so what an agent follows is known and
-reviewable. Enforcement never rests in a skill. Where they are wired into the
+it applies, and pinned by a lock, so the installed skill files are known and
+reviewable. Whether a given harness discovers and follows them is separate
+evidence. Enforcement never rests in a skill. Where they are wired into the
 commit path or CI, the gates run whether or not an agent followed its
 instructions, and they fail closed: the graph check (`atelier graph --check`),
 the boundary guard (`atelier boundary check`, installed as Git hooks by
-`atelier boundary install-hooks`), the export validator (`atelier dry-run`)
-and the review ledger's refusals. A Git hook runs only where it is installed
+`atelier boundary install-hooks`) and the export validator (`atelier dry-run`).
+A Git hook runs only where it is installed
 and can be skipped with `git commit --no-verify`; run the same commands in CI
 where that matters.
 
@@ -80,16 +81,20 @@ longer matches.
 Three different things get called "validated". Keep them apart.
 
 - **Conformance.** The export dry-run validator proves an artifact is in the
-  published format, every reference resolves to a declared source, and no
-  reference reaches outside the audience the export declares. It does not
+  published format and every reference resolves to a declared source; the
+  README's audience-visibility block states what it refuses across audience
+  and visibility. It does not
   prove that referenced content is packaged, and it does not prove that every
   necessary rule was written down. `atelier dry-run <artifact>`
   reports `accepted`, and separately whether the artifact is `importable`.
 - **Coverage.** The readiness protocols prove what a record covers against
   an agreed inventory of a complete definition, answer by answer with a
-  citation per answer, every gap listed by name. The responsible people review
-  that coverage, and an attestation records the review bound to the exact
-  bytes it judged. `atelier readiness` lists what each protocol still needs.
+  citation per answer, every gap listed by name. `atelier readiness journey`
+  shows each protocol's status and what it still needs, and
+  `atelier readiness run PROTOCOL_ID` names each required answer that is
+  missing. The responsible people review that coverage; an issuer can record
+  its admission decision in an attestation bound to the exact bytes it judged
+  (`docs/attestation.md`).
 - **Behavior.** Representative inputs and expected results beside each rule,
   run by whatever executes the rule, show that the documented rules do what
   the record says. The package keeps the cases and links them to their rules
@@ -134,9 +139,9 @@ runner. Say so when describing the graph; an index alone undersells it.
 
 ## Extensions, stated as possibility
 
-A website, a newsletter or a campaign tool built on the same graph carries its
-source and revision, and can hold its own data in the graph: campaigns,
-engagement, conversion, and the decisions made about them. In package copy
+A website or another tool built on the same graph carries its source and
+revision, and can keep its own records in the graph with the decisions made
+about them. In package copy
 this is what the graph makes possible for an operator's own agents to build,
 never a feature list of the package.
 
@@ -159,7 +164,7 @@ never a feature list of the package.
 
 ## Where this came from
 
-These rulings were made while writing about the Atelier for a real reader who
-was deciding whether to rely on it, and were corrected twice by independent
-review against the implementation. They are kept here so the next writer
-starts from the judgment, not from the wording that happened to survive.
+These rulings were made while writing about the Atelier and checked by
+independent review against the implementation. They are kept here so the next
+writer starts from the judgment, not from the wording that happened to
+survive.
