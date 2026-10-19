@@ -177,7 +177,8 @@ A governed file is plain text with a small header. The text is the author's:
 they open, read and correct it with no tool between them and the words. The
 header is the machine's: what the file is, who it is written for and what it
 depends on, compiled by the builder into the graph. The graph check refuses a
-header that names a node which does not exist, and an agent follows the same
+header that names a node which does not exist (configured external targets
+aside), and an agent follows the same
 lines to every file declared to depend on it. One artifact is both the human
 record and the machine index, versioned by Git, diffable line by line, and
 portable by copying the folder that holds the record and its history.

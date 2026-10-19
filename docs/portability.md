@@ -24,7 +24,7 @@ record, including when software executes it.
 
 ## How the record is checked
 
-Against a published standard, in three parts.
+In three parts. The first two are package commands; the third is not.
 
 The export validator checks conformance: the record is in the published
 format and every reference resolves to a declared source. What it refuses
@@ -40,22 +40,27 @@ The report says `accepted`, and separately whether the artifact is
 entries, not to packaged content, so it proves the artifact's shape and its
 references, not that everything necessary was written down.
 
-The readiness protocols check coverage: an agreed inventory of what a complete
-definition contains, each answer citing the record it was taken from and each
-gap listed by name. The responsible people review that coverage; an issuer
-can record its admission decision in an attestation bound to the exact bytes
-it judged (`docs/attestation.md`).
+The readiness protocols check coverage inputs: a supplied answers file is
+checked against each protocol's required inputs, and the missing ones are
+listed. An answer being present is not evidence that it is right; source
+linkage is checked when a claim is accepted in the review workspace
+(`docs/local-review.md`).
 
 ```bash
-atelier readiness journey --project ./atelier.project.json
+atelier readiness run PROTOCOL_ID --answers answers.json --project ./atelier.project.json
 ```
 
-The journey shows each protocol's status and what it still needs;
-`atelier readiness run PROTOCOL_ID` names each required answer that is missing.
+The run is recorded with a proposal (unless `--no-proposal`), and
+`atelier readiness journey` shows each protocol's recorded status. The
+responsible people review coverage; an issuer can record its admission
+decision in an attestation bound to the canonical form of the document it
+judged (`docs/attestation.md`).
 
 The record also carries its own tests. A complete record gives every
-documented rule representative inputs and expected results beside it, so the
-behavior it describes can be checked from the record by anyone who holds it.
+documented rule representative inputs and expected results beside it. The
+package keeps these cases and links them to their rules; it does not run them.
+Whatever executes the rules runs them, so name that runner when you cite this
+check.
 
 Together the three show what has been delivered and what remains unresolved,
 in the record rather than in someone's memory. A rebuild also needs the authored

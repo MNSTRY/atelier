@@ -21,8 +21,9 @@ package. In this loop the package records, checks and refuses; the edit and
 the commit are the agent's or the person's.
 
 1. **A person asks on the page.** A reader selects the sentence they mean on
-   the projected page and leaves a question, a correction or a discussion. A
-   consumer adapter built on the collaboration ledger records the note and
+   the projected page and leaves a question, a correction or a discussion. The
+   review surface (the package's optional `atelier dev --review`, or a
+   consumer adapter built on the collaboration ledger) records the note and
    pins it to that passage and to the digest of that revision of the source.
 2. **An agent drafts from the graph.** In the harness it reads the open
    questions on the file, follows the graph to every file declared to depend
@@ -39,13 +40,12 @@ The next question starts from the updated source.
 
 ## Provenance is built in
 
-The review store keeps two kinds of record. A note is pinned to a document's
-digest and the passage it addresses; it is refused if the document changed
-after it was read. A decision is bound to the evidence it judged and carries
-its rationale; it is refused if that evidence changed, or if another decision
-on the same claim was recorded first. Each record carries the name its author
-gives, which the package records as locally asserted, not authenticated (see
-`docs/local-review.md`). When the source changes, earlier notes stay pinned to
+The review store pins notes and reading positions to a document's digest and
+the passage they address, and binds decisions to the evidence they judged.
+A contribution made against a stale version is refused. A later decision
+supersedes an earlier one, and the history keeps both. Each record carries the
+name its author gives, which the package records as locally asserted, not
+authenticated. `docs/local-review.md` describes the store and its refusals. When the source changes, earlier notes stay pinned to
 the wording they addressed, so "what has been questioned about this passage"
 is a lookup, not a memory.
 
@@ -89,9 +89,10 @@ external delivery are integrations you configure in the harness.
   "every change passes the same checks" is true where the checks run on every
   commit.
 - **A contribution surface.** The package's loopback projection carries the
-  page and its passages; the note-taking and decision surface is a consumer
-  adapter built on the collaboration ledger. `docs/local-review.md` describes
-  the optional review workspace, and `docs/coauthor-session.md` the
+  page and its passages. Notes and decisions are recorded by the package's
+  optional review workspace (`atelier dev --review`, described in
+  `docs/local-review.md`) or by a consumer adapter built on the collaboration
+  ledger; `docs/coauthor-session.md` describes the
   experimental portable session reducer. Neither applies a source change; the
   agent in the harness does, and the checks run against it.
 - **Examples with expected results.** By convention, each round of authoring
@@ -105,6 +106,5 @@ external delivery are integrations you configure in the harness.
 It does not draft. It does not apply a proposal to a source. It does not
 grant an agent write access. It does not decide. It records the question,
 checks the change, and records a decision when one is given, and it refuses
-a note or a decision recorded against a stale view (see "Provenance is built
-in"). The rest is the harness's work and the
-people's.
+a contribution made against a stale version. The rest is the harness's work
+and the people's.

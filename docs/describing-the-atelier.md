@@ -87,14 +87,15 @@ Three different things get called "validated". Keep them apart.
   prove that referenced content is packaged, and it does not prove that every
   necessary rule was written down. `atelier dry-run <artifact>`
   reports `accepted`, and separately whether the artifact is `importable`.
-- **Coverage.** The readiness protocols prove what a record covers against
-  an agreed inventory of a complete definition, answer by answer with a
-  citation per answer, every gap listed by name. `atelier readiness journey`
-  shows each protocol's status and what it still needs, and
-  `atelier readiness run PROTOCOL_ID` names each required answer that is
-  missing. The responsible people review that coverage; an issuer can record
-  its admission decision in an attestation bound to the exact bytes it judged
-  (`docs/attestation.md`).
+- **Coverage.** The readiness protocols check a supplied answers file
+  against each protocol's required inputs and list the ones missing; an
+  answer being present is not evidence that it is right. `atelier readiness
+  run PROTOCOL_ID --answers FILE` records a run and a proposal (unless
+  `--no-proposal`), and `atelier readiness journey` shows each protocol's
+  recorded status. Source linkage is checked when a claim is accepted in the
+  review workspace. The responsible people review coverage; an issuer can
+  record its admission decision in an attestation bound to the canonical form
+  of the document it judged (`docs/attestation.md`).
 - **Behavior.** Representative inputs and expected results beside each rule,
   run by whatever executes the rule, show that the documented rules do what
   the record says. The package keeps the cases and links them to their rules

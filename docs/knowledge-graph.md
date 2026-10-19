@@ -161,9 +161,9 @@ limits, the limits implement the policy, and the test cases evidence the
 limits. Ask an agent to revise Rule 4 and it follows those edges from the
 policy to the limits it depends on, and from the limits to the test cases that
 evidence them, then revises the affected files and runs the graph check against
-the result. The graph check refuses a header that
-names a node which does not exist, and the audience on each file decides what
-an export may include.
+the result. The graph check refuses a header that names a node which does not
+exist, apart from configured external targets; what an export may include
+across audiences is stated in the README's audience-visibility block.
 
 To try it: the first line inside each fence above is the file's path relative
 to the workspace's `content/` directory, not part of the file. Copy a
