@@ -1,9 +1,14 @@
-# Atelier Sync: Deliverable Zero
+# Atelier Sync: headless repository supervision
 
-Atelier Sync is the collaborator-facing name for the resident repository
-supervisor. Deliverable Zero is deliberately headless: it proves the Git,
-filesystem, state-machine, recovery, and user-authority boundaries before a
-tray shell or installer is allowed to make the product feel finished.
+Atelier Sync is the optional headless repository supervisor in the public
+Atelier toolkit. Its CLI and runtime APIs cover Git, filesystem, state-machine,
+recovery and user-authority boundaries. Use the [independent local start](independent-start.md)
+for authoring without enabling supervision.
+
+The public toolkit includes no desktop utility, tray shell or native installer.
+MNSTRY's desktop utility is a separate proprietary consumer. Generic startup,
+editor and native-presentation bindings remain optional public tooling; a host
+owns its installation, background lifecycle and user interface.
 
 This is repository mechanics, not MNSTRY runtime authority. A Git commit
 changes the enrolled repository. It does not mutate MNSTRY identity, consent,
@@ -74,8 +79,8 @@ contains the current `atelier-repository-observation@v1` document. That
 observation cannot report `complete: true` when any of these are unresolved:
 
 - lexically identifiable provider-managed, UNC/network, WSL-cross-boundary, or
-  unclassified external filesystem roots (mapped-drive classification remains
-  an operating-system integration concern for the signed beta);
+  unclassified external filesystem roots (mapped-drive classification requires
+  a qualified operating-system host integration);
 - an unsupported Git engine or bare repository;
 - sparse checkout, partial clone, or shallow repository state;
 - tracked paths carrying `assume-unchanged` or `skip-worktree` index flags;
@@ -151,8 +156,8 @@ process exit when their result is not healthy, so automation cannot treat a
 paused state, attention state, or failed publication as success merely because
 JSON was emitted.
 
-The future native shell may label the final two commands **Commit & sync**.
-It must not bypass either phase.
+A consuming host may present the final two commands as **Commit & sync**.
+It must preserve both phases and their exact confirmation boundary.
 
 The repeated operation id is a visible user-intent confirmation gate, not an
 authorization secret. Local software able to read and modify the repository is
@@ -161,12 +166,13 @@ or stale execution, not a hostile process with the user's filesystem access.
 
 ## Evidence boundary
 
-Deliverable Zero proves the headless supervisor contract on Linux and macOS,
+The headless supervisor contract has automated coverage on Linux and macOS,
 with Windows CI covering the portable observation, state, and direct-process
 contract. POSIX executable-wrapper substitution is explicitly skipped on
 Windows; native Windows wrapper-injection proof, signed installation,
 background launch at user login, Windows Home/Pro device behavior, macOS
-notarization, and a nontechnical-user workflow belong to the signed
-collaborator beta. Repositories without an initial commit are not supported by
-this deliverable. A Git executable upgrade changes enrolled identity and
+notarization and a nontechnical-user workflow require separate evidence from
+the consuming host. These tests establish no installed desktop qualification.
+Repositories without an initial commit are unsupported by this supervisor.
+A Git executable upgrade changes enrolled identity and
 requires re-enrollment.

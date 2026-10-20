@@ -5,6 +5,11 @@ decisions, and supplies explicitly activated lessons to a named harness. It is
 an experimental local source capability. It requires consumer integration and
 does not establish availability in a published package or installed desktop.
 
+Here, `capture` means recording the observation explicitly supplied by a caller
+or on stdin. It does not monitor an editor, microphone, conversation or desktop.
+The [independent local start](independent-start.md) needs no desktop or MNSTRY
+account; integrated capture is a separate host capability.
+
 A person defines the task and scope, an agent can propose a lesson, and the
 person reviews its wording and consequences. Evidence can be represented before
 acceptance. Only accepted, activated content is eligible for task context.
@@ -202,11 +207,13 @@ Campaigns may stay in their own workspaces; selected references do not change
 their writer ownership. Private evidence projections stay outside committed
 canonical graphs unless an owner explicitly authors an appropriate source.
 
-A desktop or other host owns integrated capture, authenticating its caller,
-background jobs, provider access, budgets, review controls and actual harness
-integration. Private feedback, preferences, methods and authored skills remain
-in their owning workspace. A commercial host should consume these contracts
-without making basic local learning or export depend on an account.
+A consuming host owns integrated capture, authenticating its caller, background
+jobs, provider access, budgets, review controls and actual harness integration.
+MNSTRY's desktop utility is a separate proprietary consumer of this public
+foundation. Other hosts can use the same portable APIs and optional public
+startup, editor and native-presentation bindings. Private feedback, preferences,
+methods and authored skills remain in their owning workspace. Basic local
+learning and export require no MNSTRY account or service.
 
 Run `node --test test/learning-*.test.mjs` on the supported Node version for
 the local acceptance cases. They cover terminal capture through withdrawal
