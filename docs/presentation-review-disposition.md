@@ -1,5 +1,10 @@
 # Presentation correction disposition — 2026-09-15
 
+Retained review evidence for the source identified below. Its scoped disposition
+is not a current API guide or approval of later source. For current use, start
+with the [independent startup guide](independent-start.md); receiving-host gates
+remain in [consumer boundaries](presentation-consumer-boundaries.md).
+
 Status: bounded root correction, not maintainer acceptance, release or adoption.
 Reviewed source: `9ea81f087131e909e22fbcff50df1b57050c76af`.
 

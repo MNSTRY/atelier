@@ -1,5 +1,12 @@
 # Obsidian publication feasibility prototype (G00)
 
+Historical, superseded feasibility prototype retained as evidence. Use the
+current optional [Obsidian projection](../../docs/obsidian.md),
+[plugin](../../docs/obsidian-plugin.md) and
+[local-service contract](../../docs/local-services.md) for supported tooling.
+No open-source native desktop shell or installer is planned; the optional
+editor bindings and headless services remain public tooling.
+
 Disposable prototype. Nothing here ships, nothing here is wired into the
 package, and a passing run is evidence for one host and one app version only.
 

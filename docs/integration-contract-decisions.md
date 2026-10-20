@@ -1,5 +1,10 @@
 # Integration contract decisions
 
+Retained design-decision record for the integration cut described below. Its
+rationale and source links do not establish that every described workflow is
+implemented or qualified. For current use, start with the
+[independent startup guide](independent-start.md) and the feature guides it links.
+
 ## Responsibility architecture
 
 The [responsibility architecture](architecture.md) is the canonical naming and

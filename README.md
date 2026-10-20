@@ -541,6 +541,7 @@ npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
 
 Then choose the path that matches what you are building:
 
+- [Start independently: local CLI, library and optional hosts](./docs/independent-start.md)
 - [Installation and first run](./docs/install.md)
 - [Design and architecture](./docs/design.md)
 - [Knowledge graph and source model](./docs/knowledge-graph.md)
@@ -555,6 +556,13 @@ Then choose the path that matches what you are building:
 - [Upgrade notes](./docs/upgrade.md)
 - [Upgrade with your agent](./docs/guided-upgrades.md)
 - [Obsidian projection](./docs/obsidian.md)
+
+Use these guides, command help and the installed package export map for current
+use and API reference. The [integration plan](./docs/integration-and-review-plan.md),
+[integration decisions](./docs/integration-contract-decisions.md) and
+[presentation review disposition](./docs/presentation-review-disposition.md) retain
+planning, rationale and review evidence for their recorded scope and source.
+They are not a current feature inventory or approval of later source.
 
 ## Status and command reference
 
