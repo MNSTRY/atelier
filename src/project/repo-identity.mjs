@@ -1,9 +1,9 @@
-import { execFileSync } from 'node:child_process'
 import { SUPPORTED_IDENTITY_PROVIDERS, gitRemoteUrl, remoteHost } from './config.mjs'
+import { PROVIDER_HOSTS, defaultLookups } from './providers/github.mjs'
+
+export { githubLookup } from './providers/github.mjs'
 
 export const SUPPORTED_PROVIDERS = Object.freeze([...SUPPORTED_IDENTITY_PROVIDERS])
-
-const PROVIDER_HOSTS = Object.freeze({ 'github.com': 'github' })
 
 const lower = (value) => String(value ?? '').trim().toLowerCase()
 
@@ -22,25 +22,6 @@ export function parseRemoteRef(url) {
   if (parts.length < 2) return null
   return { host, provider: PROVIDER_HOSTS[host] ?? null, owner: lower(parts[0]), name: lower(parts.slice(1).join('/')) }
 }
-
-// Ask the provider to resolve the recorded ref. GitHub follows the rename redirect
-// and answers with the stable numeric id plus the current full name, which is the
-// only signal that survives a rename.
-export function githubLookup({ owner, name }) {
-  try {
-    const out = execFileSync('gh', ['api', `repos/${owner}/${name}`, '--jq', '{id: .id, fullName: .full_name}'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    const parsed = JSON.parse(out)
-    if (!parsed?.id) return null
-    return { id: String(parsed.id), fullName: lower(parsed.fullName), currentName: lower(String(parsed.fullName).split('/').pop()) }
-  } catch {
-    return null
-  }
-}
-
-const defaultLookups = { github: githubLookup }
 
 /**
  * Resolve a clone's stable identity.

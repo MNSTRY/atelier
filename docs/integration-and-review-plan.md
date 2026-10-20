@@ -1,6 +1,11 @@
 # External-project integration and human review implementation plan
 
-Status: local implementation candidate. See the feature guides for implemented behavior; final source-bound review, release and human acceptance remain separate gates.
+Retained implementation-planning record. Its baseline findings, work packages
+and review markers describe the recorded integration effort; they do not
+establish current implementation or approval of later source. For current use,
+start with the [independent startup guide](independent-start.md).
+
+Recorded status: local implementation candidate. See the feature guides for implemented behavior; final source-bound review, release and human acceptance remain separate gates.
 Baseline: `58895eafbd980ae131d8c5f2d1882ac34f5c08b9`, tree `72f06c2aa8183f93dc2b49066a5c4e55d1c2f336`.
 
 <!-- mnstry-review-request: atelier-integration-plan-r1 gate: plan-readiness -->

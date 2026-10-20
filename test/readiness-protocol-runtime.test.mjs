@@ -254,3 +254,42 @@ test('readiness export dry-run carries pack blockers when built with a registry'
     'precondition: without a registry the pack blocker is invisible — the CLI must pass one',
   )
 })
+
+
+test('an explicit custom registry runs independently of bundled protocol selection', (t) => {
+  const { project, registry } = packProject(t)
+  const customProtocol = registry.protocolById(PACK_PROTOCOL_ID)
+  const selectedRegistry = {
+    protocolById(id) {
+      return id === PACK_PROTOCOL_ID ? customProtocol : null
+    },
+  }
+
+  const result = runProtocol(project, PACK_PROTOCOL_ID, {
+    registry: selectedRegistry,
+    answers: packAnswers,
+    write: false,
+    createProposal: false,
+  })
+
+  assert.equal(result.run.protocolId, PACK_PROTOCOL_ID)
+  assert.equal(result.run.status, 'review-needed')
+  assert.equal(result.run.score, 100)
+  assert.deepEqual(result.run.blockers, [])
+  assert.deepEqual(result.run.answers, packAnswers)
+  assert.equal(result.file, null)
+  assert.equal(result.proposal, null)
+  assert.deepEqual(listProtocolRuns(project), [])
+
+  // An explicit registry is authoritative: a miss must not silently select
+  // a bundled protocol. Omitting the registry retains the existing default.
+  assert.throws(() => runProtocol(project, 'identity-map', {
+    registry: selectedRegistry,
+    write: false,
+    createProposal: false,
+  }), /unknown readiness protocol/)
+  assert.equal(runProtocol(project, 'identity-map', {
+    write: false,
+    createProposal: false,
+  }).run.protocolId, 'mnstry.readiness:identity-map')
+})
