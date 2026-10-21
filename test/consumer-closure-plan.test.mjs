@@ -6,7 +6,6 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import * as viaScripts from '../scripts/consumer-closure-diagnostics.mjs'
 import * as viaSource from '../src/upgrade/closure-diagnostics.mjs'
 import {
   CLOSURE_PLAN_EXIT,
@@ -66,11 +65,9 @@ function snapshot(root) {
   return seen
 }
 
-test('the classifiers moved to the packed source and the scripts path re-exports the same functions', () => {
+test('the packed source exposes the consumer-closure classifiers', () => {
   const names = ['CONSUMER_CLOSURE_INCOMPLETE', 'OVERRIDE_NOT_INHERITED', 'capturedClosure', 'classifyNpmFailure', 'npmTreeLines', 'overrideFindings']
   assert.deepEqual(Object.keys(viaSource).sort(), names)
-  assert.deepEqual(Object.keys(viaScripts).sort(), names)
-  for (const name of names) assert.equal(viaScripts[name], viaSource[name], name)
 })
 
 test('the planner source imports nothing that could run npm or reach the network', () => {

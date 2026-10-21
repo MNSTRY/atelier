@@ -9,7 +9,7 @@ ignored .atelier-local/ state. Plans bind explicit sources, scope and budgets.
 Run processes bounded local text, CSV and JSON. Status retains every selected
 source's disposition. Query returns source-bound lexical evidence with coverage;
 no operation accepts semantic claims, calls a provider or enrolls raw files into
-the graph. Output is private JSON. See docs/ingestion.md.`
+the graph. Output is private JSON. See docs/guides/ingestion.md.`
 
 try {
   const command = process.argv[2]

@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import crypto from 'node:crypto'
 import { decisionRequestDigest } from '../src/decisions/contracts.mjs'
-import { CAPTURE_SCHEMA, CORPUS, LABELS, anchorChange as anchorChangeWithQuote, assess, citations, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
+import { CAPTURE_SCHEMA, CORPUS, DECISIONS_HEADING, DECISIONS_START, DECISIONS_END, LABELS, anchorChange as anchorChangeWithQuote, assess, citations, citedPaths, label, measure, parseDecisions, parseMaintainedDecisions } from '../scripts/practice-consumer/reconsider.mjs'
 
 // Foundation's repository-local decision-practice consumer, exercised on a
 // disposable git repository with invented decisions and sources.
@@ -16,7 +16,9 @@ const SCRIPT = path.join(ROOT, 'scripts/practice-consumer/reconsider.mjs')
 
 const CORPUS_TEXT = `# Invented decisions
 
-## Layered example
+${DECISIONS_HEADING}
+
+${DECISIONS_START}
 
 The [example layering](layers.md) is the reference model. Reconsider it if a
 proposed change needs a second writer.
@@ -24,6 +26,8 @@ proposed change needs a second writer.
 | Artifact | Decision | Notes |
 | --- | --- | --- |
 | Invented record | Keep it separate | No citation here. |
+
+${DECISIONS_END}
 `
 const SOURCE = ['# Layers', '', 'Line one of the invented model.', 'Line two of the invented model.', 'Line three.', ''].join('\n')
 
@@ -38,9 +42,9 @@ function repo(t) {
   // core.autocrlf=true (Windows runners) would strip CRs before the tool reads them.
   git('config', 'core.autocrlf', 'false')
   git('config', 'core.safecrlf', 'false')
-  fs.mkdirSync(path.join(dir, 'docs'))
+  fs.mkdirSync(path.dirname(path.join(dir, CORPUS)), { recursive: true })
   fs.writeFileSync(path.join(dir, CORPUS), CORPUS_TEXT)
-  fs.writeFileSync(path.join(dir, 'docs/layers.md'), SOURCE)
+  fs.writeFileSync(path.join(dir, 'docs/reference/layers.md'), SOURCE)
   git('add', '.')
   git('commit', '-q', '-m', 'base')
   const commit = (message, change) => {
@@ -57,9 +61,57 @@ const outcome = (measurement) => measurement.decisions.find((item) => item.cited
 test('the corpus parser finds prose and table decisions and only explicit links', () => {
   const decisions = parseDecisions(CORPUS_TEXT)
   assert.equal(decisions.length, 2)
-  assert.deepEqual(decisions[0].cited, ['docs/layers.md'])
+  assert.deepEqual(decisions[0].cited, ['docs/reference/layers.md'])
   assert.deepEqual(decisions[1].cited, [])
   assert.ok(decisions.every((item) => /^d-[a-z0-9-]+-[0-9a-f]{8}$/.test(item.id) && item.id.length <= 53))
+})
+
+
+test('measurement selects only the maintained decisions and keeps original corpus line selectors', (t) => {
+  const r = repo(t)
+  const corpus = `# Architecture\n\n## Other rules\n\n[Unselected source](outside.md).\n\n${CORPUS_TEXT}\n## Another guide section\n\n[Another unselected source](outside.md).\n`
+  const base = r.commit('maintained scope beside unrelated architecture', () => {
+    fs.writeFileSync(path.join(r.dir, CORPUS), corpus)
+    fs.writeFileSync(path.join(r.dir, 'docs/reference/outside.md'), 'Unselected source.\n')
+  })
+  const head = r.commit('change both sources', () => {
+    fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two'))
+    fs.writeFileSync(path.join(r.dir, 'docs/reference/outside.md'), 'Changed unselected source.\n')
+  })
+  let context
+  const measured = measure({ repo: r.dir, pr: 70, base, head, capture: value => { context = value } })
+  assert.equal(measured.decisions.length, 2)
+  assert.deepEqual(measured.decisions.flatMap(decision => decision.cited), ['docs/reference/layers.md'])
+  assert.deepEqual(measured.corpus, { path: CORPUS, section: 'Maintained implementation decisions' })
+  assert.equal(measured.provider.model, 'cited-source-predicate.v3')
+  const decisionEvidence = context.evaluations[0].instance.evidence.find(item => item.role === 'decision')
+  const [start, end] = decisionEvidence.reference.selector.value.slice('lines:'.length).split('-').map(Number)
+  assert.equal(decisionEvidence.reference.objectId, CORPUS)
+  assert.equal(corpus.split('\n').slice(start - 1, end).join('\n'), decisionEvidence.text)
+  assert.ok(start > 6, 'The selector retains its original architecture-file position')
+  assert.deepEqual(parseMaintainedDecisions(corpus).map(decision => decision.id), measured.decisions.map(decision => decision.id))
+})
+
+for (const [name, changed] of [
+  ['missing heading', text => text.replace(DECISIONS_HEADING, '## Different section')],
+  ['missing start', text => text.replace(DECISIONS_START, '')],
+  ['missing end', text => text.replace(DECISIONS_END, '')],
+  ['duplicate start', text => text.replace(DECISIONS_START, `${DECISIONS_START}\n${DECISIONS_START}`)],
+  ['duplicate end', text => text.replace(DECISIONS_END, `${DECISIONS_END}\n${DECISIONS_END}`)],
+  ['duplicate heading', text => `${DECISIONS_HEADING}\n${text}`],
+  ['reversed markers', text => text.replace(DECISIONS_START, 'TEMP-MARKER').replace(DECISIONS_END, DECISIONS_START).replace('TEMP-MARKER', DECISIONS_END)],
+  ['crossed heading', text => text.replace(DECISIONS_START, `## Another section\n${DECISIONS_START}`)],
+  ['nested heading', text => text.replace(DECISIONS_START, `${DECISIONS_START}\n### Another subject`)],
+  ['empty section', () => `${DECISIONS_HEADING}\n${DECISIONS_START}\n${DECISIONS_END}\n`],
+]) test(`measure and the CLI refuse ${name} without appending a measurement`, (t) => {
+  const r = repo(t)
+  const base = r.commit(name, () => fs.writeFileSync(path.join(r.dir, CORPUS), changed(CORPUS_TEXT)))
+  assert.throws(() => measure({ repo: r.dir, pr: 71, base, head: base }), /maintained-decision-section-invalid/)
+  const out = path.join(r.dir, 'refused-measurements.jsonl')
+  const result = spawnSync(process.execPath, [SCRIPT, 'measure', '--repo', r.dir, '--pr', '71', '--base', base, '--head', base, '--out', out], { encoding: 'utf8' })
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /maintained-decision-section-invalid/)
+  assert.equal(fs.existsSync(out), false)
 })
 
 test('an unrelated change stops on the false prerequisite and prepares nothing', (t) => {
@@ -75,7 +127,7 @@ test('an unrelated change stops on the false prerequisite and prepares nothing',
 
 test('a modified cited line proceeds to an unaccepted draft and the harness marks the decision', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
   const measurement = measure({ repo: r.dir, pr: 2, base: r.base, head })
   const value = outcome(measurement)
   assert.deepEqual(value.assessment, { status: 'assessed', choice: 'affected' })
@@ -96,7 +148,7 @@ test('lines only added to a whole-file citation proceed to an unaccepted draft (
   for (const [name, edit] of Object.entries(edits)) {
     const r = repo(t)
     const headText = edit(SOURCE)
-    const head = r.commit(name, () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), headText))
+    const head = r.commit(name, () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), headText))
     const value = outcome(measure({ repo: r.dir, pr: 3, base: r.base, head }))
     assert.deepEqual(value.change, { removed: 0, added: 1, binary: false }, name)
     assert.deepEqual(value.assessment, { status: 'assessed', choice: 'affected' }, name)
@@ -106,7 +158,7 @@ test('lines only added to a whole-file citation proceed to an unaccepted draft (
     // The draft quotes the exact head lines it judged, including the added one.
     const [start, end] = value.quoted.selector.value.slice('lines:'.length).split('-').map(Number)
     const quoted = headText.split('\n').slice(start - 1, end).join('\n')
-    assert.deepEqual([value.quoted.objectId, value.quoted.revision], ['docs/layers.md', head], name)
+    assert.deepEqual([value.quoted.objectId, value.quoted.revision], ['docs/reference/layers.md', head], name)
     assert.equal(value.quoted.contentDigest, `sha256:${crypto.createHash('sha256').update(quoted).digest('hex')}`, name)
     assert.match(quoted, /A prepended|An inserted|An appended/, name)
     // Nothing is applied: the commits and the decision record are unchanged.
@@ -119,7 +171,7 @@ test('lines only added to a whole-file citation proceed to an unaccepted draft (
 test('an anchor still reads additions between its lines as unaffected beside a whole-file draft, and a person judges the draft', (t) => {
   const r = repo(t)
   const base = r.commit('mixed', () => fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', '(layers.md) and [lines](layers.md#L3-L4)')))
-  const head = r.commit('insert inside', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one of the invented model.\n', 'Line one of the invented model.\nAn inserted line.\n')))
+  const head = r.commit('insert inside', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line one of the invented model.\n', 'Line one of the invented model.\nAn inserted line.\n')))
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-add-only-')), 'm.jsonl')
   t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
   const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--out', out], { encoding: 'utf8' })
@@ -129,20 +181,20 @@ test('an anchor still reads additions between its lines as unaffected beside a w
   const decision = measured.decisions.find((item) => item.cited.length)
   assert.deepEqual(decision.outcomes.map((item) => [item.anchor?.value ?? null, item.assessment.choice, item.status]), [[null, 'affected', 'proceed'], ['lines:3-4', 'unaffected', 'stop']])
   // The draft stays a proposal: only a person's label judges it, against this exact measurement.
-  assert.equal(cli('label', '--pr', '48', '--decision', decision.id, '--file', 'docs/layers.md', '--label', 'false-alarm', '--minutes', '1', '--by', 'atelier-foundation').status, 0)
+  assert.equal(cli('label', '--pr', '48', '--decision', decision.id, '--file', 'docs/reference/layers.md', '--label', 'false-alarm', '--minutes', '1', '--by', 'atelier-foundation').status, 0)
   const labelled = JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1))
   assert.deepEqual([labelled.anchor, labelled.label, labelled.measurement], [null, 'false-alarm', `sha256:${crypto.createHash('sha256').update(fs.readFileSync(out, 'utf8').trim().split('\n')[0]).digest('hex')}`])
 })
 
 test('a removed or binary source abstains with its reason recorded and escalates', (t) => {
   const removed = repo(t)
-  const gone = removed.commit('remove', () => fs.rmSync(path.join(removed.dir, 'docs/layers.md')))
+  const gone = removed.commit('remove', () => fs.rmSync(path.join(removed.dir, 'docs/reference/layers.md')))
   const a = outcome(measure({ repo: removed.dir, pr: 4, base: removed.base, head: gone }))
   assert.deepEqual(a.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
   assert.equal(a.status, 'escalate')
   assert.equal(a.reason, 'rubric-abstained')
   const binary = repo(t)
-  const bin = binary.commit('binary', () => fs.writeFileSync(path.join(binary.dir, 'docs/layers.md'), Buffer.from([0, 1, 2, 3])))
+  const bin = binary.commit('binary', () => fs.writeFileSync(path.join(binary.dir, 'docs/reference/layers.md'), Buffer.from([0, 1, 2, 3])))
   const b = outcome(measure({ repo: binary.dir, pr: 5, base: binary.base, head: bin }))
   assert.deepEqual(b.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
   assert.equal(b.status, 'escalate')
@@ -160,7 +212,7 @@ test('the assessment is the declared predicate', () => {
 
 test('measuring changes nothing in the repository; the CLI appends one line', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one', 'Changed one')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line one', 'Changed one')))
   const before = r.git('status', '--porcelain', '--ignored')
   const out = path.join(r.dir, '..', `${path.basename(r.dir)}-measurements.jsonl`)
   t.after(() => fs.rmSync(out, { force: true }))
@@ -178,7 +230,7 @@ test('measuring changes nothing in the repository; the CLI appends one line', (t
 test('labels name who labelled them and the exact outcome they judge', (t) => {
   const decision = 'd-layered-example-0123abcd'
   const measurement = `sha256:${'a'.repeat(64)}`
-  const base = { pr: 1, decision, file: 'docs/layers.md', measurement, reviewMinutes: 0, by: 'atelier-foundation' }
+  const base = { pr: 1, decision, file: 'docs/reference/layers.md', measurement, reviewMinutes: 0, by: 'atelier-foundation' }
   for (const value of LABELS) assert.equal(label({ ...base, value }).label, value)
   assert.throws(() => label({ ...base, value: 'accepted' }), /label must be one of/)
   assert.throws(() => label({ ...base, value: 'correct', reviewMinutes: -1 }), /nonnegative/)
@@ -189,24 +241,24 @@ test('labels name who labelled them and the exact outcome they judge', (t) => {
   assert.throws(() => label({ ...base, value: 'correct', measurement: 'x' }), /measurement must be/)
   // The CLI binds a label to the latest measurement of that pull request and to one outcome.
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-labels-')), 'm.jsonl')
   t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
   const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--out', out], { encoding: 'utf8' })
-  assert.equal(cli('label', '--pr', '11', '--decision', 'd-a-0123abcd', '--file', 'docs/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation').status, 2)
+  assert.equal(cli('label', '--pr', '11', '--decision', 'd-a-0123abcd', '--file', 'docs/reference/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation').status, 2)
   assert.equal(cli('measure', '--pr', '11', '--base', r.base, '--head', head, '--repo', r.dir).status, 0)
   const measured = JSON.parse(fs.readFileSync(out, 'utf8').trim())
   const id = measured.decisions.find((item) => item.cited.length).id
-  assert.equal(cli('label', '--pr', '11', '--decision', id, '--file', 'docs/other.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation').status, 2)
-  assert.equal(cli('label', '--pr', '11', '--decision', id, '--file', 'docs/layers.md', '--label', 'false-alarm', '--minutes', '1', '--by', 'atelier-foundation').status, 0)
+  assert.equal(cli('label', '--pr', '11', '--decision', id, '--file', 'docs/reference/other.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation').status, 2)
+  assert.equal(cli('label', '--pr', '11', '--decision', id, '--file', 'docs/reference/layers.md', '--label', 'false-alarm', '--minutes', '1', '--by', 'atelier-foundation').status, 0)
   const labelled = JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1))
-  assert.equal(labelled.file, 'docs/layers.md')
+  assert.equal(labelled.file, 'docs/reference/layers.md')
   assert.match(labelled.measurement, /^sha256:[0-9a-f]{64}$/)
 })
 
 test('a measurement does not depend on the working directory', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   r.git('config', 'diff.relative', 'true')
   const fromTop = outcome(measure({ repo: r.dir, pr: 12, base: r.base, head }))
   const fromSub = outcome(measure({ repo: path.join(r.dir, 'docs'), pr: 12, base: r.base, head }))
@@ -216,7 +268,7 @@ test('a measurement does not depend on the working directory', (t) => {
 
 test('pathspec and replace-object variables in the caller environment do not change a measurement', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-env-')), 'm.jsonl')
   t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
   for (const extra of [{ GIT_LITERAL_PATHSPECS: '1' }, { GIT_ICASE_PATHSPECS: '1' }, { GIT_GLOB_PATHSPECS: '1' }]) {
@@ -230,9 +282,9 @@ test('pathspec and replace-object variables in the caller environment do not cha
 test('a cited file replaced by a directory at the head counts as removed', (t) => {
   const r = repo(t)
   const head = r.commit('replace with a directory', () => {
-    fs.rmSync(path.join(r.dir, 'docs/layers.md'))
-    fs.mkdirSync(path.join(r.dir, 'docs/layers.md'))
-    fs.writeFileSync(path.join(r.dir, 'docs/layers.md/inner.md'), 'inner\n')
+    fs.rmSync(path.join(r.dir, 'docs/reference/layers.md'))
+    fs.mkdirSync(path.join(r.dir, 'docs/reference/layers.md'))
+    fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md/inner.md'), 'inner\n')
   })
   const value = outcome(measure({ repo: r.dir, pr: 16, base: r.base, head }))
   assert.deepEqual(value.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
@@ -244,7 +296,7 @@ test('attributes cannot make a text source binary', (t) => {
   r.commit('attributes', () => fs.writeFileSync(path.join(r.dir, '.gitattributes'), '*.md binary\n'))
   const base = r.git('rev-parse', 'HEAD')
   r.git('config', 'core.bigFileThreshold', '1')
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   const value = outcome(measure({ repo: r.dir, pr: 13, base, head }))
   assert.deepEqual(value.change, { removed: 1, added: 1, binary: false })
   assert.deepEqual(value.assessment, { status: 'assessed', choice: 'affected' })
@@ -253,18 +305,18 @@ test('attributes cannot make a text source binary', (t) => {
 test('a cited directory is not evaluated rather than silently stopping', (t) => {
   const r = repo(t)
   const base = r.commit('cite a directory', () => {
-    fs.mkdirSync(path.join(r.dir, 'docs/parts'))
-    fs.writeFileSync(path.join(r.dir, 'docs/parts/one.md'), 'one\n')
+    fs.mkdirSync(path.join(r.dir, 'docs/reference/parts'))
+    fs.writeFileSync(path.join(r.dir, 'docs/reference/parts/one.md'), 'one\n')
     fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('[example layering](layers.md)', '[example parts](parts)'))
   })
-  const head = r.commit('change inside', () => fs.writeFileSync(path.join(r.dir, 'docs/parts/one.md'), 'changed\n'))
+  const head = r.commit('change inside', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/parts/one.md'), 'changed\n'))
   const value = measure({ repo: r.dir, pr: 14, base, head }).decisions.find((item) => item.cited.length).outcomes[0]
-  assert.deepEqual(value, { file: 'docs/parts', anchor: null, status: 'not-evaluated', reason: 'cited-path-not-a-file' })
+  assert.deepEqual(value, { file: 'docs/reference/parts', anchor: null, status: 'not-evaluated', reason: 'cited-path-not-a-file' })
 })
 
 test('a renamed cited source escalates instead of looking unchanged', (t) => {
   const r = repo(t)
-  const head = r.commit('rename', () => r.git('mv', 'docs/layers.md', 'docs/moved-layers.md'))
+  const head = r.commit('rename', () => r.git('mv', 'docs/reference/layers.md', 'docs/reference/moved-layers.md'))
   const value = outcome(measure({ repo: r.dir, pr: 7, base: r.base, head }))
   assert.equal(value.prerequisite, true)
   assert.deepEqual(value.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
@@ -275,7 +327,7 @@ test('repository diff settings cannot turn additions into removals', (t) => {
   const r = repo(t)
   r.git('config', 'diff.interHunkContext', '20')
   r.git('config', 'diff.renames', 'copies')
-  const head = r.commit('two additions', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one of the invented model.', 'Line one of the invented model.\nAdded A.').replace('Line three.', 'Line three.\nAdded B.')))
+  const head = r.commit('two additions', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line one of the invented model.', 'Line one of the invented model.\nAdded A.').replace('Line three.', 'Line three.\nAdded B.')))
   const value = outcome(measure({ repo: r.dir, pr: 8, base: r.base, head }))
   assert.deepEqual(value.change, { removed: 0, added: 2, binary: false })
   assert.deepEqual(value.assessment, { status: 'assessed', choice: 'affected' })
@@ -285,7 +337,7 @@ test('a pull request is measured from its merge base, and an unchanged source is
   const r = repo(t)
   const branch = r.commit('unrelated', () => fs.writeFileSync(path.join(r.dir, 'other.md'), 'x\n'))
   r.git('checkout', '-q', '-b', 'side', r.base)
-  const side = r.commit('side change to the source', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Side two')))
+  const side = r.commit('side change to the source', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Side two')))
   const measured = measure({ repo: r.dir, pr: 9, base: side, head: branch })
   assert.equal(measured.mergeBase, r.base)
   assert.equal(measured.base, side)
@@ -296,14 +348,14 @@ test('a pull request is measured from its merge base, and an unchanged source is
 })
 
 test('citations exclude schemes, absolute paths and escapes from the repository', () => {
-  assert.deepEqual(citedPaths('[a](https://example.invalid/x.md) [b](/etc/x.md) [c](../../outside.md) [d](layers.md#part)'), ['docs/layers.md'])
+  assert.deepEqual(citedPaths('[a](https://example.invalid/x.md) [b](/etc/x.md) [c](../../../outside.md) [d](layers.md#part)'), ['docs/reference/layers.md'])
 })
 
 test('a change larger than the excerpt bound abstains', (t) => {
   const r = repo(t)
   const long = Array.from({ length: 300 }, (_, index) => `Line ${index}`).join('\n')
-  const base = r.commit('long source', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), `${long}\n`))
-  const head = r.commit('rewrite', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), `${long.replaceAll('Line', 'Row')}\n`))
+  const base = r.commit('long source', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), `${long}\n`))
+  const head = r.commit('rewrite', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), `${long.replaceAll('Line', 'Row')}\n`))
   const value = outcome(measure({ repo: r.dir, pr: 10, base, head }))
   assert.deepEqual(value.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
 })
@@ -330,7 +382,7 @@ test('measure and the CLI refuse malformed arguments', (t) => {
 
 test('the CLI measures when invoked through a symlinked path, and importing it runs nothing', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   const links = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-links-'))
   t.after(() => fs.rmSync(links, { recursive: true, force: true }))
   const args = ['measure', '--pr', '16', '--base', r.base, '--head', head, '--repo', r.dir, '--print']
@@ -373,7 +425,7 @@ const sha = (text) => `sha256:${crypto.createHash('sha256').update(text).digest(
 const anchoredRepo = (t, fragment = '#L3-L4', source = SOURCE) => {
   const r = repo(t)
   const base = r.commit('anchor', () => {
-    fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), source)
+    fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), source)
     fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', `(layers.md${fragment})`))
   })
   return { ...r, base }
@@ -382,15 +434,15 @@ const lines = (...items) => [...items, ''].join('\n')
 
 test('citations translate #L anchors and refuse every other fragment without widening it', () => {
   const cite = (target) => citations(`see [x](${target})`)
-  assert.deepEqual(cite('layers.md'), [{ file: 'docs/layers.md', anchor: null }])
-  assert.deepEqual(cite('layers.md#L3-L4'), [{ file: 'docs/layers.md', anchor: { start: 3, end: 4, value: 'lines:3-4' } }])
-  assert.deepEqual(cite('layers.md#L4'), [{ file: 'docs/layers.md', anchor: { start: 4, end: 4, value: 'lines:4-4' } }])
+  assert.deepEqual(cite('layers.md'), [{ file: 'docs/reference/layers.md', anchor: null }])
+  assert.deepEqual(cite('layers.md#L3-L4'), [{ file: 'docs/reference/layers.md', anchor: { start: 3, end: 4, value: 'lines:3-4' } }])
+  assert.deepEqual(cite('layers.md#L4'), [{ file: 'docs/reference/layers.md', anchor: { start: 4, end: 4, value: 'lines:4-4' } }])
   for (const fragment of ['heading', 'L0', 'L01', 'L1-2', 'l3', 'L3-L', 'L3-L4-L5', '']) assert.equal(cite(`layers.md#${fragment}`)[0].refusal, 'cited-anchor-unsupported', fragment)
   for (const fragment of ['L5-L3', 'L99999999999999999999']) assert.equal(cite(`layers.md#${fragment}`)[0].refusal, 'cited-anchor-malformed', fragment)
   assert.equal(cite('layers.md#heading')[0].anchor, null)
   // The same file anchored twice is two citations; citedPaths still names the file once.
   assert.equal(citations('[a](layers.md#L1-L2) [b](layers.md#L3-L4) [c](layers.md#L1-L2)').length, 2)
-  assert.deepEqual(citedPaths('[a](layers.md#L1-L2) [b](layers.md#heading)'), ['docs/layers.md'])
+  assert.deepEqual(citedPaths('[a](layers.md#L1-L2) [b](layers.md#heading)'), ['docs/reference/layers.md'])
 })
 
 test('anchor relevance uses base hunk coordinates and explicit insertion boundaries', () => {
@@ -428,20 +480,20 @@ test('anchor relevance uses base hunk coordinates and explicit insertion boundar
 
 test('a change inside an anchor drafts; a change only outside stops and still reports re-anchoring', (t) => {
   const inside = anchoredRepo(t)
-  const changedHead = inside.commit('inside', () => fs.writeFileSync(path.join(inside.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const changedHead = inside.commit('inside', () => fs.writeFileSync(path.join(inside.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   const m = measure({ repo: inside.dir, pr: 30, base: inside.base, head: changedHead })
   const hit = outcome(m)
   assert.equal(m.schema, 'atelier-practice-consumer-measurement@v1')
   assert.equal(hit.status, 'proceed')
   assert.deepEqual(hit.change, { removed: 1, added: 1, binary: false })
-  assert.deepEqual(hit.anchor.base, { owner: 'atelier-root', objectId: 'docs/layers.md', revision: inside.base, selector: { type: 'text-lines', version: '1', value: 'lines:3-4' }, contentDigest: sha('Line one of the invented model.\nLine two of the invented model.') })
-  assert.deepEqual(hit.anchor.head, { owner: 'atelier-root', objectId: 'docs/layers.md', revision: changedHead, selector: { type: 'text-lines', version: '1', value: 'lines:3-4' }, contentDigest: sha('Line one of the invented model.\nChanged two of the invented model.') })
+  assert.deepEqual(hit.anchor.base, { owner: 'atelier-root', objectId: 'docs/reference/layers.md', revision: inside.base, selector: { type: 'text-lines', version: '1', value: 'lines:3-4' }, contentDigest: sha('Line one of the invented model.\nLine two of the invented model.') })
+  assert.deepEqual(hit.anchor.head, { owner: 'atelier-root', objectId: 'docs/reference/layers.md', revision: changedHead, selector: { type: 'text-lines', version: '1', value: 'lines:3-4' }, contentDigest: sha('Line one of the invented model.\nChanged two of the invented model.') })
   assert.equal(hit.anchor.reanchor, true)
   assert.equal(m.summary.reanchors, 1)
 
   // Lines added above the anchor move it: no draft, but the re-anchor is reported.
   const above = anchoredRepo(t)
-  const movedHead = above.commit('above', () => fs.writeFileSync(path.join(above.dir, 'docs/layers.md'), SOURCE.replace('# Layers\n', '# Layers\nA new first paragraph.\n')))
+  const movedHead = above.commit('above', () => fs.writeFileSync(path.join(above.dir, 'docs/reference/layers.md'), SOURCE.replace('# Layers\n', '# Layers\nA new first paragraph.\n')))
   const moved = outcome(measure({ repo: above.dir, pr: 31, base: above.base, head: movedHead }))
   assert.equal(moved.prerequisite, false)
   assert.equal(moved.status, 'stop')
@@ -452,28 +504,28 @@ test('a change inside an anchor drafts; a change only outside stops and still re
 
   // A change below the anchor neither drafts nor moves it.
   const below = anchoredRepo(t)
-  const belowHead = below.commit('below', () => fs.writeFileSync(path.join(below.dir, 'docs/layers.md'), SOURCE.replace('Line three.', 'Line three, changed.')))
+  const belowHead = below.commit('below', () => fs.writeFileSync(path.join(below.dir, 'docs/reference/layers.md'), SOURCE.replace('Line three.', 'Line three, changed.')))
   const still = outcome(measure({ repo: below.dir, pr: 32, base: below.base, head: belowHead }))
   assert.deepEqual([still.status, still.anchor.outsideChanges, still.anchor.reanchor, still.anchor.head.selector.value], ['stop', true, false, 'lines:3-4'])
 })
 
 test('anchors refuse out-of-range and unsupported citations, and a removed file escalates', (t) => {
   const far = anchoredRepo(t, '#L6-L9')
-  const farHead = far.commit('edit', () => fs.writeFileSync(path.join(far.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
-  assert.deepEqual(outcome(measure({ repo: far.dir, pr: 33, base: far.base, head: farHead })), { file: 'docs/layers.md', anchor: { value: 'lines:6-9', base: null, head: null, outsideChanges: false, reanchor: false }, status: 'not-evaluated', reason: 'cited-anchor-out-of-range' })
+  const farHead = far.commit('edit', () => fs.writeFileSync(path.join(far.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'X')))
+  assert.deepEqual(outcome(measure({ repo: far.dir, pr: 33, base: far.base, head: farHead })), { file: 'docs/reference/layers.md', anchor: { value: 'lines:6-9', base: null, head: null, outsideChanges: false, reanchor: false }, status: 'not-evaluated', reason: 'cited-anchor-out-of-range' })
   // The split keeps a final empty element after the last LF: line 6 exists.
   const last = anchoredRepo(t, '#L6')
-  const lastHead = last.commit('edit', () => fs.writeFileSync(path.join(last.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
+  const lastHead = last.commit('edit', () => fs.writeFileSync(path.join(last.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'X')))
   assert.equal(outcome(measure({ repo: last.dir, pr: 34, base: last.base, head: lastHead })).anchor.base.contentDigest, sha(''))
   // An unsupported fragment is refused even though the file changed: no whole-file fallback.
   const named = anchoredRepo(t, '#layers')
-  const namedHead = named.commit('edit', () => fs.writeFileSync(path.join(named.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
+  const namedHead = named.commit('edit', () => fs.writeFileSync(path.join(named.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'X')))
   const refused = measure({ repo: named.dir, pr: 35, base: named.base, head: namedHead })
-  assert.deepEqual(outcome(refused), { file: 'docs/layers.md', anchor: null, fragment: 'layers', status: 'not-evaluated', reason: 'cited-anchor-unsupported' })
+  assert.deepEqual(outcome(refused), { file: 'docs/reference/layers.md', anchor: null, fragment: 'layers', status: 'not-evaluated', reason: 'cited-anchor-unsupported' })
   assert.equal(refused.summary.drafts, 0)
   // Renames are not followed: the file is absent at the head, so the anchor escalates.
   const gone = anchoredRepo(t)
-  const goneHead = gone.commit('move', () => fs.renameSync(path.join(gone.dir, 'docs/layers.md'), path.join(gone.dir, 'docs/moved.md')))
+  const goneHead = gone.commit('move', () => fs.renameSync(path.join(gone.dir, 'docs/reference/layers.md'), path.join(gone.dir, 'docs/reference/moved.md')))
   const lost = outcome(measure({ repo: gone.dir, pr: 36, base: gone.base, head: goneHead }))
   assert.deepEqual([lost.status, lost.assessment.reason, lost.anchor.head, lost.anchor.reanchor, lost.quoted], ['escalate', 'insufficient-evidence', null, true, null])
 })
@@ -481,14 +533,14 @@ test('anchors refuse out-of-range and unsupported citations, and a removed file 
 test('anchored text keeps CR and BOM bytes; only LF separates lines', (t) => {
   const crlf = '﻿# Layers\r\n\r\nLine one.\r\nLine two.\r\n'
   const r = anchoredRepo(t, '#L1-L3', crlf)
-  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), crlf.replace('Line two.', 'Changed.')))
+  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), crlf.replace('Line two.', 'Changed.')))
   assert.equal(outcome(measure({ repo: r.dir, pr: 37, base: r.base, head })).anchor.base.contentDigest, sha('﻿# Layers\r\n\r\nLine one.\r'))
 })
 
 test('a label names the anchor it judges, and a file cited twice needs --anchor', (t) => {
   const r = repo(t)
   const base = r.commit('two anchors', () => fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', '(layers.md#L3) and [more](layers.md#L4)')))
-  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-anchor-labels-')), 'm.jsonl')
   t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
   const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--out', out], { encoding: 'utf8' })
@@ -496,7 +548,7 @@ test('a label names the anchor it judges, and a file cited twice needs --anchor'
   const measured = JSON.parse(fs.readFileSync(out, 'utf8').trim())
   const decision = measured.decisions.find((item) => item.cited.length)
   assert.deepEqual(decision.outcomes.map((item) => [item.anchor.base.selector.value, item.status]), [['lines:3-3', 'stop'], ['lines:4-4', 'proceed']])
-  const base3 = ['label', '--pr', '38', '--decision', decision.id, '--file', 'docs/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation']
+  const base3 = ['label', '--pr', '38', '--decision', decision.id, '--file', 'docs/reference/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation']
   const ambiguous = cli(...base3)
   assert.equal(ambiguous.status, 2)
   assert.match(ambiguous.stderr, /name the --anchor/)
@@ -504,14 +556,14 @@ test('a label names the anchor it judges, and a file cited twice needs --anchor'
   assert.equal(cli(...base3, '--anchor', 'lines:4-4').status, 0)
   const labelled = JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1))
   assert.deepEqual([labelled.schema, labelled.anchor], ['atelier-practice-consumer-label@v1', 'lines:4-4'])
-  assert.throws(() => label({ pr: 1, decision: decision.id, file: 'docs/layers.md', anchor: 'L4', measurement: `sha256:${'a'.repeat(64)}`, value: 'correct', reviewMinutes: 0, by: 'atelier-foundation' }), /anchor must be/)
+  assert.throws(() => label({ pr: 1, decision: decision.id, file: 'docs/reference/layers.md', anchor: 'L4', measurement: `sha256:${'a'.repeat(64)}`, value: 'correct', reviewMinutes: 0, by: 'atelier-foundation' }), /anchor must be/)
 })
 
 test('a git change crossing an anchor endpoint maps the surviving head lines exactly', (t) => {
   const numbered = lines(...Array.from({ length: 20 }, (_, index) => `line ${index + 1}`))
   const cross = (fragment, edit) => {
     const r = anchoredRepo(t, fragment, numbered)
-    const head = r.commit('cross', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), edit(numbered.split('\n')).join('\n')))
+    const head = r.commit('cross', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), edit(numbered.split('\n')).join('\n')))
     return outcome(measure({ repo: r.dir, pr: 40, base: r.base, head }))
   }
   // Deleting old lines 8-11 crosses the start of lines 10-12: old line 12 survives as head line 8.
@@ -527,7 +579,7 @@ test('a git change crossing an anchor endpoint maps the surviving head lines exa
 test('an anchored range the head no longer has is lost, not unchanged', (t) => {
   // #L6 is the empty line after the final LF; a head without the final LF has five lines.
   const r = anchoredRepo(t, '#L6')
-  const head = r.commit('drop final newline', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace(/\n$/, '')))
+  const head = r.commit('drop final newline', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace(/\n$/, '')))
   const value = outcome(measure({ repo: r.dir, pr: 41, base: r.base, head }))
   assert.equal(value.prerequisite, true)
   assert.deepEqual([value.status, value.assessment], ['escalate', { status: 'assessed', choice: 'unclear' }])
@@ -537,23 +589,23 @@ test('an anchored range the head no longer has is lost, not unchanged', (t) => {
 test('anchored over-bounds, binary, oversize-at-head and mode-only cases are bounded', (t) => {
   const long = lines(...Array.from({ length: 130 }, (_, index) => `row ${index + 1}`))
   const over = anchoredRepo(t, '#L1-L121', long)
-  const overHead = over.commit('edit', () => fs.writeFileSync(path.join(over.dir, 'docs/layers.md'), long.replace('row 2\n', 'row two\n')))
+  const overHead = over.commit('edit', () => fs.writeFileSync(path.join(over.dir, 'docs/reference/layers.md'), long.replace('row 2\n', 'row two\n')))
   assert.equal(outcome(measure({ repo: over.dir, pr: 42, base: over.base, head: overHead })).reason, 'cited-anchor-over-bounds')
   // Growing an anchor past the excerpt bound at the head abstains; the head reference names the whole mapped range.
   const grow = anchoredRepo(t, '#L1-L100', long)
   const grown = long.split('\n')
   grown.splice(50, 0, ...Array.from({ length: 30 }, (_, index) => `new ${index}`))
-  const growHead = grow.commit('grow', () => fs.writeFileSync(path.join(grow.dir, 'docs/layers.md'), grown.join('\n')))
+  const growHead = grow.commit('grow', () => fs.writeFileSync(path.join(grow.dir, 'docs/reference/layers.md'), grown.join('\n')))
   const big = outcome(measure({ repo: grow.dir, pr: 43, base: grow.base, head: growHead }))
   assert.deepEqual([big.status, big.assessment.reason, big.anchor.head.selector.value], ['escalate', 'insufficient-evidence', 'lines:1-130'])
   // An anchored source that becomes binary escalates and needs re-anchoring.
   const bin = anchoredRepo(t)
-  const binHead = bin.commit('binary', () => fs.writeFileSync(path.join(bin.dir, 'docs/layers.md'), Buffer.from([0, 1, 2])))
+  const binHead = bin.commit('binary', () => fs.writeFileSync(path.join(bin.dir, 'docs/reference/layers.md'), Buffer.from([0, 1, 2])))
   const binary = outcome(measure({ repo: bin.dir, pr: 44, base: bin.base, head: binHead }))
   assert.deepEqual([binary.status, binary.anchor.head, binary.anchor.reanchor], ['escalate', null, true])
   // A mode-only change touches no anchored line: stop, nothing to re-anchor.
   const mode = anchoredRepo(t)
-  const modeHead = mode.commit('mode', () => fs.chmodSync(path.join(mode.dir, 'docs/layers.md'), 0o755))
+  const modeHead = mode.commit('mode', () => fs.chmodSync(path.join(mode.dir, 'docs/reference/layers.md'), 0o755))
   if (mode.git('diff', '--name-only', mode.base, modeHead)) {
     const same = outcome(measure({ repo: mode.dir, pr: 45, base: mode.base, head: modeHead }))
     assert.deepEqual([same.status, same.anchor.reanchor], ['stop', false])
@@ -563,14 +615,14 @@ test('anchored over-bounds, binary, oversize-at-head and mode-only cases are bou
 test('a whole-file citation stays labellable beside an anchored or refused citation of the same file', (t) => {
   const r = repo(t)
   const base = r.commit('mixed', () => fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', '(layers.md), [line](layers.md#L4) and [section](layers.md#intro)')))
-  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-mixed-labels-')), 'm.jsonl')
   t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
   const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--out', out], { encoding: 'utf8' })
   assert.equal(cli('measure', '--pr', '46', '--base', base, '--head', head, '--repo', r.dir).status, 0)
   const decision = JSON.parse(fs.readFileSync(out, 'utf8').trim()).decisions.find((item) => item.cited.length)
   assert.deepEqual(decision.outcomes.map((item) => [item.anchor?.value ?? null, item.fragment ?? null, item.status]), [[null, null, 'proceed'], ['lines:4-4', null, 'proceed'], [null, 'intro', 'not-evaluated']])
-  const common = ['label', '--pr', '46', '--decision', decision.id, '--file', 'docs/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation']
+  const common = ['label', '--pr', '46', '--decision', decision.id, '--file', 'docs/reference/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation']
   assert.equal(cli(...common).status, 0)
   assert.equal(JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1)).anchor, null)
   assert.equal(cli(...common, '--anchor', 'lines:4-4').status, 0)
@@ -578,10 +630,10 @@ test('a whole-file citation stays labellable beside an anchored or refused citat
   // A file cited only through a refused fragment has no whole-file outcome to label.
   const refusedOnly = repo(t)
   const rBase = refusedOnly.commit('refused only', () => fs.writeFileSync(path.join(refusedOnly.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', '(layers.md#intro)')))
-  const rHead = refusedOnly.commit('edit', () => fs.writeFileSync(path.join(refusedOnly.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const rHead = refusedOnly.commit('edit', () => fs.writeFileSync(path.join(refusedOnly.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed two')))
   assert.equal(cli('measure', '--pr', '47', '--base', rBase, '--head', rHead, '--repo', refusedOnly.dir).status, 0)
   const refusedId = JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1)).decisions.find((item) => item.cited.length).id
-  const refusedLabel = cli('label', '--pr', '47', '--decision', refusedId, '--file', 'docs/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation')
+  const refusedLabel = cli('label', '--pr', '47', '--decision', refusedId, '--file', 'docs/reference/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation')
   assert.equal(refusedLabel.status, 2)
   assert.match(refusedLabel.stderr, /no outcome for this decision, file and anchor/)
 })
@@ -593,14 +645,14 @@ test('a block moved above an anchor leaves it in place, and quoted text always m
   const moved = numbered.split('\n')
   const [two] = moved.splice(1, 1)
   moved.splice(4, 0, two)
-  const head = r.commit('move', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), moved.join('\n')))
+  const head = r.commit('move', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), moved.join('\n')))
   const still = outcome(measure({ repo: r.dir, pr: 50, base: r.base, head }))
   assert.deepEqual([still.status, still.anchor.reanchor, still.anchor.head.selector.value, still.anchor.outsideChanges], ['stop', false, 'lines:10-12', true])
   // Removing every anchored line: a draft whose quoted text is real head lines its selector names.
   const gone = anchoredRepo(t, '#L10-L12', numbered)
   const goneLines = numbered.split('\n')
   goneLines.splice(9, 3)
-  const goneHead = gone.commit('remove anchored lines', () => fs.writeFileSync(path.join(gone.dir, 'docs/layers.md'), goneLines.join('\n')))
+  const goneHead = gone.commit('remove anchored lines', () => fs.writeFileSync(path.join(gone.dir, 'docs/reference/layers.md'), goneLines.join('\n')))
   const removed = outcome(measure({ repo: gone.dir, pr: 51, base: gone.base, head: goneHead }))
   assert.deepEqual([removed.status, removed.anchor.head, removed.anchor.reanchor], ['proceed', null, true])
   const [, from, to] = removed.quoted.selector.value.match(/^lines:(\d+)-(\d+)$/)
@@ -623,7 +675,7 @@ test('an unrelated hunk far from a removed anchor neither widens the quote nor e
   const edited = numbered.split('\n')
   edited.splice(149, 3)
   edited[4] = 'line five, edited'
-  const head = r.commit('edit far away and remove the anchor', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), edited.join('\n')))
+  const head = r.commit('edit far away and remove the anchor', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), edited.join('\n')))
   const value = outcome(measure({ repo: r.dir, pr: 52, base: r.base, head }))
   assert.deepEqual([value.status, value.anchor.head, value.anchor.reanchor], ['proceed', null, true])
   const [, from, to] = value.quoted.selector.value.match(/^lines:(\d+)-(\d+)$/)
@@ -636,7 +688,7 @@ test('a lost anchor in a long file quotes the end of the head, where its lines w
   const numbered = lines(...Array.from({ length: 200 }, (_, index) => `line ${index + 1}`))
   // #L201 is the empty line after the final LF; the head drops that LF and has 200 lines.
   const r = anchoredRepo(t, '#L201', numbered)
-  const head = r.commit('drop final newline', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), numbered.replace(/\n$/, '')))
+  const head = r.commit('drop final newline', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), numbered.replace(/\n$/, '')))
   const value = outcome(measure({ repo: r.dir, pr: 53, base: r.base, head }))
   assert.deepEqual([value.status, value.anchor.head, value.anchor.reanchor], ['escalate', null, true])
   assert.equal(value.quoted.selector.value, 'lines:194-200')
@@ -645,7 +697,7 @@ test('a lost anchor in a long file quotes the end of the head, where its lines w
 
 test('a capture hands over exactly what the evaluator was given and returned, and leaves the measurement unchanged', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
   const before = r.git('status', '--porcelain', '--ignored')
   const plain = measure({ repo: r.dir, pr: 60, base: r.base, head })
   const calls = []
@@ -667,7 +719,7 @@ test('a capture hands over exactly what the evaluator was given and returned, an
   assert.equal(context.evaluations.length, 1)
   const [entry] = context.evaluations
   const [decisionId, measured] = evaluated[0]
-  assert.deepEqual([entry.decision, entry.file, entry.anchor], [decisionId, 'docs/layers.md', null])
+  assert.deepEqual([entry.decision, entry.file, entry.anchor], [decisionId, 'docs/reference/layers.md', null])
   // The request, its digest and the result are the ones the evaluator validated.
   assert.equal(entry.instance.result.requestDigest, decisionRequestDigest(entry.instance.request))
   assert.equal(entry.instance.result.requestId, entry.instance.request.id)
@@ -685,12 +737,12 @@ test('a capture hands over exactly what the evaluator was given and returned, an
 test('a capture keeps unevaluated and unchanged citations as facts, without inventing an input', (t) => {
   // An out-of-range anchor is never evaluated: it is listed, with no instance.
   const far = anchoredRepo(t, '#L6-L9')
-  const farHead = far.commit('edit', () => fs.writeFileSync(path.join(far.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
+  const farHead = far.commit('edit', () => fs.writeFileSync(path.join(far.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'X')))
   let refusedContext = null
   const refused = measure({ repo: far.dir, pr: 61, base: far.base, head: farHead, capture: (context) => { refusedContext = context } })
   assert.equal(outcome(refused).status, 'not-evaluated')
   assert.deepEqual(refusedContext.evaluations, [])
-  assert.deepEqual(refusedContext.notEvaluated, [{ decision: refused.decisions.find((item) => item.cited.length).id, file: 'docs/layers.md', anchor: 'lines:6-9', fragment: null, reason: 'cited-anchor-out-of-range' }])
+  assert.deepEqual(refusedContext.notEvaluated, [{ decision: refused.decisions.find((item) => item.cited.length).id, file: 'docs/reference/layers.md', anchor: 'lines:6-9', fragment: null, reason: 'cited-anchor-out-of-range' }])
 
   // An unchanged cited source is evaluated once and stops on the false prerequisite.
   const r = repo(t)
@@ -706,7 +758,7 @@ test('a capture keeps unevaluated and unchanged citations as facts, without inve
 
 test('the CLI writes a capture only when asked, bound to the measurement line, and never over an existing file', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one', 'Changed one')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line one', 'Changed one')))
   const out = path.join(r.dir, '..', `${path.basename(r.dir)}-measurements.jsonl`)
   const capture = path.join(r.dir, '..', `${path.basename(r.dir)}-capture.json`)
   t.after(() => { fs.rmSync(out, { force: true }); fs.rmSync(capture, { force: true }) })
@@ -746,7 +798,7 @@ test('the CLI writes a capture only when asked, bound to the measurement line, a
 
 test('the CLI refuses a capture that names the measurements file, by any path, before anything is measured or written', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one', 'Changed one')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line one', 'Changed one')))
   const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-consumer-alias-')))
   t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
   const real = path.join(outside, 'real')
@@ -800,7 +852,7 @@ test('the CLI refuses a capture that names the measurements file, by any path, b
 
 test('a capture refused when it is written appends nothing, and one that turns out to be the measurements file is not kept', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one', 'Changed one')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line one', 'Changed one')))
   const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-consumer-write-')))
   t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
   const run = (...extra) => spawnSync(process.execPath, [SCRIPT, 'measure', '--pr', '65', '--base', r.base, '--head', head, '--repo', r.dir, ...extra], { encoding: 'utf8' })
@@ -899,7 +951,7 @@ test('a capture refused when it is written appends nothing, and one that turns o
 
 test('a capture callback cannot change the measurement through the definition reference', (t) => {
   const r = repo(t)
-  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/reference/layers.md'), SOURCE.replace('Line two', 'Changed line two')))
   const measured = measure({ repo: r.dir, pr: 66, base: r.base, head, capture: (context) => { context.definitionRef.digest = `sha256:${'0'.repeat(64)}` } })
   assert.notEqual(measured.definitionRef.digest, `sha256:${'0'.repeat(64)}`)
 })

@@ -14,7 +14,7 @@ platform logins must uniquely match declared login mappings. Repository identity
 checks may invoke `gh api repos/...` to resolve a canonical GitHub identity.
 Those authenticated requests use your own `gh` credentials. Recorded repository
 identities let identity checks keep working when the provider is unavailable.
-See `docs/install.md` for the full attribution precedence and mode semantics.
+See `docs/start/install.md` for the full attribution precedence and mode semantics.
 Explicitly enrolled Atelier Sync may also run bounded Git fetches
 for observation/reconciliation and one non-force push only when the exact
 reviewed commit plan requested and confirmed it, no earlier local commit is
@@ -69,6 +69,6 @@ service, no network:
 atelier dry-run ./atelier-export.json
 ```
 
-`docs/continuity.md` records the distribution commitments behind these
+`docs/reference/continuity.md` records the distribution commitments behind these
 claims, including the perpetual Apache-2.0 grant on every tagged release you
 receive.

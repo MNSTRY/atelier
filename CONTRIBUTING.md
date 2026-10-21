@@ -90,7 +90,7 @@ service; its ports, paths, schema, content, and copy stay in the consumer repo.
 - Documentation corrections and clarity improvements.
 - Fictional fixtures that exercise real mechanics.
 - Extension packs and distributions in your own repositories — these are
-  yours and need no contribution at all; `docs/distributions.md` is the
+  yours and need no contribution at all; `docs/guides/distributions.md` is the
   contract.
 
 ## What needs a conversation first
@@ -172,7 +172,7 @@ Commit access can end — by your choice or MNSTRY's. What that does and does
 not change:
 
 - Everything you lawfully received stays yours under Apache-2.0, per
-  `docs/continuity.md`. Nothing is clawed back.
+  `docs/reference/continuity.md`. Nothing is clawed back.
 - Your merged contributions remain in the project under Apache-2.0, with
   your authorship intact. They are not removed, and cannot be, retroactively.
 - You keep every right any other member of the public has, which — this

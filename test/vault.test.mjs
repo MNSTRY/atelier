@@ -1,4 +1,4 @@
-import { protectionEvidence, deployment } from './vault-privacy-fixture.mjs'
+import { protectionEvidence, deployment } from './support/vault/privacy-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'

@@ -31,7 +31,7 @@ import { ObsidianMaintenanceRefusal } from './errors.mjs'
 // No answer in time proves nothing (a busy holder answers late). A ticket
 // from another machine, an unreadable ticket, an unknown file, or a live
 // process that recorded no health address all need a person: see
-// `inspectPrivateGenerationLock` and docs/local-services.md.
+// `inspectPrivateGenerationLock` and docs/reference/local-services.md.
 
 export const LOCK_TICKET_SCHEMA = 'atelier-obsidian-lock-ticket/v1'
 export const ENGINE_LOCK_DIRECTORY = path.join('state', 'maintenance', 'engine-lock')

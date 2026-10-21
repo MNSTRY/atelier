@@ -23,7 +23,7 @@ const DEFAULT_HELP_TEXT = `MNSTRY Atelier
 
 Usage:
   atelier <command> [args]
-  mnstry-atelier <command> [args]   # legacy alias
+  mnstry-atelier <command> [args]   # supported npm alias
   mnstry atelier <command> [args]   # compatibility
 
 Core commands:
@@ -154,7 +154,7 @@ test('branded help leads with the wrapper name then required attribution and dro
   assert.equal(lines[1], `powered by MNSTRY Atelier ${VERSION}`)
   assert.match(help, /^ {2}loomworks <command> \[args\]$/m)
   assert.doesNotMatch(help, /mnstry-atelier <command>/)
-  assert.doesNotMatch(help, /legacy alias/)
+  assert.doesNotMatch(help, /supported npm alias/)
   assert.doesNotMatch(help, /# compatibility/)
   assert.match(help, /bundled MNSTRY readiness protocols/)
 })

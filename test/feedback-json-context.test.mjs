@@ -61,7 +61,7 @@ test('key material nested in a JSON string inside JSON is still reached', (t) =>
 // reporting a bug in that doc has to be able to attach it.
 test('documentation showing a redacted key example stays attachable', (t) => {
   const dir = workspace(t)
-  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'attestation.md'), 'utf8')
+  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'reference', 'attestation.md'), 'utf8')
   const file = path.join(dir, 'attestation-copy.md')
   fs.writeFileSync(file, doc)
 

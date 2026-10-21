@@ -213,7 +213,7 @@ const invokedDirectly = (() => { try { return Boolean(process.argv[1]) && fs.rea
 if (invokedDirectly) {
   const argv = process.argv.slice(2)
   // As early as this entry can: its static imports have already loaded most of the modules, so a release that changes
-  // between this process's start and this reading is not noticed until the next change (docs/obsidian.md says so).
+  // between this process's start and this reading is not noticed until the next change (docs/guides/obsidian.md says so).
   const releaseWatch = argv.includes('--startup') ? watchRelease(process.argv[1]) : null
   let options = null
   try {

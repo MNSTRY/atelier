@@ -23,7 +23,7 @@ existing configuration. Never use unscoped `npx atelier`.
 
 ## Design the minimum ontology
 
-Read the bundled `docs/knowledge-setup.md`. Give each domain concept a
+Read the bundled `docs/start/knowledge-setup.md`. Give each domain concept a
 definition, identity rule, and `concept:...` tag. Map relationships to the
 existing native source predicates only where meaning is preserved. Keep rich
 assertions, their passages, qualifications, and review state in source records
@@ -66,7 +66,7 @@ not; retention counts are not practical benefit.
 After graph/build, `atelier dev --knowledge` offers five dashboards. Agents can
 read `atelier knowledge dashboard` and continue the same private session using
 `knowledge session start|read|event|recover|list`. Follow
-`docs/knowledge-workspace.md`: ask one useful question, preserve exact answers,
+`docs/guides/knowledge-workspace.md`: ask one useful question, preserve exact answers,
 use `propose` for machine revisions, and wait for explicit human confirmation.
 Source changes require a separately reviewed owner edit. Record real outcomes
 and measured usage in the Learn flow; never infer savings from source counts.

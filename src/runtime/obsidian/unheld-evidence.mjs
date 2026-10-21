@@ -6,7 +6,7 @@ import { realPathOfLocation } from './vault-location.mjs'
 
 // Whether the Obsidian this account runs lists a vault Atelier is filling for
 // the first time, as the publisher's `direct-unheld` path needs to know
-// (publisher.mjs; docs/obsidian-contract.md, "First publication into a vault
+// (publisher.mjs; docs/reference/obsidian-contract.md, "First publication into a vault
 // no Obsidian lists"). Read from the app's settings file, never from the app:
 //
 //   { unlisted: true }                   the file was read, and none of its entries is the vault root, a folder above

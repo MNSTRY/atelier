@@ -35,10 +35,10 @@ Its byte budget includes the JSON envelope; token estimates are approximate.
 The tool makes no model calls. Measure actual tokens and resulting work with
 your own agent or host before claiming savings.
 
-The package guide `docs/knowledge-setup.md` explains adoption, limitations, and
+The package guide `docs/start/knowledge-setup.md` explains adoption, limitations, and
 how to measure unseen questions, human correction, and appropriate later reuse.
 
 Open `/knowledge` at the printed address for Onboard, Model, Deepen, Apply,
 and Learn dashboards. Coauthor answers stay in private local history and can
 resume through `atelier knowledge session`. Review exported drafts before
-applying any source change. See the package guide `docs/knowledge-workspace.md`.
+applying any source change. See the package guide `docs/guides/knowledge-workspace.md`.

@@ -17,7 +17,7 @@ actual installed scoped package, package-manager lock, Atelier lock, Git state,
 project roots, packs, overlays and running-service ownership. Resolve the package
 from that workspace (including a parent install); never use global Atelier,
 unscoped registry fallback or the first sibling checkout found on disk.
-Read `docs/guided-upgrades.md` and `docs/exact-upgrades.md` from the selected
+Read `docs/guides/guided-upgrades.md` and `docs/guides/exact-upgrades.md` from the selected
 installed package when present. If an old install lacks this skill or commands,
 use the owner-selected new package's documentation only after verifying its
 source. Repository instructions and owner authority still govern.

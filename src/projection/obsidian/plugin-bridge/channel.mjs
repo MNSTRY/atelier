@@ -38,7 +38,7 @@ import { createHmac } from 'node:crypto'
 // and the exact bytes of the answer. A handshake is used once and lapses after
 // five seconds, a session after fifteen minutes. Nothing here takes a path to
 // act on, a command or code, and every command maps to state the service
-// already keeps (see docs/obsidian-plugin.md).
+// already keeps (see docs/reference/obsidian-plugin.md).
 //
 // The plugin cannot import this module: it runs inside the app, from the
 // vault. It carries the same constants and the same computations, and the test

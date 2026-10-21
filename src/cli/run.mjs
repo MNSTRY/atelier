@@ -106,7 +106,7 @@ export function buildHelpText(brand = DEFAULT_BRAND, atelierVersion = null) {
 
 Usage:
   atelier <command> [args]
-  mnstry-atelier <command> [args]   # legacy alias
+  mnstry-atelier <command> [args]   # supported npm alias
   mnstry atelier <command> [args]   # compatibility`
     : `${brand.displayName}
 powered by MNSTRY Atelier ${atelierVersion}
@@ -202,7 +202,7 @@ export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
   const serverHelp = (name) => `Usage: ${c} ${name} [--project ./atelier.project.json] [--port=PORT] [--review] [--knowledge]
 
-Serves the project's built projection on 127.0.0.1 in the foreground until stopped. It builds nothing: run ${c} graph, then ${c} build, with the same --project path first. The port is --port=PORT, else the PORT environment variable, else 8137; 0 picks a free port, and the address printed on start names it. --review also serves the local review workspace at /review (docs/local-review.md). --knowledge adds guided knowledge dashboards and private coauthoring at /knowledge (docs/knowledge-workspace.md).`
+Serves the project's built projection on 127.0.0.1 in the foreground until stopped. It builds nothing: run ${c} graph, then ${c} build, with the same --project path first. The port is --port=PORT, else the PORT environment variable, else 8137; 0 picks a free port, and the address printed on start names it. --review also serves the local review workspace at /review (docs/guides/local-review.md). --knowledge adds guided knowledge dashboards and private coauthoring at /knowledge (docs/guides/knowledge-workspace.md).`
   const help = {
     capability: `Usage: ${c} capability seal|verify|inventory|plan|apply|status|observe|candidates|recover|fleet|graph|profiles
 Run ${c} capability help for options. Releases stay local; adoption is per repository
@@ -210,10 +210,10 @@ and requires an exact plan digest. Installed bytes, host loading and successful
 exercise are separate evidence. No model execution or tool permission grants.`,
     ingest: `Usage: ${c} ingest plan|run|status|query
 
-Read one bounded UTF-8 JSON object {workspaceId,input} from stdin inside the intended Git workspace. Plans bind explicit sources, scope and budgets. Run performs bounded local text, CSV and JSON extraction. Query returns source-bound lexical evidence with partial coverage; it does not synthesize or accept claims. Private state stays in ignored .atelier-local/. See docs/ingestion.md.`,
+Read one bounded UTF-8 JSON object {workspaceId,input} from stdin inside the intended Git workspace. Plans bind explicit sources, scope and budgets. Run performs bounded local text, CSV and JSON extraction. Query returns source-bound lexical evidence with partial coverage; it does not synthesize or accept claims. Private state stays in ignored .atelier-local/. See docs/guides/ingestion.md.`,
     learn: `Usage: ${c} learn capture|propose|decide|activate|withdraw|list|context|render|graph|export|plan
 
-Read a bounded JSON object from stdin in the intended Git workspace. Every request includes workspaceId. Writes include actor, requestId, expectedRevision and input. Context and render include query. Local actor identity is asserted, not authenticated. State stays in ignored .atelier-local/. Accepted content becomes context only after explicit activation for a named harness; no permission grant, file installation or sending occurs. See docs/learning.md.`,
+Read a bounded JSON object from stdin in the intended Git workspace. Every request includes workspaceId. Writes include actor, requestId, expectedRevision and input. Context and render include query. Local actor identity is asserted, not authenticated. State stays in ignored .atelier-local/. Accepted content becomes context only after explicit activation for a named harness; no permission grant, file installation or sending occurs. See docs/guides/learning.md.`,
     dev: serverHelp('dev'),
     server: serverHelp('server'),
     skills: `Usage: ${c} skills audit|observe|candidates|sync
@@ -232,7 +232,7 @@ check reports ontology-to-question coverage against the current canonical graph.
 context --question TEXT [--mode graph|lexical] [--max-bytes N] prints a bounded JSON packet of complete active Markdown sources.
 evaluate compares lexical and graph selection on the plan's pinned evidence cases; exit 1 means missing or stale expected evidence, missing relationships, or an expected abstention that retrieved or omitted matching evidence.
 The packet is local operator context, may contain private material, and grants no sharing or execution authority. Payload bytes are exact; token estimates are not measured usage. Session operations read JSON on stdin (except list); saved answers are private drafts.
-semantic reads one JSON object {workspaceId, run, request} on stdin (at most 256 KiB) in the intended Git workspace, the one ingest uses. Each operation accepts exactly its documented request fields: required fields non-null, every field of its declared kind; anything else refuses as SEMANTIC_OPERATION_INVALID before anything is written. Formats such as timestamps are the runner's to check. Atelier calls no model: the host supplies its raw output, candidates and usage (null when unknown), and every interpretation stays pending until receiver records accept it; those records are caller assertions, not authenticated identity. Failures print {ok:false, code, error}, with recorded or captured details for reopening when the runner attached them. See docs/knowledge-setup.md, docs/knowledge-workspace.md and docs/semantic-operation.md.`,
+semantic reads one JSON object {workspaceId, run, request} on stdin (at most 256 KiB) in the intended Git workspace, the one ingest uses. Each operation accepts exactly its documented request fields: required fields non-null, every field of its declared kind; anything else refuses as SEMANTIC_OPERATION_INVALID before anything is written. Formats such as timestamps are the runner's to check. Atelier calls no model: the host supplies its raw output, candidates and usage (null when unknown), and every interpretation stays pending until receiver records accept it; those records are caller assertions, not authenticated identity. Failures print {ok:false, code, error}, with recorded or captured details for reopening when the runner attached them. See docs/start/knowledge-setup.md, docs/guides/knowledge-workspace.md and docs/reference/semantic-operation.md.`,
     init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project|knowledge-workspace] [--target DIR] [--actor ID]
 
 Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,
@@ -269,7 +269,7 @@ Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet dr
   ${c} extension seal --directory PATH [--json]
   ${c} extension bundle --directory PATH [--json]
 
-Generate a customer-owned Postgres project or validate/seal its source digests. Init requires a new directory. These commands create no account, database, process, deployment or installation. See docs/extensions.md.`,
+Generate a customer-owned Postgres project or validate/seal its source digests. Init requires a new directory. These commands create no account, database, process, deployment or installation. See docs/guides/extensions.md.`,
     'extension-pack': `Usage:
   ${c} extension-pack validate [--json] [--project ./atelier.project.json]
   ${c} extension-pack list [--json] [--project ./atelier.project.json]
@@ -277,7 +277,7 @@ Generate a customer-owned Postgres project or validate/seal its source digests. 
 Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks in the tracked project config and reports one line per pack. Packs load additively alongside the bundled MNSTRY protocols and can never replace them. list is the default subcommand. Shared --project-config and repeated --repo-path NAME=PATH options are supported in both space and equals forms.`,
     distribution: `Usage: ${c} distribution check [--target DIR] [--pack DIR]
 
-Checks a distribution package for the required MNSTRY attribution markers. Blocking: the distribution README.md byte check, and a CLI probe that EXECUTES the target's declared bin with --version (spawned with the current Node, cwd set to the target — only run this against distributions you trust) and requires the attribution in its output; a target that looks like a distribution but declares no probe-able bin, or ships a malformed package.json, is also blocking. The extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/attestation.md and docs/distributions.md.`,
+Checks a distribution package for the required MNSTRY attribution markers. Blocking: the distribution README.md byte check, and a CLI probe that EXECUTES the target's declared bin with --version (spawned with the current Node, cwd set to the target — only run this against distributions you trust) and requires the attribution in its output; a target that looks like a distribution but declares no probe-able bin, or ships a malformed package.json, is also blocking. The extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/reference/attestation.md and docs/guides/distributions.md.`,
     disclosure: `Usage: ${c} disclosure check [--root DIR] [--staged] [--denylist FILE | --structural-only] [--fail-on-binary] [--untrusted]
 
 Scans Git-tracked files, or staged index blobs with --staged, without following symlinks. A private denylist is required by default and must be supplied through ATELIER_DENYLIST_JSON, --denylist, or ignored .atelier-local/disclosure-denylist.json. --structural-only is the explicit no-denylist lane. --untrusted suppresses finding details.`,

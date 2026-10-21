@@ -93,7 +93,7 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
       'SECURITY.md': 'fixture\n',
       'bin/atelier.mjs': 'export {}\n',
       'bin/mnstry-atelier.mjs': 'export {}\n',
-      'docs/local-services.md': '# Local services\n',
+      'docs/reference/local-services.md': '# Local services\n',
       'skills/codex/atelier-local-service/SKILL.md': '# Skill\n',
       'skills/claude/atelier-local-service/SKILL.md': '# Skill\n',
       'skills/codex/atelier-public-boundary/SKILL.md': '# Skill\n',

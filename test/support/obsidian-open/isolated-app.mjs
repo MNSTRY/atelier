@@ -1,6 +1,6 @@
 // A disposable, isolated Obsidian for the opt-in real-app suite of `open`.
 //
-// Isolation has two independent parts, as in experiments/obsidian-publication:
+// Isolation has two independent parts, as in the maintained Obsidian instance fixture:
 // a private HOME (the command-line tool reaches the app through a socket under
 // $HOME on macOS, so nothing here can reach another session's app) and a
 // private Electron profile, passed as --user-data-dir. The profile sits exactly

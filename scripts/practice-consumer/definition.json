@@ -1,9 +1,9 @@
 {
   "format": "atelier.decision-practice/v0",
   "id": "atelier-decision-source-reconsideration",
-  "revision": "three",
+  "revision": "four",
   "purpose": "Prepare a visible, unaccepted reconsideration draft when a root pull request changes a source, or the anchored lines of a source, that a recorded decision of this repository cites.",
-  "applicability": "The recorded decisions in docs/integration-contract-decisions.md and the repository files they link to, whole or by a #L line anchor read as text-lines@1 at the merge base, at exact commits. A person reviews every draft; nothing is applied automatically.",
+  "applicability": "Only the Maintained implementation decisions section delimited by atelier:maintained-implementation-decisions:start/end in docs/reference/architecture.md, and the repository files those decisions link to, whole or by a #L line anchor read as text-lines@1 at the merge base, at exact commits. Missing or malformed section markers refuse measurement. A person reviews every draft; nothing is applied automatically.",
   "rightsBasis": "Public Apache-2.0 repository source.",
   "evidenceRoles": [
     "source",

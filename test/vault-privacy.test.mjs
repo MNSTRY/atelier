@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { assessVaultPrivacy } from '../src/vault/privacy.mjs'
 import { renderVaultHome } from '../src/vault/interface.mjs'
-import { protectionEvidence, deployment } from './vault-privacy-fixture.mjs'
+import { protectionEvidence, deployment } from './support/vault/privacy-fixture.mjs'
 const context = { vault: 'sample-vault', publication: 'example-digest', phase: 'read', revision: 1, deployment, manifest: [{path: 'report.html', sha256: '1'.repeat(64)}], objects: [{key: 'sample-vault/object', sha256: '1'.repeat(64), size: 4}], owner: { issuer: 'https://identity.example', subject: 'synthetic-author' } }
 test('privacy evidence must cover every surface, identity, configuration and fresh publication', () => {
   assert.equal(assessVaultPrivacy(protectionEvidence(context), context).status, 'verified')

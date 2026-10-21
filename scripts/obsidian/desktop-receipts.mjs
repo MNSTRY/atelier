@@ -2,7 +2,7 @@
 // AP-01..AP-05 orchestration against an isolated Obsidian instance, writing
 // one receipt per gate. Developer proof tooling: not shipped.
 //
-// The instance is always the disposable one experiments/obsidian-publication/
+// The instance is always the disposable one scripts/obsidian/lib/instance-fixture.mjs
 // lib/instance.mjs creates (private HOME, private profile, synthetic vault,
 // mock keychain), and every run first asks it `vaults verbose` and refuses
 // unless exactly that synthetic vault is visible. Capability discovery (app
@@ -759,7 +759,7 @@ export async function finalizeOwnedSmallFixture({ custody, plan, keep = false, j
 // with what it observed; a run that cannot verify its cleanup or commit its
 // output keeps its roots and names them.
 async function runOwnedSmallFixture({ plan, args, candidate, operator, host, receiptDir }) {
-  const { createLayout, Instance, OwnedRun } = await import('../../experiments/obsidian-publication/lib/instance.mjs')
+  const { createLayout, Instance, OwnedRun } = await import('./lib/instance-fixture.mjs')
   const custody = new OwnedRun()
   const gate = plan.gates[0]
   const startedAt = isoNow()
@@ -818,7 +818,7 @@ async function runOwnedSmallFixture({ plan, args, candidate, operator, host, rec
 //     the roots and reports a typed refusal. Links inside retained roots are preserved for diagnosis.
 async function runIsolated({ plan, args, candidate, operator, host, receiptDir }) {
   if (plan.app === 'small-fixture') return runOwnedSmallFixture({ plan, args, candidate, operator, host, receiptDir })
-  const { createLayout, Instance } = await import('../../experiments/obsidian-publication/lib/instance.mjs')
+  const { createLayout, Instance } = await import('./lib/instance-fixture.mjs')
   // The CLI socket lives at <layout>/home/.obsidian-cli.sock and a Unix socket
   // path is limited to 104 bytes on macOS, so every instance gets its own short
   // root directly under the system temp directory, never a nested one.

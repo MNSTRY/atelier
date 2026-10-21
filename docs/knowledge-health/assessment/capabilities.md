@@ -1,4 +1,4 @@
-# Capability map and retained tooling needs
+# Capability map and qualification limits
 
 `KNOWLEDGE_HEALTH_CAPABILITIES` from the public assessment entry contains exact
 source commit/tree/blob/file references, baseline availability, verification
@@ -20,20 +20,11 @@ release certification or semantic/human acceptance.
 | Authoring/hosts | `./coauthor`: `createSession`, `transition`, `replaySession`; existing store/presentation/runtime/Obsidian; current knowledge dashboard/session and sidecar | Static only in this supplier. Mounted editor/store owns apply/save; native and participant proof separate. |
 | Normal initialization | Current `atelier init --template knowledge-workspace --target ./workspace` and its shipped template | Source dispatch inspected; public alpha.12 lacks this dispatch/template. Test both from the exact official new archive and published version. The explicit fixture helper is not that test. |
 
-Keep S2–S5 tooling work visible:
-
-- **S2:** qualifiers, contradiction/identity, optional bounded agent cost/value,
-  private perspectives and scoped learning. Reuse native semantic/contribution,
-  evaluation and learning primitives; human source-supported trials remain open.
-- **S3:** declared/adopted/consumed/executed traces, drift, partial refresh,
-  withdrawal/recovery. Join actual observation/runtime/harness evidence. This
-  context defaults all four use stages to unobserved.
-- **S4:** other hosts/media/domains, keyboard/IME/zoom/text scaling, accessible
-  graph alternatives and purposeful scale. Existing source-format,
-  presentation/runtime and budgets are starting points; installed measurements
-  remain host-specific. This proof is Node22/macOS only.
-- **S5:** ownership, documentation, rollback/recovery, maintenance and complete
-  programme closure. A public kit is an input to those journeys, not their proof.
+Semantic support, contradiction/identity judgments and human usefulness require
+source-supported trials. Declared, adopted, consumed and executed use remain
+distinct; this context defaults all four stages to unobserved. Installed-host
+keyboard, input-method, zoom, accessible alternatives, recovery and scale require
+host-specific measurements. The supplier proof here is limited to Node22/macOS.
 
 Preserve source evidence, structure, interpretations, proposals, owner decisions
 and execution as distinct records. Reuse existing canonicals and one editor/store

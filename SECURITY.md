@@ -90,7 +90,7 @@ make a released tarball differ from the reviewed tag.
 
 The package is alpha. Only the latest tagged release receives fixes; there
 are no backports to earlier tags. Published contracts carry a separate and
-stronger promise — `docs/contract-stability.md` and `docs/continuity.md`
+stronger promise — `docs/reference/contract-stability.md` and `docs/reference/continuity.md`
 record it — and that promise is not weakened by a security fix.
 
 ## Received advisories

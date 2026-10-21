@@ -10,8 +10,8 @@ a tenant or project workspace.
 
 ## Protocol
 
-- Use the repository's Atelier readiness protocols: `docs/tenant-readiness.md`,
-  `docs/atelier-runtime.md`, `contracts/atelier-readiness.v1.schema.json`, and
+- Use the repository's Atelier readiness protocols: `docs/guides/tenant-readiness.md`,
+  `docs/reference/atelier-runtime.md`, `contracts/atelier-readiness.v1.schema.json`, and
   `contracts/atelier-claim.v1.schema.json`.
 - Treat local source, Git state, project config, repo access, boundary policy,
   and lockfiles as review authority.

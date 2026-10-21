@@ -1,6 +1,6 @@
 // Attestation signing and verification reference implementation.
 //
-// The normative signing input (docs/attestation.md, "Signing procedure"):
+// The normative signing input (docs/reference/attestation.md, "Signing procedure"):
 // the UTF-8 encoding of the RFC 8785 (JCS) canonicalization of the
 // attestation document with its `signature` member set to null.
 //

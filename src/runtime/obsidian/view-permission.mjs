@@ -168,7 +168,7 @@ export const DEFAULT_ROW_ENDS_AFTER_MS = 60 * 1000
 // at the next that keeps a project. A load that named other files than it started over (the first, or one after a
 // change that names other files) neither counts nor ends that row, so a start and a change, each with one load that
 // has nothing to agree with yet, write none of these, unless the change lands while a load reads the files, names the
-// same files and changes the views or what the workspace is resolved from (docs/obsidian-plugin.md). Any other
+// same files and changes the views or what the workspace is resolved from (docs/reference/obsidian-plugin.md). Any other
 // load that answered in time and kept the project writes nothing unless it ends a row of failures: that is every load
 // of a healthy service. A line holds the event, milliseconds, the outcome, flags and counts; never a path, a view or a
 // message.

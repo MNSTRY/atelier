@@ -75,7 +75,7 @@ import { isUserOwnedSettingsPath, prepareSettings } from './settings.mjs'
 //
 // A view is laid out in vault layout 2: folders mirror the repository, the
 // file name is the note's title and each note names its identity in generated
-// front-matter properties (see "Vault layout" in docs/obsidian-contract.md).
+// front-matter properties (see "Vault layout" in docs/reference/obsidian-contract.md).
 // Layout 1, the earlier release's, is kept for a view whose prior generation
 // is in layout 1 and holds a note with an open edit, and for recovering a
 // layout 1 generation as it was published.

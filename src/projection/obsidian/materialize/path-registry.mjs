@@ -7,7 +7,7 @@ import { refuse } from './byte-lens.mjs'
 
 export { collisionKey }
 
-// Vault paths of layout 2 (see "Vault layout" in docs/obsidian-contract.md):
+// Vault paths of layout 2 (see "Vault layout" in docs/reference/obsidian-contract.md):
 //
 //   <repository folder>/<source directory>/<title>.md           a Markdown note
 //   <repository folder>/<source directory>/<file name>          a wrapped file

@@ -16,7 +16,7 @@ import { createProductionUnheldEvidence, readUnheldEvidence } from '../src/runti
 import { ensureVaultAllocation } from '../src/runtime/obsidian/vault-location.mjs'
 
 // First publication into a vault no Obsidian lists (the publisher's
-// `direct-unheld` path): the rules of docs/obsidian-contract.md, "First
+// `direct-unheld` path): the rules of docs/reference/obsidian-contract.md, "First
 // publication into a vault no Obsidian lists", each against the production
 // publisher on a real file system in temporary folders. The app is a model
 // that answers for another vault; its list is a document handed to the

@@ -80,8 +80,8 @@ for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 
 syncBuiltinESMExports()
 
 // ---------------------------------------------------------------------------
-// 0a. The owned run of the real-app acceptance harness (experiments/
-// obsidian-publication/lib/instance.mjs, OwnedRun): what it may signal, what
+// 0a. The owned run of the real-app acceptance harness
+// (scripts/obsidian/lib/instance-fixture.mjs, OwnedRun): what it may signal, what
 // it may remove and how much output it may keep. Directories here are real
 // temporary ones; the process table and the spawned handles are stand-ins,
 // except in the cases at the end, which use harmless Node children of this
@@ -98,7 +98,7 @@ const CLEANUP_ONLY = process.env.ATELIER_OBSIDIAN_CLEANUP_ONLY === '1'
 if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ONLY skips most of this file and is refused under CI')
 
 {
-  const { Instance, OwnedRun, assertPrivateHome, createLayout, parseProcessTable, readOneProcess, readProcessTable } = await import('../experiments/obsidian-publication/lib/instance.mjs')
+  const { Instance, OwnedRun, assertPrivateHome, createLayout, parseProcessTable, readOneProcess, readProcessTable } = await import('../scripts/obsidian/lib/instance-fixture.mjs')
   const SELF = 4000
   const START = 'Mon Oct 5 00:00:00 2026'
   const LATER = 'Tue Oct 6 00:00:00 2026'
@@ -145,7 +145,7 @@ if (CLEANUP_ONLY && process.env.CI) throw new Error('ATELIER_OBSIDIAN_CLEANUP_ON
     const error = await rejection(f.custody.execute(() => createLayout(undefined, undefined, { custody: f.custody, io: { ...fs, mkdirSync: () => { throw new Error('population failed') } } })))
     assert.equal(error.message, 'population failed')
     const [root] = error.cleanup.removedRoots
-    assert.ok(root.startsWith(path.join(fs.realpathSync(os.tmpdir()), 'atelier-g00-')), 'the root was created under the system temp directory')
+    assert.ok(root.startsWith(path.join(fs.realpathSync(os.tmpdir()), 'atelier-obsidian-fixture-')), 'the root was created under the system temp directory')
     assert.deepEqual([error.cleanup.roots, error.cleanup.retainedRoots, exists(root)], [[root], [], false])
   })
 
@@ -1226,7 +1226,7 @@ try {
     // The holder ends by itself once this file exists or the stand-ins' folder is removed; nothing here signals it.
     const stop = path.join(path.dirname(scripts.run), 'stop')
     t.after(() => { if (fs.existsSync(path.dirname(stop))) fs.writeFileSync(stop, '') })
-    const script = childProcess.spawn(process.execPath, [scripts.run, new URL('../experiments/obsidian-publication/lib/instance.mjs', import.meta.url).href, scripts.parent, scripts.holder, stop], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const script = childProcess.spawn(process.execPath, [scripts.run, new URL('../scripts/obsidian/lib/instance-fixture.mjs', import.meta.url).href, scripts.parent, scripts.holder, stop], { stdio: ['ignore', 'pipe', 'pipe'] })
     let output = ''
     script.stdout.on('data', (chunk) => { output += chunk })
     script.stderr.on('data', (chunk) => { output += chunk })
@@ -2403,7 +2403,7 @@ function fakeInstance(t, { vaults, home, answers = {} } = {}) {
     async cli(...args) {
       calls.push(args)
       const joined = args.join(' ')
-      if (args[0] === 'vaults') return (vaults ?? [`atelierg00synthetic\t${layout.vault}`]).join('\n')
+      if (args[0] === 'vaults') return (vaults ?? [`atelierobsidiansynthetic\t${layout.vault}`]).join('\n')
       for (const [needle, answer] of Object.entries(answers)) if (joined.includes(needle)) return typeof answer === 'function' ? answer(args) : answer
       throw new Error(`fake instance has no answer for ${joined.slice(0, 80)}`)
     },
@@ -2584,7 +2584,7 @@ test('desktop planner: every gate role is automated or an exact manual step; the
 test('desktop runner refuses anything but the isolated instance: two vaults, a foreign vault, a shared HOME', async (t) => {
   const refusal = async (instance, options) => { try { await assertIsolatedInstance(instance, options) } catch (error) { assert.ok(error instanceof IsolationRefusal, error.stack); return error.code } return null }
   const two = fakeInstance(t)
-  two.cli = async () => `atelierg00synthetic\t${two.layout.vault}\nreal-vault\t${path.join(os.homedir(), 'Documents', 'Notes')}`
+  two.cli = async () => `atelierobsidiansynthetic\t${two.layout.vault}\nreal-vault\t${path.join(os.homedir(), 'Documents', 'Notes')}`
   assert.equal(await refusal(two), 'unexpected-vaults-visible')
   const foreign = fakeInstance(t, { vaults: ['other\t/somewhere/else/vault'] })
   assert.equal(await refusal(foreign), 'unexpected-vaults-visible')
@@ -2596,7 +2596,7 @@ test('desktop runner refuses anything but the isolated instance: two vaults, a f
   assert.equal(await refusal(elsewhere), 'instance-home-not-private')
   assert.equal(await refusal({}), 'instance-not-isolated')
   const good = fakeInstance(t)
-  assert.deepEqual(await assertIsolatedInstance(good), { vaultRoot: good.layout.vault, vaultsOutput: `atelierg00synthetic\t${good.layout.vault}` })
+  assert.deepEqual(await assertIsolatedInstance(good), { vaultRoot: good.layout.vault, vaultsOutput: `atelierobsidiansynthetic\t${good.layout.vault}` })
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 
@@ -3479,7 +3479,7 @@ test('service world seams: the profile is bound to the engine vault, repositorie
   const dir = tempDir(t, 'seams')
   const layout = { root: dir, home: path.join(dir, 'home'), profile: path.join(dir, 'profile'), vault: path.join(dir, 'vault') }
   fs.mkdirSync(layout.profile, { recursive: true })
-  fs.writeFileSync(path.join(layout.profile, 'obsidian.json'), JSON.stringify({ vaults: { atelierg00synthetic: { path: layout.vault, ts: 1, open: true } }, cli: true, updateDisabled: true }))
+  fs.writeFileSync(path.join(layout.profile, 'obsidian.json'), JSON.stringify({ vaults: { atelierobsidiansynthetic: { path: layout.vault, ts: 1, open: true } }, cli: true, updateDisabled: true }))
   const bound = bindLayoutToVault(layout, path.join(dir, 'engine-vault'))
   const profile = JSON.parse(fs.readFileSync(path.join(layout.profile, 'obsidian.json'), 'utf8'))
   assert.deepEqual({ vault: bound.vault, registered: Object.values(profile.vaults).map((item) => item.path), cli: profile.cli, exists: fs.existsSync(bound.vault) }, { vault: path.join(dir, 'engine-vault'), registered: [path.join(dir, 'engine-vault')], cli: true, exists: true })

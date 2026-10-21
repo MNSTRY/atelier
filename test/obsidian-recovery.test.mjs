@@ -2325,7 +2325,7 @@ else if (payload.op === 'collect') {
 
 test('G04 real isolated Obsidian: production publisher through the CLI transport (I00, I03, I04, I05, I06, I06a, I12)',
   { skip: process.env.ATELIER_OBSIDIAN_G04 !== '1' && 'set ATELIER_OBSIDIAN_G04=1 on a desktop host with Obsidian installed; opens an application window', timeout: 1800000 }, async (t) => {
-    const { createLayout, Instance } = await import('../experiments/obsidian-publication/lib/instance.mjs')
+    const { createLayout, Instance } = await import('../scripts/obsidian/lib/instance-fixture.mjs')
     const appDir = process.env.ATELIER_OBSIDIAN_APP_DIR || '/Applications/Obsidian.app/Contents/MacOS'
     const races = Number(process.env.ATELIER_OBSIDIAN_G04_RACES || '10')
     const layout = createLayout()
