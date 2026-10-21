@@ -1,15 +1,24 @@
-# Practical Judgment and practice adoption
+# Phronesis — practical judgment
 
-Practical Judgment supports deciding what matters and what is fitting in a
+Phronesis supports deciding what matters and what is fitting in a
 particular situation. It also supports cultivation: contrasting cases, warranted
 exceptions, questions, distinct voices and reflection on consequences. A useful
 deliberation can remain open or produce an action without producing a rule.
+
+Phronesis is a responsibility; the [Knowledge Graph](knowledge-graph.md) is a
+shared representation. Knowledge Stewardship remains the broader responsibility
+for knowledge inclusion and applicability. Phronesis draws on the shared graph
+and contributes cases, decisions and learning through existing Knowledge records,
+review and activation. It introduces no new store or canonical authority and
+does not supply automatic wisdom or a universal score.
 
 `@mnstry/atelier/judgment` validates portable cases and native architecture
 decision snapshots. `inspectPracticalCase` preserves purpose, values, evidence,
 alternatives, dissent, cultivation exercises and reconsideration conditions.
 It does not score wisdom. The invented workshop fixtures demonstrate an open
 deliberation and a decision whose implementation is still planned.
+The API and the `atelier-practical-judgment` skill identity retain their existing
+names and compatibility obligations.
 
 ## Architecture decisions
 

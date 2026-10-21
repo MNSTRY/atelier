@@ -37,7 +37,7 @@ projection can waive a Build blocker.
 | Dependencies/handoffs | Reuse Harness verification; add cross-repository dependency/cycle views | Trusted snapshot acquisition and receiving receipt verification |
 | Directives/dispositions | Add scoped versioned observations and distinct stages | Sending, receiving, wakeups and authenticated acknowledgements |
 | Delivery/gates | Reuse Build candidate, attempt, decision and gate records | Commands, CI, review and deployment |
-| ADRs | Practical Judgment native-byte adapter and decision record | Repository numbering, authority and acceptance |
+| ADRs | [Phronesis — practical judgment](phronesis.md) native-byte adapter and decision record | Repository numbering, authority and acceptance |
 | Practice/context | Learning lifecycle and scoped instruction adoption | Host context admission and observed behavior |
 | Ingestion/knowledge | One Intake source lineage, bounded ingestion, Knowledge review and context | Source rights, domain meaning and external processing |
 | Capability adoption | Capability releases, independent repository plans, Skill Steward and feedback bridge | Publisher trust, host loading and native use |

@@ -36,9 +36,9 @@ export function catalogDocument() {
     {
       "id": "practical-judgment",
       "kind": "responsibility",
-      "label": "Practical Judgment",
+      "label": "Phronesis",
       "aliases": [
-        "Phronesis"
+        "Practical Judgment"
       ],
       "purpose": "Discern fitting action, cultivate practice and learn from consequences.",
       "implementation": [

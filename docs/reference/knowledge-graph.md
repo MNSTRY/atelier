@@ -1,9 +1,14 @@
 # MNSTRY Atelier Knowledge Graph
 
-The Atelier knowledge graph is a local, Git-backed operating model for project
-source material. It is not a taxonomy and it is not runtime retrieval. It is a
-durable model of source nodes, evidence, relationships, diagnostics, and
-projection readiness.
+The Atelier Knowledge Graph is the shared, local, Git-backed representation of
+project source material: source nodes, evidence, relationships, diagnostics and
+projection readiness. It is not a taxonomy or runtime retrieval.
+
+Knowledge Stewardship is the broader responsibility governing knowledge inclusion
+and applicability. [Phronesis — practical judgment](phronesis.md) draws on this
+graph and contributes through the existing Knowledge review and activation
+routes. It creates no separate graph, store or canonical authority. Structural
+graph checks do not establish semantic acceptance, wisdom or a universal score.
 
 For setting up useful domain concepts and testing whether the graph helps answer
 work questions, follow [knowledge setup](../start/knowledge-setup.md). It builds on this

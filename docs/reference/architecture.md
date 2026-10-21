@@ -7,7 +7,7 @@ contracts, governance, graph and local runtime support eight responsibilities.
 | --- | --- | --- |
 | Inquiry | Investigate uncertainty and assess evidence | Discovery and Research Harnesses; `inquiry` |
 | Knowledge Stewardship | Curate, govern, connect and operationalize knowledge | `harness knowledge`, `ingest`, intake, graph and context; [evidence navigation](evidence-navigation.md), composed by Discovery and Research |
-| Practical Judgment | Discern fitting action, cultivate practice and learn from consequences | `learn`, practical cases, decision adapters, `practice` |
+| [Phronesis — practical judgment](phronesis.md) | Discern fitting action, cultivate practice and learn from consequences | `learn`, practical cases, decision adapters, `practice` |
 | Creation and Delivery | Design, implement, verify and deliver changes | `harness build` |
 | Capability Stewardship | Qualify, package, adopt, exercise and evolve reusable abilities | `capability`, Skill Steward and `skills` |
 | Reflection | Form revisable assessments of the person, work, interaction and system | Witness role; qualified assessments and reflective acts |
@@ -19,14 +19,21 @@ into work. A **role** describes participation. A **capability** specifies a
 supported outcome; a **resource** realizes it. A **method** is an optional way of
 working. A **record** retains domain meaning. A **host** executes through its
 actual bindings. A role does not acquire a new store or permission merely by
-being named. Coaching is one reflective method. Phronesis remains the foundation
-of Practical Judgment, including purposes, particulars, taste and exceptions.
+being named. Coaching is one reflective method. Phronesis attends to purposes,
+particulars, taste and warranted exceptions.
 
 Skill Steward is a specialized role within Capability Stewardship. Its existing
 catalog and bindings remain authoritative for managed skills. Knowledge
 Stewardship owns knowledge inclusion and applicability. Neither owns another
 repository's adoption decision. Fabric can implement Coordination; the local
 contracts do not require a Fabric service or account.
+
+Knowledge Stewardship remains the broader responsibility. The Knowledge Graph
+is the shared representation of sources, evidence and relationships used across
+responsibilities. Phronesis draws on it and contributes cases, decisions and
+learning through the existing Knowledge writer, review and activation routes.
+This introduces no new store or canonical authority and does not automate wisdom
+or assign it a universal score.
 
 Creation and Delivery also owns the kit's user-facing failure contract: one
 diagnostic shape, a registry of stable codes, and one exit-code convention for
@@ -85,7 +92,7 @@ operations rather than create competing writers.
 Native ADR identity and approval remain with the issuing repository. Importing
 a decision does not create a new local approval.
 
-See [Practical Judgment](practical-judgment.md) and the
+See [Phronesis](phronesis.md) and the
 [research starter](../guides/research-starter.md).
 
 See [Trackables](trackables.md), [Interaction and Reflection](interaction-and-reflection.md)

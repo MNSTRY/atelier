@@ -34,9 +34,13 @@ many interfaces. Methodology authoring is one application of the system, not
 its definition or ceiling.
 
 See the [responsibility architecture](docs/reference/architecture.md) for Inquiry, Knowledge
-Stewardship, Practical Judgment, Creation and Delivery, Capability Stewardship,
+Stewardship, [Phronesis — practical judgment](docs/reference/phronesis.md), Creation and Delivery, Capability Stewardship,
 Reflection, Interaction and Coordination. Start a provider-neutral research
 workflow with the [research starter](docs/guides/research-starter.md).
+Knowledge Stewardship is the broader responsibility; the Knowledge Graph is a
+shared representation used across responsibilities. Phronesis draws on and
+contributes to that graph through existing owners. It supplies no automatic
+wisdom or universal score.
 Use [portable template profiles](docs/reference/template-profile.md) to bind semantic and
 surface roles to canonical sources, with optional advisory decisions and
 separate host and release validation.

@@ -60,7 +60,7 @@ The [responsibility architecture](reference/architecture.md) and versioned contr
 - [Optional ingestion suppliers](reference/optional-ingestion.md)
 - [Portability: what a record holds and what the checks prove](reference/portability.md)
 - [Portable presentation v1](reference/portable-presentation.md)
-- [Practical Judgment and practice adoption](reference/practical-judgment.md)
+- [Phronesis — practical judgment](reference/phronesis.md)
 - [Presentation and public-page consumers](reference/presentation-consumer-boundaries.md)
 - [Project option and command inventory](reference/project-command-inventory.md)
 - [Project location and repository overrides](reference/project-options.md)
