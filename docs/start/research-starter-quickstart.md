@@ -47,7 +47,7 @@ review a concrete adoption plan before applying its exact digest.
 
 Use [ingestion](../guides/ingestion.md) for bounded local captures and
 [Knowledge and Build](../guides/learning-harnesses.md) for the current governed
-workflow. Practical lessons use [Practical Judgment](../reference/practical-judgment.md).
+workflow. Practical lessons use [Phronesis — practical judgment](../reference/phronesis.md).
 [Trackables](../reference/trackables.md), [Interaction and Reflection](../reference/interaction-and-reflection.md)
 and [Coordination](../reference/coordination.md) describe supported reference profiles and
 what an actual host must implement.

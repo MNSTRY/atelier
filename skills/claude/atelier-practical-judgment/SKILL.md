@@ -1,9 +1,9 @@
 ---
 name: atelier-practical-judgment
-description: Support situated deliberation and cultivation, then carry accepted practice into scoped instructions, governed skills or the owning implementation when the user wants future work to change.
+description: Support Phronesis — practical judgment through situated deliberation and cultivation, then carry accepted practice into scoped instructions, governed skills or the owning implementation when the user wants future work to change.
 ---
 
-# Practical Judgment
+# Phronesis — practical judgment
 
 Clarify the purpose, particulars, affected people and consequential choice.
 Preserve the person's contribution, competing interpretations, tacit distinctions,
@@ -15,6 +15,11 @@ practice. Reuse them. Inquiry investigates uncertainty; Knowledge Stewardship
 curates evidence and applicability; Skill Steward governs reusable skill bindings.
 Companion remains the host's conversational role. Witness reflection or coaching
 is optional and must not create an implicit personal monitoring program.
+
+Phronesis draws on and contributes to the shared Knowledge Graph through existing
+Knowledge owners. Knowledge Stewardship remains the broader responsibility; the
+graph is a representation used across responsibilities. Reuse existing records,
+review and activation routes without creating a new store or canonical authority.
 
 ## Cases, decisions and learning
 

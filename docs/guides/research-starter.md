@@ -108,7 +108,7 @@ demonstrate framing, research return, uncertainty, review and graph proposals.
 local ingestion, persistent Knowledge records, retrieval and graph projection.
 The tests are synthetic conformance evidence, not real research validation.
 
-When useful practice emerges, use [Practical Judgment](../reference/practical-judgment.md):
+When useful practice emerges, use [Phronesis — practical judgment](../reference/phronesis.md):
 retain its reason, cases and exceptions, then adopt it into the appropriate
 instruction, capability or implementation through that destination's owner.
 Ordinary research does not require a new skill, ADR or personal tracking.

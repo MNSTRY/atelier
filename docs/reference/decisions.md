@@ -184,7 +184,7 @@ timeouts, budgets and revocation. No repository's adoption enables another's.
 Harnesses consume validated advice through their existing owners. Ingestion may
 use a qualified prioritization while retaining every selected source and coverage
 gap. Research preserves citations and contradictory evidence. Knowledge admission
-and [practical judgment](practical-judgment.md) retain their review and adoption
+and [Phronesis — practical judgment](phronesis.md) retain their review and adoption
 steps; a provider result cannot write graph facts, accept a lesson, or install
 instructions. The [learning lifecycle](../guides/learning.md) can retain permitted outcome
 evidence for reconsideration without creating a second knowledge store.

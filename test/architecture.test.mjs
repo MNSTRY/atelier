@@ -16,6 +16,19 @@ test('catalog preserves responsibility, role, workflow and method distinctions t
   assert.deepEqual(actual, catalog)
   for (const e of catalog.entries) for (const file of e.implementation) assert.ok(fs.existsSync(new URL(`../${file}`, import.meta.url)), file)
 })
+test('Phronesis is the responsibility label while existing judgment names keep their identity', () => {
+  const entry = architectureEntry('Phronesis')
+  assert.equal(entry.label, 'Phronesis')
+  assert.equal(entry.id, 'practical-judgment')
+  assert.equal(entry.kind, 'responsibility')
+  for (const name of ['Practical Judgment', 'practical-judgment', 'phronesis']) {
+    assert.deepEqual(architectureEntry(name), entry)
+    const cli = JSON.parse(execFileSync(process.execPath, ['bin/atelier.mjs', 'architecture', 'entry', name]))
+    assert.deepEqual(cli, entry)
+  }
+  assert.equal(responsibilityCatalog().entries.filter(e => e.id === entry.id).length, 1)
+  assert.equal(architectureEntry('Knowledge Stewardship').id, 'knowledge-stewardship')
+})
 test('taxonomy rejects cross-kind relationships and ambiguous names', () => {
   const catalog = responsibilityCatalog()
   catalog.relations.push({ from: 'companion', type: 'realizes', to: 'reflection' })
