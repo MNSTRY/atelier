@@ -15,7 +15,7 @@ const ATTRIBUTION_BYTES = 'powered by MNSTRY Atelier'
 const ATTRIBUTION_EXT_KEY = 'mnstry.atelier/attribution'
 const PACK_MANIFEST_NAME = 'atelier.pack.json'
 const PREFIX = '[atelier-distribution:check]'
-const POLICY_POINTER = 'see TRADEMARKS.md ("Required attribution") and docs/attestation.md'
+const POLICY_POINTER = 'see TRADEMARKS.md ("Required attribution") and docs/reference/attestation.md'
 
 const log = (message) => console.log(`${PREFIX} ${message}`)
 const logError = (message) => console.error(`${PREFIX} ${message}`)

@@ -15,7 +15,7 @@ Every distribution package must carry the exact line below in its README:
 powered by MNSTRY Atelier
 
 `atelier distribution check` blocks on this line. See `TRADEMARKS.md`
-("Required attribution") and `docs/attestation.md` in the Atelier package for
+("Required attribution") and `docs/reference/attestation.md` in the Atelier package for
 the policy and signing details.
 
 ## Projection branding
@@ -81,6 +81,6 @@ atelier lock write --project ./atelier.project.json
 
 ## Learn more
 
-- `docs/distributions.md` in the Atelier package — the full distribution guide.
+- `docs/guides/distributions.md` in the Atelier package — the full distribution guide.
 - `examples/loomworks-studio/` in the Atelier repository — a complete
   reference distribution with a branded wrapper binary and extension pack.

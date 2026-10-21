@@ -404,7 +404,7 @@ export function cutName(value, maxBytes) {
 
 // One file or folder name made safe for macOS, Linux, Windows and Obsidian
 // links, or '' when nothing is left of it. The author's casing and words are
-// kept; see "File names" in docs/obsidian-contract.md for each rule.
+// kept; see "File names" in docs/reference/obsidian-contract.md for each rule.
 export function vaultName(value, maxBytes = NAME_BYTES) {
   const cleaned = trimName(String(value ?? '')
     .toWellFormed()

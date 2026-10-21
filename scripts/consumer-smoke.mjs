@@ -23,7 +23,7 @@ import {
   classifyNpmFailure,
   npmTreeLines,
   overrideFindings,
-} from './consumer-closure-diagnostics.mjs'
+} from '../src/upgrade/closure-diagnostics.mjs'
 import { AtelierDiagnosticError } from '../src/project/config.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))

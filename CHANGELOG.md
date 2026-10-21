@@ -12,6 +12,10 @@ The alpha.15 source version below is an unpublished candidate reservation. Shipp
 
 ## 0.2.0-alpha.15
 
+- Organize current documentation into start, guides, reference and maintainer folders with one index. Remove superseded planning/review and event walkthrough files. Remove the retired Obsidian publication experiment, retaining its active isolated-app test fixture in the maintained harness with read-only inspection and refusal coverage. Required packed-document and inbound references follow the new paths.
+
+- Repository cleanup groups vault test helpers under `test/support/vault/` and imports consumer-closure diagnostics directly from their existing source module. CLI help describes `mnstry-atelier` as a supported npm alias. The repository-local reconsideration tool now measures only the explicitly marked Maintained implementation decisions section of the architecture reference; definition revision four retains predicate v3 and all original measurement records.
+
 - Add portable typed extension contracts, authenticated host clients, signed server admission and native Postgres transaction/receipt helpers under the existing package.
 - Add `atelier extension init|validate|seal` for a customer-owned Postgres TypeScript project. Generation and sealing do not deploy or authorize an installation. Provider and supported-host qualification carry separate evidence.
 

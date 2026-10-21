@@ -1,0 +1,300 @@
+# Install
+
+This is the install guide for Atelier workspaces. The workspace pattern it
+installs — Repo Boundary Guard V1 — keeps private domain source in
+user-owned Git repositories and keeps shared project work in shared project
+repositories.
+
+## Posture
+
+- No telemetry.
+- No cloud service is required by Atelier.
+- No MNSTRY runtime mutation.
+- No direct browser writes or apply endpoints.
+- No GitHub provisioning from this package.
+
+Git repository access is the hard read boundary for source files. Local
+`kg.audience` labels guide projection and review, but they do not hide files
+from anyone who can read the repository.
+
+For adapters whose source repositories live elsewhere, see
+[project options](../reference/project-options.md) for shared CLI overrides, precedence and
+resolution diagnostics. Moving a repository does not change its read authority.
+
+Two command forms ship, and each has a place. Inside an installed
+workspace, use `atelier` — it resolves from `node_modules/.bin`, so npm
+scripts and workspace shells get the real binary. From outside a
+workspace, always use the branded `npx mnstry-atelier` form: the unscoped
+npm name `atelier` belongs to an unrelated third-party package, so a bare
+`npx atelier` outside a workspace runs someone else's code.
+
+## Install shape
+
+The registry is the distribution channel of record, as `docs/reference/continuity.md`
+commits:
+
+```bash
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
+```
+
+Installing from the matching Git tag resolves to the same reviewed commit:
+
+```bash
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.14"
+```
+
+Or over SSH:
+
+```bash
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.14"
+```
+
+Keep the `@mnstry/` scope — see the command-form note above for why the
+unscoped name is dangerous.
+
+Do not install from `v0.2.0-alpha.0`. That tag is the **contract epoch
+marker** — `contracts/compat-baseline.json` pins the compatibility gate to it,
+so it stays where it is permanently. It predates the current tree and carries
+`publishConfig.access: "restricted"`.
+
+The workspace `atelier.lock.json` should record the resolved version or Git
+SHA from the install. Treat the tag or version as the friendly handle and the
+SHA as the review authority.
+
+### Adapter runners must bind package identity
+
+An early downstream adapter exposed a subtle failure mode worth making a
+general rule: a wrapper that scans arbitrary sibling checkouts and accepts the
+first matching binary can validate against an archived tree while appearing
+current. Adapter and distribution runners must therefore:
+
+1. declare one exact `@mnstry/atelier` version in their package manifest;
+2. prefer the installed `node_modules/@mnstry/atelier` package over incidental
+   sibling checkouts;
+3. accept an explicit local checkout only when its package name and version
+   match the declared dependency;
+4. run `atelier --version` and `atelier lock check` as part of adapter proof;
+5. fail closed when the declared version, resolved package, and lock disagree.
+
+This rule binds which Atelier implementation ran. It does not make generated
+output authoritative or grant runtime mutation.
+
+Use one private domain repository per user:
+
+```text
+github.com/<org>/<github-login>-private-domain
+```
+
+Use shared project repositories for project work that the team can read:
+
+```text
+github.com/<org>/project-<project-slug>
+github.com/<org>/project-shared-library
+```
+
+The repository names above are examples. Create and permission repositories in
+GitHub or your internal Git host before pointing Atelier at them.
+
+## Tenant workspace example
+
+Default placeholder shape:
+
+- Actor id: `tenant-user`
+- GitHub login placeholder: `TENANT_GITHUB_LOGIN_PLACEHOLDER`
+- Private domain repo: `github.com/<org>/tenant-private-domain`
+- Shared project repo: `github.com/<org>/project-alpha`
+
+`TENANT_GITHUB_LOGIN_PLACEHOLDER` is not a real account. Set real identity
+values only inside the copied private workspace or through initializer flags.
+The example repositories are placeholders, not repositories created by this
+package release.
+
+## Local setup
+
+Copy one of the starter templates:
+
+- `templates/private-domain-workspace/` for one user's private domain repo.
+- `templates/shared-project-workspace/` for shared project repositories.
+
+Prefer the CLI initializer when possible:
+
+```bash
+atelier init --template private-domain --target ./tenant-private-domain --actor tenant-user
+atelier init --template shared-project --target ./project-alpha --actor tenant-user
+```
+
+`--actor` rewrites the copied boundary policy actor entry and binds it to the
+local Git email when available. Use `--github-login` or `--git-email` to set
+those values explicitly during onboarding. Initialization does not infer a
+GitHub login from the environment or actor slug; without `--github-login` it
+retains an actor-specific placeholder. At check time, explicit selectors are validated even for shared-only work.
+Unknown `--actor`/`MNSTRY_ATELIER_ACTOR` values or conflicting explicit selectors
+are always errors. Boundary ownership is scoped to configured repository names;
+these names do not authenticate a checkout's identity. Duplicate configured names
+are refused case-insensitively.
+
+Derived attribution is needed only when the project operates a private-domain
+repository with a declared owner. Shared-only checks skip platform, Git-email and
+`gh` lookup entirely. When ownership requires attribution, precedence is:
+
+| Input | Result |
+| --- | --- |
+| `--actor` or `MNSTRY_ATELIER_ACTOR` | Must name one declared actor; wins over derived inputs. |
+| `GITHUB_ACTOR` | Must uniquely match a declared `githubLogin`, case-insensitively. Unmapped/ambiguous values do not fall through. Actor keys and login placeholders are not login mappings. |
+| Configured Git email | Used only without either input above; must map to one actor. Commit history is never used. |
+| Optional `gh api user` | Used only when the inputs above are absent or configured email has no match; must uniquely match a declared login. Sync disables this lookup. |
+
+Unresolved derived attribution and ownership mismatches are errors in strict
+mode and warnings in ordinary `legacy-warning` mode. Sync forces ownership errors
+in both modes. Reports retain the resolution reason and affected repository.
+`allowHistoryActorResolution` is a deprecated, accepted no-op: setting it to true
+never enables history-based attribution. These are attribution hints, not
+authenticated authorization. In particular `GITHUB_ACTOR` describes the supplied
+platform value, not an authenticated human operating a phone or a workflow rerun.
+Shared-host deployment must establish its own trusted identity boundary.
+
+`init` refuses existing scaffold files or an existing project/lock; use `adopt`
+for existing content and `upgrade` for managed changes. Adoption validates the
+proposed or retained project and its selected policy before writing any scaffold
+or local state, preserves existing locks, and
+refuses drift rather than reporting success. Choose and install the intended
+package before adoption. Preview configs resolve `@mnstry/atelier/cli` from the
+workspace through parent `node_modules` directories using Node, without registry
+fallback. This supports the documented subdirectory target and hoisted install.
+Generate `graph` and `project` output before starting the preview. Existing launch
+configs are not rewritten by these template changes. Append server arguments
+following a `--` separator after the configured Node arguments. The host process
+lifecycle still needs qualification before relying on preview restarts.
+A repository that tracks `.html`, `.pdf` or `.docx` files needs a sidecar for
+each before its first graph; see
+[documents in an adopted repository](#documents-in-an-adopted-repository).
+
+Upgrade planning and application use the same optional `gh api user` fallback
+as ordinary boundary checks. Supply a valid explicit selector or mapped identity
+to avoid this lookup; Sync disables it.
+
+The generated manifest's `graphPath` is relative to its output directory. Readers
+of older manifests should continue accepting absolute paths; resolve relative
+values against the directory containing `atelier.manifest.json`.
+
+Then update:
+
+- `atelier.project.json` repo paths.
+- `repo-access.v1.json` read boundaries.
+- `atelier.lock.json`: inspect `atelier lock check`; use the reviewed upgrade path for a changed package or policy rather than silently rewriting the baseline.
+- README placeholders for project names and Git remotes.
+
+Keep project configuration tracked and local overlay state ignored. Track
+`atelier.project.json`, `repo-access.v1.json`, `boundary-policy.v1.json`,
+`atelier.lock.json`, and source documents. Do not track `atelier.local.json`,
+`atelier.workspace.local.json`, `.atelier-local/`, proposals/current/presence/
+nonce/grants/audit/session/support state, prompts, transcripts, support
+bundles, or generated projections.
+
+Run local-only checks from the copied workspace:
+
+```bash
+atelier graph --project ./atelier.project.json
+atelier project --project ./atelier.project.json
+atelier readiness --project ./atelier.project.json
+atelier readiness journey --project ./atelier.project.json
+atelier readiness run mnstry.readiness:identity-map --project ./atelier.project.json
+atelier readiness packet --project ./atelier.project.json
+atelier readiness export --dry-run --project ./atelier.project.json
+```
+
+These commands read local files and write generated local outputs only.
+
+### Documents in an adopted repository
+
+The knowledge graph reads every `.md`, `.html`, `.pdf` and `.docx` file that
+Git does not ignore. Markdown carries its own metadata. Each of the other
+three needs an adjacent `<file>.kg.json` sidecar, and `atelier graph` fails
+until every one has one. A vault with a PDF attachment, a static website or a
+folder of documents therefore fails its first graph after `adopt`.
+
+`atelier enroll documents` writes the missing sidecars:
+
+```bash
+atelier enroll documents --dry-run   # list what would be written
+atelier enroll documents             # write them
+atelier graph
+```
+
+Each sidecar is the smallest classification that lets the graph pass: the
+document's title (an HTML page's `atelier:title` or `<title>`, otherwise its
+file name), an empty summary and tag list, no relations, the domain,
+lifecycle and status the graph already infers from the path, the id
+`<repo>:asset:<path>`, and the audience `private`. Two paths that fold to the
+same id, such as `About Us.html` and `about-us.html`, each get a short digest
+of their exact path. Enrollment never changes a sidecar that exists, including
+one Git ignores or a link with the sidecar's name, and never changes a
+source. It reads only what the graph reads (for HTML, the page's title), so
+it honors the scope below and Git's ignore rules.
+
+`--audience` chooses another audience. The repository's boundary policy must
+allow it: a shared repository forbids `private`, so it needs, for example,
+`--audience team`. A policy in `legacy-warning` mode only warns. Review the
+sidecars, then commit them with the sources.
+
+`atelier adopt --enroll-documents [--audience AUDIENCE]` adopts and enrolls
+in one step. The audience is checked against the policy before adoption writes
+anything.
+
+### Scoping what the graph reads
+
+Decision (2026-09-25): a project-level scope for tracked paths belongs in
+`atelier.project.json`, and it already has a place there: `setup.include`
+and `setup.exclude`, which `adopt --include` and `adopt --exclude` record.
+
+- Git's ignore rules cannot leave out a tracked file, and should not be asked
+  to: ignoring a committed build folder would hide it from Git as well.
+- The scope must be tracked. The graph is committed, so it has to come out the
+  same on every machine; that is why Git-ignored paths are skipped. A scope in
+  `atelier.local.json` or `.atelier-local/` would make it differ per machine.
+- The v1 project config contract already declares both fields, one path each.
+  Adoption wrote them and the `monorepo` profile requires `--include`, but
+  until this release nothing read them. Giving them their meaning does not
+  widen the contract. A new field, or a list, would widen a closed object,
+  which [contract stability](../reference/contract-stability.md) makes a new major version.
+
+Each value is a path pattern relative to the folder that holds
+`atelier.project.json`, in the dialect the boundary policy's `forbiddenPaths`
+uses: `*` stays within one folder name, `**` crosses folders, case does not
+matter, and a pattern without a slash matches a name at any depth (`_site`
+leaves out every folder named `_site`). A path is outside the graph when it
+or a folder above it matches `exclude`, or, when `include` is set, when
+neither it nor a folder above it matches `include`. `exclude` wins. A sidecar
+follows its source. A path outside the graph is treated exactly like a
+Git-ignored one: no node, no sidecar demand, no orphan-sidecar error, and it
+cannot be a link target or an embedded asset.
+
+```json
+{ "setup": { "profile": "single-repo", "exclude": "_site" } }
+```
+
+Use `exclude` for tracked material that is not a source, such as a built
+site. Use `atelier enroll documents` for documents that are sources. Each
+field holds one pattern in v1; if one is not enough, open an issue, since a
+list is a contract change. A project that already sets either field now gets
+a graph over that scope: run `atelier graph` and commit the result.
+
+## Upgrade path
+
+The starter commands create `atelier.lock.json` inside the copied workspace so
+the installed Atelier package source, version, contracts, and migration state
+are reviewable. Refresh it from inside the copied workspace after choosing a
+registry or Git tag install. Local tarballs remain release-audit and
+smoke-test tools; they are not the default install path.
+
+See `docs/guides/tenant-readiness.md` for the readiness review format and
+`docs/guides/upgrade.md` for the full upgrade flow and boundary review checklist.
+
+## External source adapters and local review
+
+Use `atelier init --template external-project --target NEW_DIRECTORY` for the
+invented adapter/source starter. See [local review](../guides/local-review.md) for the
+complete installed workflow, source ownership, asserted identity and save/resume.
+`atelier lock provenance` distinguishes declared install origin, observed package
+bytes and verified clean-checkout binding. It never substitutes the consumer
+repository's HEAD for the installed package.

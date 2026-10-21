@@ -93,7 +93,7 @@ export function bindLayoutToVault(layout, vaultRoot) {
   fs.mkdirSync(vaultRoot, { recursive: true })
   const profileFile = path.join(layout.profile, 'obsidian.json')
   const profile = JSON.parse(fs.readFileSync(profileFile, 'utf8'))
-  profile.vaults = { atelierg00synthetic: { path: vaultRoot, ts: Date.now(), open: true } }
+  profile.vaults = { atelierobsidiansynthetic: { path: vaultRoot, ts: Date.now(), open: true } }
   fs.writeFileSync(profileFile, JSON.stringify(profile))
   return { ...layout, vault: vaultRoot }
 }

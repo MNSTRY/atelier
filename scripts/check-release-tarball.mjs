@@ -54,6 +54,7 @@ const allowedFiles = [
   /^templates\/knowledge-workspace\/\.gitattributes$/,
   // Atelier's own Obsidian plugin, copied byte for byte into the vaults it manages.
   /^plugins\/obsidian\/(?:manifest\.json|main\.js|styles\.css)$/,
+  /^docs\/README\.md$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
   /^announcements\/(keys\/)?[A-Za-z0-9.-]+\.json$/,
 ]
@@ -192,7 +193,8 @@ for (const finding of checkForbiddenEgress({ root: auditRoot, files: paths, allo
 }
 
 for (const requiredPortableFile of [
-  'docs/local-services.md',
+  'docs/README.md',
+  'docs/reference/local-services.md',
   'skills/codex/atelier-local-service/SKILL.md',
   'skills/claude/atelier-local-service/SKILL.md',
   'skills/codex/atelier-public-boundary/SKILL.md',
@@ -214,8 +216,8 @@ for (const [subpath, target] of Object.entries(packedPackageJson.exports ?? {}))
 }
 
 // The Obsidian projection ships as runtime, contracts and documents. Its
-// proof tooling (scripts/obsidian, the desktop harness and its receipts) and
-// the experiments never ship; see docs/release-engineering.md.
+// proof tooling (scripts/obsidian, the desktop harness and its receipts)
+// never ships; see docs/maintainers/release-engineering.md.
 const OBSIDIAN_SCHEMA_NAME = /^atelier-obsidian-[a-z0-9-]+\.v\d+\.schema\.json$/
 const obsidianSchemas = existsSync(join(packageRoot, 'contracts'))
   ? readdirSync(join(packageRoot, 'contracts')).filter((name) => OBSIDIAN_SCHEMA_NAME.test(name)).map((name) => `contracts/${name}`)
@@ -227,8 +229,8 @@ if (obsidianSchemas.length === 0) {
   failures += 1
 }
 for (const requiredObsidianFile of [
-  'docs/obsidian.md',
-  'docs/obsidian-contract.md',
+  'docs/guides/obsidian.md',
+  'docs/reference/obsidian-contract.md',
   'src/commands/obsidian.mjs',
   'src/runtime/obsidian/index.mjs',
   'src/runtime/obsidian/service-main.mjs',
@@ -244,7 +246,7 @@ for (const requiredObsidianFile of [
   'src/projection/obsidian/selection-ui/index.mjs',
   'src/projection/obsidian/plugin-bridge/index.mjs',
   'src/runtime/obsidian/plugin-channel.mjs',
-  'docs/obsidian-plugin.md',
+  'docs/reference/obsidian-plugin.md',
   // The plugin every managed vault receives: without these files a published vault would enable a plugin it lacks.
   'plugins/obsidian/manifest.json',
   'plugins/obsidian/main.js',

@@ -10,7 +10,7 @@ skills. Client and tenant repositories are separate trust domains.
 
 ## Responsibility and runtime architecture
 
-Use `docs/architecture.md` and the validated responsibility catalog to distinguish
+Use `docs/reference/architecture.md` and the validated responsibility catalog to distinguish
 responsibilities, harnesses, roles, capabilities, resources, methods, records and
 hosts. Reuse the existing owner of each fact and transition. Skill Steward belongs
 within Capability Stewardship; Companion and Witness share the host's existing
@@ -39,14 +39,14 @@ Use the relevant bundled operating skill and document unsupported host bindings.
 - Private disclosure patterns belong only in the maintainer-held CI secret or
   an ignored local denylist. Never commit the patterns or matched content.
 
-Read `CONTRIBUTING.md` and `docs/release-engineering.md` before changing a
+Read `CONTRIBUTING.md` and `docs/maintainers/release-engineering.md` before changing a
 public surface. Changes to disclosure, egress, boundary, or release guards need
 an evidence-backed defensive review and regression tests.
 
 ## Portable local services
 
 For a repository-backed authoring or review surface that must outlive an agent
-command, use the contract in `docs/local-services.md` and the
+command, use the contract in `docs/reference/local-services.md` and the
 `atelier-local-service` skill. The shared kit owns lifecycle and safety
 invariants; a consuming repository owns its service identity, port, commands,
 state schema, content, and user-facing copy.

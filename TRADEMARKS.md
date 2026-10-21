@@ -69,7 +69,7 @@ The sanctioned phrasing for a compatibility claim is:
     implements atelier contracts v1
 
 Conformance is public and offline: anyone can run the published validators in
-this package and reach the same answer (see `docs/attestation.md`). No
+this package and reach the same answer (see `docs/reference/attestation.md`). No
 permission is needed to make a truthful compatibility claim in this form, and
 no attestation can substitute for it.
 
@@ -77,7 +77,7 @@ no attestation can substitute for it.
 
 The phrases "MNSTRY certified" and "MNSTRY admitted" (and equivalents) are
 reserved to holders of a signed MNSTRY attestation that verifies per the
-procedure in `docs/attestation.md`. Self-issued or unsigned attestations
+procedure in `docs/reference/attestation.md`. Self-issued or unsigned attestations
 confer no such claim: an attestation with `"signature": null` is
 non-authoritative by definition, and a signature is only meaningful under a
 key the relying party recognizes as MNSTRY's.

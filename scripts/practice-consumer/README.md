@@ -1,13 +1,34 @@
 # Decision-practice consumer (Foundation)
 
-This is Foundation's own consumer of the internal decision practice in `src/judgment/` (`docs/decision-practices.md`). It applies the practice to this repository's recorded decisions. It is a repository tool: it is not in the published package and adds no public API or command.
+This is Foundation's own consumer of the internal decision practice in `src/judgment/` (`docs/reference/decision-practices.md`). It applies the practice to this repository's recorded decisions. It is a repository tool: it is not in the published package and adds no public API or command.
 
 ## What it does
 
 `reconsider.mjs measure --pr N --base SHA --head SHA` measures a pull request from its merge base (`git merge-base base head`). It reads, at exact commits:
-- the recorded decisions in `docs/integration-contract-decisions.md` at the base: each section's prose and each decision-table row;
+- only the Maintained implementation decisions section of `docs/reference/architecture.md` at the base, between the explicit markers shown below;
 - the repository files each decision links to, whole or by a `#L` line anchor;
 - how the pull request changed those files.
+
+The source section uses this exact heading and one ordered marker pair:
+
+```markdown
+## Maintained implementation decisions
+
+<!-- atelier:maintained-implementation-decisions:start -->
+| Artifact | Decision | Source |
+| --- | --- | --- |
+| Example | A maintained implementation choice | [source](../../src/example.mjs) |
+<!-- atelier:maintained-implementation-decisions:end -->
+```
+
+The consumer refuses a missing, repeated, reversed or empty section, or a heading
+that crosses its markers. Other architecture prose is never interpreted as a
+decision. Decision evidence keeps the original architecture-file line numbers.
+Definition revision four changes this source scope and keeps predicate
+`cited-source-predicate.v3`; each new measurement names the selected corpus and
+section. Measurements from earlier definitions retain their original bytes and
+identities. A historical base without the maintained section refuses; it is not
+silently reinterpreted through an old document.
 
 For each citation (a cited file, or an anchored range of one) it runs `evaluateDecisionPractice` once:
 - **Practice:** the adopted definition in `definition.json`.
@@ -53,7 +74,7 @@ Revision three (rubric `cited-source-predicate.v3`) treats lines added anywhere 
 
 ## Anchored citations (definition revision two)
 
-A decision can cite some lines of a file rather than the whole file, with a GitHub line anchor: `[text](../src/example.mjs#L12-L30)` or `#L12`. Put the link in a table row's second or third cell; the first cell names the decision, and changing it changes the decision's id.
+A decision can cite some lines of a file rather than the whole file, with a GitHub line anchor: `[text](../../src/example.mjs#L12-L30)` or `#L12`. Put the link in a table row's second or third cell; the first cell names the decision, and changing it changes the decision's id.
 
 **How an anchor is read**
 - The anchor is translated at this boundary into the existing selector `text-lines@1`, value `lines:12-30`, owner `atelier-root`, with the repository path as the object id. Nothing downstream sees the `#L` form.
@@ -75,6 +96,7 @@ Renames are not followed. A moved file is absent at the head, so its anchors esc
 
 **Versions**
 - Revision two writes `atelier-practice-consumer-measurement@v1` lines, which add the `anchor` field.
+- Revision four changes only the selected source scope; original measurement and label lines remain unchanged.
 - Revision three changes only the predicate, so it writes the same `@v1` line shape. Each line names its predicate in `provider.model` and its definition and tool in `definitionDigest` and `toolDigest`, so lines measured under revision two keep their meaning.
 - Labels are `atelier-practice-consumer-label@v1`. Without `--anchor`, a label judges the whole-file citation of that file; `--anchor lines:S-E` names an anchored one. A refused fragment records its raw text (`fragment`) and is never taken for the whole-file citation.
 - Earlier `@v0` lines keep their own definition and tool digests and stay labelable as whole-file citations.
@@ -110,4 +132,5 @@ These are five real merged pull requests, each measured from its parent to its s
 - The modified-line predicate over-triggers on table edits that add cross-references.
 - Foundation saw no miss for the one measurable decision. This says nothing about the 9 uncited decisions.
 
-Live measurements continue on the next real root pull requests.
+New measurements use only the maintained section described above. These first
+retrospective results retain their original corpus and definition identities.

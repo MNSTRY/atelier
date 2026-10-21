@@ -33,7 +33,7 @@ await scenario('public-quickstart',async()=>{
   return {init,graph:shellBin(['graph'],workspace),project:shellBin(['project'],workspace),scope:'Exact macOS public quickstart command sequence, supported baseline only'};
 });
 await scenario('installed-document-references',async()=>{
-  const references=['README.md','docs/knowledge-graph.md','docs/coauthor-session.md'];
+  const references=['README.md','docs/reference/knowledge-graph.md','docs/reference/coauthor-session.md'];
   const documents=references.map(relativePath=>{const file=fs.realpathSync(path.join(packageRoot,relativePath));assert.ok(file.startsWith(fs.realpathSync(packageRoot)+path.sep));const bytes=fs.readFileSync(file);return {relativePath,bytes:bytes.length,sha256:digest(bytes)};});
   for(const subpath of ['./graph','./project','./coauthor']){assert.ok(pkg.exports[subpath]);await import(pkg.name+'/'+subpath.slice(2));}
   return {documents,apiReferences:['@mnstry/atelier/graph','@mnstry/atelier/project','@mnstry/atelier/coauthor'],scope:'Public quickstart references resolve in the actual installed package'};
@@ -72,7 +72,7 @@ await scenario('installed-public-graph-project-baseline',async()=>{
   assert.ok(Array.isArray(graph.nodes));assert.ok(Array.isArray(graph.edges));assert.ok(Array.isArray(graph.errors));assert.equal(graph.errors.length,0);
   return {init,graphCommand,projectCommand,graph,agentCIOutput:'Actual machine-readable canonical graph; structural evidence only, no model/provider or semantic acceptance.'};
 });
-const docs=[];for(const candidate of ['README.md','docs/knowledge.md','docs/coauthor.md','docs/coauthor-session.md','docs/upgrade.md','docs/graph.md','docs/knowledge-graph.md','docs/release-engineering.md']){const full=path.join(packageRoot,candidate);if(fs.existsSync(full)){const b=fs.readFileSync(full);docs.push({path:candidate,sha256:digest(b),bytes:b.length});}}
+const docs=[];for(const candidate of ['README.md','docs/guides/knowledge-workspace.md','docs/reference/coauthor-session.md','docs/guides/upgrade.md','docs/reference/knowledge-graph.md','docs/maintainers/release-engineering.md']){const full=path.join(packageRoot,candidate);if(fs.existsSync(full)){const b=fs.readFileSync(full);docs.push({path:candidate,sha256:digest(b),bytes:b.length});}}
 for(const id of ['assessment-to-guided-authoring','full-native-finding-reference','preview-owning-source-correction-readback-reassessment','keyboard-focus-undo','native-withdrawal-recovery','participant-usefulness'])gaps.push({id,owner:id==='participant-usefulness'?'Facilitator/participant':'Foundation and existing AW Integration/Journey',action:'Receive exact public Dev Day installed entry/bindings and native allocation; inherited native or fixture proof cannot satisfy installed or human evidence.'});
 const bindings=profile.deliveryBindings;
 if(bindings){

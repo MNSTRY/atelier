@@ -1,6 +1,6 @@
 # MNSTRY Atelier
 
-The `0.2.0-alpha.15` candidate adds an [extension SDK and Postgres project workflow](docs/extensions.md). Publication and native host qualification are separate release gates.
+The `0.2.0-alpha.15` candidate adds an [extension SDK and Postgres project workflow](docs/guides/extensions.md). Publication and native host qualification are separate release gates.
 
 **Turn a repository into a living, governed system.**
 
@@ -33,11 +33,11 @@ that must stay legible, internally connected, privacy-aware, and usable across
 many interfaces. Methodology authoring is one application of the system, not
 its definition or ceiling.
 
-See the [responsibility architecture](docs/architecture.md) for Inquiry, Knowledge
+See the [responsibility architecture](docs/reference/architecture.md) for Inquiry, Knowledge
 Stewardship, Practical Judgment, Creation and Delivery, Capability Stewardship,
 Reflection, Interaction and Coordination. Start a provider-neutral research
-workflow with the [research starter](docs/research-starter.md).
-Use [portable template profiles](docs/template-profile.md) to bind semantic and
+workflow with the [research starter](docs/guides/research-starter.md).
+Use [portable template profiles](docs/reference/template-profile.md) to bind semantic and
 surface roles to canonical sources, with optional advisory decisions and
 separate host and release validation.
 
@@ -61,23 +61,23 @@ when a maintainer starts it by hand.
 ## From files to a working system
 
 Start with a question that changes useful work. The
-[knowledge setup workflow](docs/knowledge-setup.md) supplies an editable ontology
+[knowledge setup workflow](docs/start/knowledge-setup.md) supplies an editable ontology
 plan, a fictional starter, and CLI checks that connect concepts to questions.
 `atelier knowledge context` selects complete, source-linked evidence within a
 byte budget; `atelier knowledge evaluate` compares lexical and graph retrieval
 without provider calls. A passing check is structural evidence; useful answers
 and efficient token usage still need measurement in real work.
 
-For local-harness authoring, see [durable coauthor sessions](docs/coauthor-session.md)
-and [skill stewardship and managed installation](docs/skill-steward.md).
-The next-release [capability stewardship foundation](docs/capability-stewardship.md)
+For local-harness authoring, see [durable coauthor sessions](docs/reference/coauthor-session.md)
+and [skill stewardship and managed installation](docs/guides/skill-steward.md).
+The next-release [capability stewardship foundation](docs/guides/capability-stewardship.md)
 adds portable packages, repository-owned adoption and version-bound evidence
 alongside existing skills and tools.
-[Learning from feedback](docs/learning.md) connects private observations to
+[Learning from feedback](docs/guides/learning.md) connects private observations to
 reviewed lessons and explicitly activated harness context, with a local CLI.
-[Progressive local ingestion](docs/ingestion.md) preserves selected sources and
+[Progressive local ingestion](docs/guides/ingestion.md) preserves selected sources and
 provides bounded text, CSV and JSON evidence search before interpretation.
-[Immutable intake and guide contracts](docs/intake-and-guides.md) extend existing
+[Immutable intake and guide contracts](docs/reference/intake-and-guides.md) extend existing
 processing and hosted-tool adapters without adding remote execution or publication
 authority. These alpha capabilities require explicit consumer integration.
 
@@ -203,8 +203,8 @@ and reviewable. Whether a given harness discovers and follows them is separate
 evidence. Enforcement never rests in a skill. Where they are wired into the
 commit path or CI, the graph check, the boundary guard and the export validator
 run whether or not an agent followed its instructions, and they fail closed. See
-[Co-authoring with agents](./docs/co-authoring.md) for the loop this makes
-reliable, and [Describing the Atelier](./docs/describing-the-atelier.md) for
+[Co-authoring with agents](docs/guides/co-authoring.md) for the loop this makes
+reliable, and [Describing the Atelier](docs/maintainers/describing-the-atelier.md) for
 the judgment behind these sentences.
 
 ## The system beneath it
@@ -262,7 +262,7 @@ graph. The library exposes the same project, graph, validation, and projection
 primitives to code.
 
 Consumer-owned authoring or review services that need a separate durable
-lifecycle follow [the managed local-service contract](./docs/local-services.md).
+lifecycle follow [the managed local-service contract](docs/reference/local-services.md).
 That contract standardizes process ownership, private local state, and browser
 recovery without putting a tenant's service details into Atelier.
 
@@ -275,7 +275,7 @@ The separate headless repository supervisor can observe one explicitly
 enrolled Git repository, fetch and fast-forward it, and prepare a bounded
 commit plan. A commit still requires an exact user confirmation and an
 unchanged re-observation; the loopback browser receives no apply endpoint.
-See [Atelier Sync: Deliverable Zero](docs/atelier-sync.md).
+See [Atelier Sync: headless repository supervisor](docs/guides/atelier-sync.md).
 
 ### 5. The repository can power another product
 
@@ -288,9 +288,9 @@ That tool may be private, open source, or commercial. Apache-2.0 permits all
 three. Conformance to the public Atelier contracts does not require a MNSTRY
 account or service.
 
-Read [the design document](./docs/design.md) for the five-part architecture and
-[the ontology](./docs/ontology.md) and
-[contract-stability policy](./docs/contract-stability.md) for the stable
+Read [the design document](docs/reference/design.md) for the five-part architecture and
+[the ontology](docs/reference/ontology.md) and
+[contract-stability policy](docs/reference/contract-stability.md) for the stable
 boundaries.
 
 ## Build your own tool on it
@@ -333,11 +333,11 @@ const navigation = renderActionGroup([
 
 The package exports change over the alpha series, so pin the exact prerelease
 version and treat the package export map and shipped source modules as the
-executable API reference. [Distribution contracts](./docs/distributions.md) explain
+executable API reference. [Distribution contracts](docs/guides/distributions.md) explain
 how a governed subset can be packaged for another surface without widening its
 audience.
 
-The [advisory decision contract](./docs/decisions.md) gives hosts bounded
+The [advisory decision contract](docs/reference/decisions.md) gives hosts bounded
 choice, score and boolean questions with evidence references and recorded
 uncertainty. `@mnstry/atelier/decisions` validates these records offline.
 The host supplies optional provider execution and retains authorization;
@@ -365,7 +365,7 @@ host evaluation and human acceptance require their own evidence. This source
 capability has shipped as the `capability` command since 0.2.0-alpha.13.
 <!-- atelier:block:capability-stewardship:end -->
 
-See [capability stewardship](docs/capability-stewardship.md) for the operating guide.
+See [capability stewardship](docs/guides/capability-stewardship.md) for the operating guide.
 
 ## Discovery and research
 
@@ -391,7 +391,7 @@ pack retains its Discovery Engine title, identifiers and original digest, so
 existing release locks can use the governed upgrade path without a separate repin.
 <!-- atelier:block:inquiry-harnesses:end -->
 
-See [Discovery and Research Harnesses](docs/inquiry-harnesses.md) for the local workflow.
+See [Discovery and Research Harnesses](docs/guides/inquiry-harnesses.md) for the local workflow.
 
 ## Where the Atelier stops
 
@@ -427,7 +427,7 @@ platform logins must uniquely match declared login mappings. Repository identity
 checks may invoke `gh api repos/...` to resolve a canonical GitHub identity.
 Those authenticated requests use your own `gh` credentials. Recorded repository
 identities let identity checks keep working when the provider is unavailable.
-See `docs/install.md` for the full attribution precedence and mode semantics.
+See `docs/start/install.md` for the full attribution precedence and mode semantics.
 Explicitly enrolled Atelier Sync may also run bounded Git fetches
 for observation/reconciliation and one non-force push only when the exact
 reviewed commit plan requested and confirmed it, no earlier local commit is
@@ -482,7 +482,7 @@ service, no network:
 atelier dry-run ./atelier-export.json
 ```
 
-`docs/continuity.md` records the distribution commitments behind these
+`docs/reference/continuity.md` records the distribution commitments behind these
 claims, including the perpetual Apache-2.0 grant on every tagged release you
 receive.
 <!-- atelier:block:claims:end -->
@@ -524,7 +524,7 @@ Admission is a narrower, opt-in decision: whether a MNSTRY governed runtime
 accepts a document for delivery to the people it serves. That is what
 admission buys — delivery through a runtime that enforces consent and
 visibility at serve time — and it takes the form of a signed MNSTRY
-attestation against criteria this package publishes (`docs/attestation.md`).
+attestation against criteria this package publishes (`docs/reference/attestation.md`).
 The criteria are public, the checker is private, and the rejection message
 is part of the contract. You can build on the Atelier without ever talking
 to MNSTRY, and a document MNSTRY declines can still be fully conformant.
@@ -539,30 +539,10 @@ Pin the prerelease while the package remains in alpha:
 npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
 ```
 
-Then choose the path that matches what you are building:
-
-- [Start independently: local CLI, library and optional hosts](./docs/independent-start.md)
-- [Installation and first run](./docs/install.md)
-- [Design and architecture](./docs/design.md)
-- [Knowledge graph and source model](./docs/knowledge-graph.md)
-- [Local runtime and agent boundary](./docs/atelier-runtime.md)
-- [Distribution contracts](./docs/distributions.md)
-- [Conformance and attestation](./docs/attestation.md)
-- [Continuity commitments](./docs/continuity.md)
-- [Portability: what a record holds and what the checks prove](./docs/portability.md)
-- [Co-authoring with agents](./docs/co-authoring.md)
-- [Describing the Atelier](./docs/describing-the-atelier.md)
-- [Assurance controls and evidence map](./docs/assurance-controls.md)
-- [Upgrade notes](./docs/upgrade.md)
-- [Upgrade with your agent](./docs/guided-upgrades.md)
-- [Obsidian projection](./docs/obsidian.md)
-
-Use these guides, command help and the installed package export map for current
-use and API reference. The [integration plan](./docs/integration-and-review-plan.md),
-[integration decisions](./docs/integration-contract-decisions.md) and
-[presentation review disposition](./docs/presentation-review-disposition.md) retain
-planning, rationale and review evidence for their recorded scope and source.
-They are not a current feature inventory or approval of later source.
+Start with [independent setup](./docs/start/independent-start.md) or
+[installation and first run](./docs/start/install.md). The
+[documentation index](./docs/README.md) organizes the maintained guides,
+API and architecture references, and maintainer controls.
 
 ## Status and command reference
 
@@ -607,7 +587,7 @@ MNSTRY Atelier is released under [Apache-2.0](./LICENSE).
 
 ## Experimental hosted vault contract
 
-An optional [private artifact vault service](docs/vault-service.md) supplies a
+An optional [private artifact vault service](docs/reference/vault-service.md) supplies a
 provider-independent ownership boundary and explicit Vercel/Cloudflare storage
 bindings. It is not enabled by local CLI commands. Hosting adapters can perform
 network I/O only when explicitly installed and invoked by a consuming host.
@@ -622,12 +602,12 @@ to its source manually or under a scoped policy the user installs; anything
 structural stays a copy-only proposal. Atelier never commits to Git for it.
 It is disabled unless a project enables it, and it is proven on one platform
 and one app version. Every vault it publishes carries
-[Atelier's own Obsidian plugin](docs/obsidian-plugin.md), which Obsidian asks
+[Atelier's own Obsidian plugin](docs/reference/obsidian-plugin.md), which Obsidian asks
 you to trust once per vault; it shows whether the view is current, writes
 nothing, and talks only to the local maintenance service, and the projection
-works the same without it. Read [what it does and its known limits](docs/obsidian.md),
-the [contract](docs/obsidian-contract.md) and the
-[maintenance service](docs/local-services.md) before relying on it. The
+works the same without it. Read [what it does and its known limits](docs/guides/obsidian.md),
+the [contract](docs/reference/obsidian-contract.md) and the
+[maintenance service](docs/reference/local-services.md) before relying on it. The
 package subpaths are `@mnstry/atelier/obsidian` and
 `@mnstry/atelier/obsidian/*`.
 
@@ -651,15 +631,15 @@ Recorded acceptance is not authenticated authority, and local checks do not prov
 research quality or recipient acceptance. Hosted execution remains adapter-owned.
 <!-- atelier:block:learning-harnesses:end -->
 
-Read the [Knowledge and Build Harness guide](docs/learning-harnesses.md) for the complete local learning cycle.
+Read the [Knowledge and Build Harness guide](docs/guides/learning-harnesses.md) for the complete local learning cycle.
 
-The [research quickstart](docs/research-starter-quickstart.md) explains how to use
+The [research quickstart](docs/start/research-starter-quickstart.md) explains how to use
 a supplied candidate packet with existing tools and skills. See
-[Trackables](docs/trackables.md), [Interaction and Reflection](docs/interaction-and-reflection.md)
-and [Coordination](docs/coordination.md) for portable runtime profiles and host obligations.
+[Trackables](docs/reference/trackables.md), [Interaction and Reflection](docs/reference/interaction-and-reflection.md)
+and [Coordination](docs/reference/coordination.md) for portable runtime profiles and host obligations.
 
-The optional [knowledge workspace](docs/knowledge-workspace.md) connects
+The optional [knowledge workspace](docs/guides/knowledge-workspace.md) connects
 onboarding, ontology modeling, evidence deepening, application, and outcome
 learning with shared private coauthor sessions for people and agents.
 
-The [public workshop profile](docs/knowledge-health/devday/public-default.md) uses the existing Knowledge host to retain ordinary drafts and one copy-only source-owner handoff as a local proposal.
+The [public workshop profile](docs/knowledge-health/quickstart.md) uses the existing Knowledge host to retain ordinary drafts and one copy-only source-owner handoff as a local proposal.

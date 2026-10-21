@@ -17,7 +17,7 @@ lesson digest. Activate makes approved content available to a named harness;
 it does not install files or grant tool permissions. Withdraw stops future use.
 List, context, render, graph, export and plan print private JSON to stdout.
 Export is an explicit private archive, never a send or publication operation.
-See docs/learning.md for complete examples.`
+See docs/guides/learning.md for complete examples.`
 
 function exactObject(value, allowed, required) {
   if (!value || typeof value !== 'object' || Array.isArray(value)

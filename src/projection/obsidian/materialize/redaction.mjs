@@ -5,7 +5,7 @@ import { refuse } from './byte-lens.mjs'
 // judges the assembled result, every note included, whether the note was
 // emitted on this call or reused from the preparation cache, and refuses the
 // view with `redaction-failure`, naming the in-view note (or file) and the
-// rule, never the value. See "The redaction guard" in docs/obsidian-contract.md.
+// rule, never the value. See "The redaction guard" in docs/reference/obsidian-contract.md.
 //
 //   allow-list  every path the emitter wrote (note and attachment paths,
 //               rewritten link and embed targets, link targets in generated

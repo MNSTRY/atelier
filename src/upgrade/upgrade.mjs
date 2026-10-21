@@ -274,7 +274,7 @@ export const BASE_MIGRATIONS = [
     class: 'template_scaffold',
     title: 'Add missing upgrade documentation scaffold',
     description: 'Add upgrade guidance only when the target file is absent.',
-    files: ['docs/upgrade.md'],
+    files: ['docs/guides/upgrade.md'],
     safety: 'additive',
     reviewMarkerRequired: false,
     explicitConfirmationRequired: false,

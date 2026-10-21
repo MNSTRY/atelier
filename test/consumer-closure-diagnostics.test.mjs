@@ -12,7 +12,7 @@ import {
   classifyNpmFailure,
   npmTreeLines,
   overrideFindings,
-} from '../scripts/consumer-closure-diagnostics.mjs'
+} from '../src/upgrade/closure-diagnostics.mjs'
 
 // Recorded: the stderr of the offline `npm install <tarball>` in
 // consumer-smoke on PR #89 (Dependabot, fast-uri 3.1.7 -> 4.2.1), identical in

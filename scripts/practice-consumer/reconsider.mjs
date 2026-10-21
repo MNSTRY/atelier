@@ -2,7 +2,7 @@
 // Foundation's deterministic decision-practice consumer for this repository.
 //
 // For one real root pull request (exact base and head commits) it reads the
-// recorded decisions in docs/integration-contract-decisions.md at the base, the
+// maintained decisions section in docs/reference/architecture.md at the base, the
 // repository files each decision links to, and how the pull request changed
 // them. It runs the internal decision practice (src/judgment) once per cited
 // decision with a deterministic assessment, and appends one measurement line.
@@ -27,7 +27,10 @@ import { evaluateDecisionPractice } from '../../src/judgment/practice-evaluation
 import { inspectKnowledge } from '../../src/knowledge/ledger.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-export const CORPUS = 'docs/integration-contract-decisions.md'
+export const CORPUS = 'docs/reference/architecture.md'
+export const DECISIONS_HEADING = '## Maintained implementation decisions'
+export const DECISIONS_START = '<!-- atelier:maintained-implementation-decisions:start -->'
+export const DECISIONS_END = '<!-- atelier:maintained-implementation-decisions:end -->'
 // v1 adds per-outcome anchors; v0 lines stay valid as recorded.
 export const MEASUREMENT_SCHEMA = 'atelier-practice-consumer-measurement@v1'
 // The optional full context of one measurement, written only on request.
@@ -190,6 +193,26 @@ export function parseDecisions(markdown, corpus = CORPUS) {
     decision.id = shortId('d', count > 1 ? `${decision.key} ${count}` : decision.key)
     delete decision.key
   }
+  return decisions
+}
+
+/** Read only the explicitly maintained section, keeping original file line spans. */
+export function parseMaintainedDecisions(markdown) {
+  const lines = markdown.split('\n')
+  const indexes = (text) => lines.flatMap((line, index) => line.trim() === text ? [index] : [])
+  const headings = indexes(DECISIONS_HEADING)
+  const starts = indexes(DECISIONS_START)
+  const ends = indexes(DECISIONS_END)
+  const refuse = (reason) => { throw new Error(`maintained-decision-section-invalid: ${reason} in ${CORPUS}`) }
+  if (headings.length !== 1 || starts.length !== 1 || ends.length !== 1) refuse('one heading and one marker pair required')
+  const [heading] = headings, [start] = starts, [end] = ends
+  if (!(heading < start && start < end)) refuse('markers must follow the heading in order')
+  if (lines.slice(heading + 1, end).some((line) => /^\s*#{1,6}\s/.test(line))) refuse('another heading crosses the maintained section')
+  // Preserve empty lines before the section so evidence selectors still name
+  // the actual corpus lines; other architecture prose never becomes a decision.
+  const selected = lines.map((line, index) => index === heading || (index > start && index < end) ? line : '').join('\n')
+  const decisions = parseDecisions(selected)
+  if (decisions.length === 0) refuse('the maintained section has no decisions')
   return decisions
 }
 
@@ -462,7 +485,7 @@ export function measure({ repo, pr, base, head, mode = 'live', capture = null })
   base = git(repo, ['merge-base', base, head]).trim()
   const corpusText = textOf(show(repo, base, CORPUS))
   if (corpusText === null) throw new Error(`${CORPUS} is not readable at ${base}`)
-  const decisions = parseDecisions(corpusText)
+  const decisions = parseMaintainedDecisions(corpusText)
   const history = buildHistory({ repo, base, decisions })
   const definitionRef = harnessRef(history.practice)
   const changed = new Set(git(repo, ['diff', '--no-renames', '--name-only', '-z', base, head, '--']).split('\0').filter(Boolean))
@@ -609,7 +632,7 @@ export function measure({ repo, pr, base, head, mode = 'live', capture = null })
   const measurement = {
     schema: MEASUREMENT_SCHEMA, pr: Number(pr), base: requested, mergeBase: base, head, mode, measuredAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     definitionRef, definitionDigest: contentDigest(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8')),
-    toolDigest: contentDigest(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')), tool: toolProvenance(), git: gitText, corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
+    toolDigest: contentDigest(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')), tool: toolProvenance(), git: gitText, corpus: { path: CORPUS, section: DECISIONS_HEADING.slice(3) }, corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
     summary: {
       decisions: results.length,
       cited: results.filter((item) => item.cited.length).length,

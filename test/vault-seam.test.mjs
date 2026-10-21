@@ -1,9 +1,9 @@
-import { evidenceStore } from './vault-store-fixture.mjs'
+import { evidenceStore } from './support/vault/store-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createVaultService, preparePublication, createVaultPrivacyProbe, createVaultPrivacyState, createVaultContext } from '../src/vault/index.mjs'
 import { assessVaultPrivacy, vaultObjects } from '../src/vault/privacy.mjs'
-import { protectionEvidence, deployment } from './vault-privacy-fixture.mjs'
+import { protectionEvidence, deployment } from './support/vault/privacy-fixture.mjs'
 const owner = { issuer: 'https://identity.example', subject: 'synthetic-author' }
 const input = revision => ({ schema: 'atelier-vault-publication/v1', expectedRevision: revision, files: [{ path: 'empty.txt', base64: '' }, { path: 'report.html', base64: Buffer.from(`Revision ${revision}`).toString('base64') }, { path: 'style.css', base64: Buffer.from('body { color: green }').toString('base64') }] })
 test('real service and denial collector publish zero-byte artifacts without alarms or recursion; activation covers every staged key', async () => {

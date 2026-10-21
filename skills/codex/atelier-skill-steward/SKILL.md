@@ -76,7 +76,7 @@ disclosure justifies them. Test direct triggers, indirect triggers, incomplete
 inputs, non-triggers, and risky edge cases.
 
 In the public Atelier repository, read `AGENTS.md`, `CONTRIBUTING.md`, and
-`docs/release-engineering.md` before editing. Re-derive private lessons as
+`docs/maintainers/release-engineering.md` before editing. Re-derive private lessons as
 generic invariants with invented fixtures. Keep Codex and Claude bundles
 byte-identical and run the repository disclosure and release gates required by
 those documents.

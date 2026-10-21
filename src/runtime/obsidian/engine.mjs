@@ -845,7 +845,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       for (const { scope, store } of built ? scopes.filter((item) => attempt.has(item.scope.scopeId)) : []) {
         const { scopeId } = scope
         const entry = entries.get(scopeId)
-        // What this attempt found worth naming: notes and rules (see "Notes that were laid out anyway" in docs/obsidian-contract.md).
+        // What this attempt found worth naming: notes and rules (see "Notes that were laid out anyway" in docs/reference/obsidian-contract.md).
         let diagnostics = []
         const settle = (state, reason, extra = {}) => {
           const { diagnostics: _earlier, ...rest } = { ...entry, ...extra, state, reason, verified: extra.verified === true, checkedAt: now }

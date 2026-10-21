@@ -2,7 +2,7 @@
 
 A synthetic reference consumer for the experimental root composition, access
 and preview modules. It does not connect to an identity provider or private
-service. See [the boundary and implementation brief](../../docs/connected-composition.md).
+service. See [the boundary and implementation brief](../../docs/reference/connected-composition.md).
 
 ## Run the reproducible proof
 

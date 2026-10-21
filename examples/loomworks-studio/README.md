@@ -131,6 +131,6 @@ without a gate noticing.
 
 ## Learn more
 
-- `docs/distributions.md` in the Atelier package — the full distribution guide.
+- `docs/guides/distributions.md` in the Atelier package — the full distribution guide.
 - `TRADEMARKS.md` — attribution, naming, and compatibility-claim policy.
-- `docs/attestation.md` — how admission decisions are recorded and verified.
+- `docs/reference/attestation.md` — how admission decisions are recorded and verified.

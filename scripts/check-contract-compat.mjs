@@ -10,7 +10,7 @@
 // Baseline precedence: --baseline <ref> -> contracts/compat-baseline.json
 // baselineTag -> null. A null baseline means the contract-stability epoch has no
 // tag yet; the gate prints an inert notice and exits 0. Cutting the epoch tag
-// sets baselineTag in the release commit (see docs/contract-stability.md).
+// sets baselineTag in the release commit (see docs/reference/contract-stability.md).
 //
 // Contracts absent at the baseline are new since it and are skipped, which
 // covers both the first run and every future contract addition.

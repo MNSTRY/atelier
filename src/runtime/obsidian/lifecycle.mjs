@@ -19,7 +19,7 @@ import { personalHomeOf } from './personal-selection.mjs'
 import { resolveServiceWorkspace } from './service.mjs'
 
 // start / status / stop of the maintenance service of one workspace, as
-// docs/local-services.md describes them.
+// docs/reference/local-services.md describes them.
 //
 // Ownership is proven, never assumed. A running service is ours only when the
 // owner-only record and the health answer agree on service name, workspace,

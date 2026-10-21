@@ -22,7 +22,7 @@ import { APPLY_WORKSPACE_ID, digestOf, makeApplyWorld, noteText, treeListing } f
 
 // Vault layout 2: file names are titles, folders mirror the repository, and
 // each note names its identity in generated properties. Invented, synthetic
-// content only. See "Vault layout" in docs/obsidian-contract.md.
+// content only. See "Vault layout" in docs/reference/obsidian-contract.md.
 
 const EXT = 'mnstry.atelier.obsidian'
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
@@ -751,7 +751,7 @@ const EARLIER_RELEASE = {
 }
 const vaultFiles = (world) => treeListing(world.vault(), { skip: (name) => name.startsWith('.') })
 // The files a publication moved out of the vault, by digest: the publisher moves each into the recovery area as
-// `displaced.bin` (see "Where candidates are staged" in docs/obsidian-contract.md). The recovery area also keeps
+// `displaced.bin` (see "Where candidates are staged" in docs/reference/obsidian-contract.md). The recovery area also keeps
 // content-addressed copies of the bytes a publication compared against, so a digest found anywhere there does not show
 // that the file itself was kept rather than deleted; a digest among these does.
 const movedToRecovery = (world) => new Set(Object.entries(treeListing(world.recovery())).filter(([name]) => name.endsWith('/displaced.bin')).map(([, digest]) => digest))
@@ -1019,7 +1019,7 @@ test('upgrade across two releases, one vault: from layout 1 to this release and 
     return edit
   }
   // Every file a publication took out of the vault, by digest: the publisher moves it into the recovery area as
-  // `displaced.bin` (see "Where candidates are staged" in docs/obsidian-contract.md). `kept` names what must be among
+  // `displaced.bin` (see "Where candidates are staged" in docs/reference/obsidian-contract.md). `kept` names what must be among
   // them from the hop that took it out onwards.
   const pluginChoice = () => { const { state, reason } = readPluginChoice({ workspaceRoot: world.workspaceRoot(), workspaceId: APPLY_WORKSPACE_ID, scopeId: 'scope-whole' }); return [state, reason] }
   const communityPolicy = (manifest) => manifest.ext[EXT].settings.policyOwned.find((entry) => entry.path === COMMUNITY_PLUGINS_PATH)

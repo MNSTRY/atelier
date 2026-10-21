@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createVaultPrivacyState, assessVaultPrivacy, VaultAlarmPersistenceError } from '../src/vault/index.mjs'
-import { protectionEvidence, deployment } from './vault-privacy-fixture.mjs'
-import { evidenceStore } from './vault-store-fixture.mjs'
+import { protectionEvidence, deployment } from './support/vault/privacy-fixture.mjs'
+import { evidenceStore } from './support/vault/store-fixture.mjs'
 const context = { vault: 'sample-vault', publication: 'synthetic', revision: 1, phase: 'read', owner: { issuer: 'https://identity.example', subject: 'synthetic-owner' }, deployment, manifest: [], objects: [] }
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
 const exposure = ctx => { const value = protectionEvidence(ctx); value.targets[0].anonymous = 'content'; return value }

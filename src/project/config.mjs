@@ -557,7 +557,7 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
     errors.push('setup.profile is invalid')
   }
   // The census reads these as path patterns relative to the project config's
-  // folder (docs/knowledge-graph.md), under the contract's pathString rules.
+  // folder (docs/reference/knowledge-graph.md), under the contract's pathString rules.
   for (const key of ['include', 'exclude']) {
     errors.push(...stringPathErrors(setup[key], `setup.${key}`))
     if (typeof setup[key] === 'string' && (setup[key].includes('\u0000') || /^[a-z][a-z0-9+.-]*:/.test(setup[key]) || path.isAbsolute(setup[key]))) {

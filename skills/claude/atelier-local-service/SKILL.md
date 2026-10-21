@@ -9,7 +9,7 @@ Use this skill for a consumer-owned service that persists repository-backed
 local state. Do not use it to change `atelier dev` itself or to install an
 operating-system service without explicit authorization.
 
-Read `docs/local-services.md` from the installed Atelier package or source
+Read `docs/reference/local-services.md` from the installed Atelier package or source
 checkout before changing lifecycle code.
 
 ## Boundary first

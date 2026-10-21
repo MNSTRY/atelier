@@ -2727,7 +2727,7 @@ function processesOfProfile(profile) {
 // that profile alone, so the process reading and the version reading below are
 // of that instance, reached through its private HOME.
 async function realAppWorld(t) {
-  const { createLayout, Instance } = await import('../experiments/obsidian-publication/lib/instance.mjs')
+  const { createLayout, Instance } = await import('../scripts/obsidian/lib/instance-fixture.mjs')
   const appDir = process.env.ATELIER_OBSIDIAN_APP_DIR || '/Applications/Obsidian.app/Contents/MacOS'
   const cliPath = path.join(appDir, 'obsidian-cli')
   const layout = createLayout()
@@ -2769,7 +2769,7 @@ async function realAppWorld(t) {
   // Register exactly that vault in the isolated profile, the way the desktop harness does, and start the app.
   const profileFile = path.join(layout.profile, 'obsidian.json')
   const profile = JSON.parse(fs.readFileSync(profileFile, 'utf8'))
-  profile.vaults = { atelierg00synthetic: { path: fs.realpathSync(real.world.vault), ts: Date.now(), open: true } }
+  profile.vaults = { atelierobsidiansynthetic: { path: fs.realpathSync(real.world.vault), ts: Date.now(), open: true } }
   fs.writeFileSync(profileFile, JSON.stringify(profile))
   real.launch = async () => {
     real.instance = new Instance({ ...layout, vault: fs.realpathSync(real.world.vault) })
