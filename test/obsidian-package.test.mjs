@@ -278,7 +278,7 @@ test('mutation control: the release audit refuses proof tooling, experiments, a 
       /packed fixture exceeds 262144 bytes: fixtures\/obsidian\/scale\/corpus\.json/,
       /packed fixture exceeds 262144 bytes: fixtures\/scale\/corpus\.json/,
       /package export \.\/obsidian names a file the tarball does not carry/,
-      /tarball must include docs\/obsidian\.md/,
+      /tarball must include docs\/guides\/obsidian\.md/,
       /tarball must include src\/projection\/obsidian\/publication\/index\.mjs/,
     ]) assert.match(stderr, expected)
     assert.doesNotMatch(stderr, /synthetic\.v1\.json/)

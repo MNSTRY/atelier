@@ -60,7 +60,7 @@ test('check fails with exit 1 and a TRADEMARKS.md pointer when the byte string i
     const result = runDistribution(['check', '--target', dir])
     assert.equal(result.status, 1)
     assert.match(result.stderr, /TRADEMARKS\.md/)
-    assert.match(result.stderr, /docs\/attestation\.md/)
+    assert.match(result.stderr, /docs\/reference\/attestation\.md/)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

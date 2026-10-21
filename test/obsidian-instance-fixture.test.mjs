@@ -10,6 +10,32 @@ import { Instance } from '../scripts/obsidian/lib/instance-fixture.mjs'
 const digest = (value) => createHash('sha256').update(value).digest('hex')
 const layout = () => ({ home: path.join(os.tmpdir(), 'atelier-inspector-home') })
 
+function syntheticInspection(t, { notePath, diskText, bufferText = diskText }) {
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-inspector-unicode-'))
+  t.after(() => fs.rmSync(vault, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(vault, 'notes'))
+  const file = path.join(vault, notePath)
+  fs.writeFileSync(file, diskText, 'utf8')
+  const state = { buffer: bufferText }
+  const mainDocument = {}
+  const view = { file: { path: notePath }, editor: {}, dirty: bufferText !== diskText, getViewData: () => state.buffer, containerEl: { ownerDocument: mainDocument } }
+  const app = { vault: { adapter: { getBasePath: () => vault } }, workspace: { iterateAllLeaves: (visit) => visit({ view }) } }
+  const instance = new Instance(layout())
+  instance.cli = async (command, code) => {
+    assert.equal(command, 'eval')
+    assert.ok(code.startsWith('code='))
+    const result = vm.runInNewContext(code.slice(5), { app, document: mainDocument, Buffer, atob, TextDecoder,
+      require: (name) => {
+        if (name === 'fs') return { existsSync: fs.existsSync, readFileSync: fs.readFileSync }
+        if (name === 'path') return path
+        if (name === 'crypto') return { createHash }
+        throw new Error(`Unexpected inspector dependency: ${name}`)
+      } })
+    return `=> ${result}`
+  }
+  return { instance, file, state }
+}
+
 test('the desktop fixture reads disk and editor evidence without writing or invoking the production publisher', async (t) => {
   const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-inspector-'))
   t.after(() => fs.rmSync(vault, { recursive: true, force: true }))
@@ -30,7 +56,7 @@ test('the desktop fixture reads disk and editor evidence without writing or invo
   instance.cli = async (command, code) => {
     assert.equal(command, 'eval')
     assert.ok(code.startsWith('code='))
-    const result = vm.runInNewContext(code.slice(5), { app, document: mainDocument, Buffer, atob,
+    const result = vm.runInNewContext(code.slice(5), { app, document: mainDocument, Buffer, atob, TextDecoder,
       require: (name) => {
         if (name === 'fs') return { existsSync: (file) => { reads.push(file); return fs.existsSync(file) }, readFileSync: (file) => { reads.push(file); return fs.readFileSync(file) } }
         if (name === 'path') return path
@@ -104,6 +130,44 @@ test('typing whose reply is lost is not repeated after inspection proves its byt
     return `=> ${JSON.stringify({ status: 'inspected', views: [{ bufferBase64: Buffer.from('text already arrived').toString('base64') }] })}`
   }
   assert.equal(await instance.typeText('already arrived', 'notes/Example.md'), 'arrived')
+  assert.deepEqual(calls, ['dev:cdp', 'eval'])
+  assert.deepEqual(instance.transportRetries, ['typeText'])
+})
+
+test('Unicode note paths inspect the original UTF-8 disk and buffer bytes', async (t) => {
+  const notePath = 'notes/Café 雨 🪶.md'
+  const diskText = '# Café\n\nSynthetic 雨 and 🪶.\n'
+  const bufferText = `${diskText}An unsaved déjà vu.\n`
+  const { instance, file } = syntheticInspection(t, { notePath, diskText, bufferText })
+  const result = await instance.bridge({ op: 'inspect', path: notePath })
+  assert.equal(result.diskSha256, digest(Buffer.from(diskText, 'utf8')))
+  assert.equal(result.views.length, 1, 'the original Unicode path must match the open editor')
+  assert.equal(result.views[0].bufferSha256, digest(Buffer.from(bufferText, 'utf8')))
+  assert.deepEqual(Buffer.from(result.views[0].bufferBase64, 'base64'), Buffer.from(bufferText, 'utf8'))
+  assert.deepEqual(fs.readFileSync(file), Buffer.from(diskText, 'utf8'))
+})
+
+test('typing into a Unicode note whose reply is lost inspects the original path and never duplicates its UTF-8 text', async (t) => {
+  const notePath = 'notes/Café 雨 🪶.md'
+  const baseText = '# Synthetic Café\n'
+  const typedText = 'déjà vu — 你好 🧵'
+  const { instance, file, state } = syntheticInspection(t, { notePath, diskText: baseText })
+  const inspect = instance.cli.bind(instance)
+  const calls = []
+  instance.cli = async (command, ...args) => {
+    calls.push(command)
+    if (command === 'dev:cdp') {
+      const input = JSON.parse(args.find((arg) => arg.startsWith('params=')).slice('params='.length))
+      state.buffer += input.text
+      fs.writeFileSync(file, state.buffer, 'utf8')
+      throw new Error('CLI call timed out')
+    }
+    return inspect(command, ...args)
+  }
+  assert.equal(await instance.typeText(typedText, notePath), 'arrived')
+  const expectedBytes = Buffer.from(`${baseText}${typedText}`, 'utf8')
+  assert.deepEqual(fs.readFileSync(file), expectedBytes)
+  assert.deepEqual(Buffer.from(state.buffer, 'utf8'), expectedBytes)
   assert.deepEqual(calls, ['dev:cdp', 'eval'])
   assert.deepEqual(instance.transportRetries, ['typeText'])
 })

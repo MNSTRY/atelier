@@ -48,7 +48,7 @@ function buildInspectionCode(payload) {
     fail('path must be a relative visible Markdown path');
   }
   const encoded = Buffer.from(JSON.stringify({ op: payload.op, path: payload.path }), 'utf8').toString('base64');
-  return `(${inspectInApp.toString()})(JSON.parse(atob('${encoded}')))`;
+  return `(${inspectInApp.toString()})(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'),c=>c.charCodeAt(0)))))`;
 }
 
 export const sha256 = (value) => createHash('sha256').update(value).digest('hex');
