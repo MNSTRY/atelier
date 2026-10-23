@@ -23,6 +23,7 @@ import {
   CHECK_AGGREGATE_MAX_BYTES,
   parsePushRefInput,
   diffHeaderPath,
+  gitOutputResult,
   parseAddedContent,
   parseDiffSections,
   parsePushRefUpdates,
@@ -1099,6 +1100,11 @@ test('the push check refuses when it cannot list the commits or the evidence gro
   result = scanPushUpdate({ repoRoot: site, update: wide, repo: 'site', maxBytes: 50000 })
   assert.ok(result.diagnostics.some((item) => item.details.reason === 'push-evidence-too-large'), JSON.stringify(result.diagnostics))
   assert.ok(result.bytes > 50000)
+  const reported = scanPushUpdate({ repoRoot: site, update: wide, repo: 'site', maxBytes: 50000, aggregateLimitBytes: CHECK_AGGREGATE_MAX_BYTES })
+  const refusal = reported.diagnostics.find((item) => item.details.reason === 'push-evidence-too-large')
+  assert.equal(refusal.details.limitBytes, CHECK_AGGREGATE_MAX_BYTES)
+  assert.match(refusal.message, new RegExp(`${CHECK_AGGREGATE_MAX_BYTES}-byte aggregate limit`))
+  assert.equal(reported.bytes, result.bytes, 'the reporting limit changes neither the remaining allowance nor the evidence read')
 })
 
 test('history only another remote holds is judged on its way to a new one', (t) => {
@@ -1581,5 +1587,74 @@ test('push-check text output lists an incomplete scan first and counts the findi
   assert.match(lines[1], /^error content-scan-incomplete: /, text.stdout)
   const shown = lines.filter((line) => /^error /.test(line))
   assert.equal(shown.length, 50, text.stdout)
+  assert.ok(lines.includes(`${report.findings.length - 50} more not shown; --json lists every finding`), text.stdout)
+})
+
+test('Git evidence rejects an error even when its runner reports status zero', () => {
+  const error = Object.assign(new Error('synthetic runner failed'), { code: 'EIO' })
+  const refused = gitOutputResult('.', ['diff', '--cached'], { runner: () => ({ status: 0, stdout: 'partial', error }) })
+  assert.deepEqual([refused.ok, refused.code, refused.stdout], [false, 'git-command-failed', null])
+  const complete = gitOutputResult('.', ['diff', '--cached'], { runner: () => ({ status: 0, stdout: 'complete' }) })
+  assert.deepEqual([complete.ok, complete.stdout], [true, 'complete'])
+})
+
+test('canonical content acquisition pins Git quoting despite local diff configuration', (t) => {
+  const { site, project, policy } = makeWorkspace(t)
+  git(site, ['config', 'core.quotePath', 'false'])
+  git(site, ['config', 'diff.noprefix', 'true'])
+  git(site, ['config', 'diff.mnemonicPrefix', 'true'])
+  const name = 'café-note.txt'
+  fs.writeFileSync(path.join(site, name), `${KEY_MATERIAL}\n`)
+  git(site, ['add', '.'])
+  const calls = []
+  const scan = scanStagedRepository({ repoRoot: site, repo: 'example-site', gitRunner: (exe, args, options) => {
+    if (args.includes('diff')) calls.push(args)
+    return spawnSync(exe, args, options)
+  } })
+  assert.ok(scan.findings.some((item) => item.path === name && item.rule === 'secret-material'), JSON.stringify(scan))
+  assert.deepEqual(scan.diagnostics, [])
+  assert.ok(calls.length > 0)
+  assert.ok(calls.every((args) => args.includes('core.quotePath=true')), JSON.stringify(calls))
+  git(site, ['commit', '--quiet', '-m', 'invented quoted-name fixture'])
+  assert.ok(checkPushContent({ project, policy, updates: pushUpdate(site), cwd: site }).errors.some((item) => item.path === name && item.rule === 'secret-material'))
+
+  // Existing BOM identity is preserved by the parser; this is a control, not a newly fixed decoder defect.
+  const [renamed] = parseDiffSections('diff --git a/before.txt b/after.txt\nsimilarity index 100%\nrename from before.txt\nrename to "\\357\\273\\277after.txt"\n')
+  assert.deepEqual([renamed.path, renamed.incomplete], ['\ufeffafter.txt', null])
+})
+
+test('staged-check text keeps errors ahead of incomplete warnings, prioritizes unresolved evidence and counts overflow', (t) => {
+  const { root, site, policy } = makeWorkspace(t)
+  policy.mode = 'legacy-warning'
+  policy.repos['example-mirror'] = { ...policy.repos['example-site'], kind: 'shared' }
+  writeJson(path.join(root, 'boundary-policy.v1.json'), policy)
+  const configPath = path.join(root, 'atelier.project.json')
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+  config.repos.push({ name: 'example-mirror', path: 'example-site', readBoundary: 'team' })
+  writeJson(configPath, config)
+  for (let index = 0; index < 51; index += 1) fs.writeFileSync(path.join(site, 'src/scripts', `cart-${String(index).padStart(2, '0')}.ts`), CART_SOURCE)
+  git(site, ['add', '.'])
+  // An unmerged document yields a warning from semantic inspection in legacy mode and a blocking incomplete content
+  // diagnostic. Its two object ids are ordinary synthetic text; update-index changes only this disposable index.
+  const blob = git(site, ['hash-object', '-w', '--stdin'], { input: 'audience: team\n' })
+  const indexInfo = `100644 ${blob} 2\tunmerged.md\n100644 ${blob} 3\tunmerged.md\n`
+  git(site, ['update-index', '--index-info'], { input: indexInfo })
+  const cli = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
+  const run = (extra) => spawnSync(process.execPath, [cli, 'boundary', 'check', `--project-config=${configPath}`, '--staged', '--staged-only', '--actor=author', ...extra], {
+    cwd: site, encoding: 'utf8', env: { ...process.env, GIT_INDEX_FILE: path.join(site, '.git', 'index') },
+  })
+  const json = run(['--json'])
+  assert.equal(json.status, 1, `${json.stderr}\n${json.stdout}`)
+  const report = JSON.parse(json.stdout)
+  assert.ok(report.errors.some((item) => item.code === 'pre-commit-repo-unresolved'), json.stdout)
+  assert.ok(report.warnings.some((item) => item.code === 'semantic-field-scan-incomplete'), json.stdout)
+  assert.ok(report.findings.length > 50)
+  const text = run([])
+  assert.equal(text.status, 1, `${text.stderr}\n${text.stdout}`)
+  const lines = text.stdout.trim().split('\n')
+  assert.match(lines[1], /^error pre-commit-repo-unresolved: /, text.stdout)
+  const shown = lines.filter((line) => /^(error|warning) /.test(line))
+  assert.equal(shown.length, 50, text.stdout)
+  assert.ok(shown.every((line) => line.startsWith('error ')), 'blocking errors are not displaced by incomplete warnings')
   assert.ok(lines.includes(`${report.findings.length - 50} more not shown; --json lists every finding`), text.stdout)
 })

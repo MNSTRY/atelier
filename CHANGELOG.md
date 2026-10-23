@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep blocking boundary diagnostics visible before warnings, report one aggregate evidence limit, and pin path quoting in Git evidence. Staged acquisition refuses missing or incomplete repository evidence and covers type changes without rename collapse. Conservative semantic assignment detection and runner-error handling preserve classified-document deletion review.
+
 - Name the practical-judgment responsibility Phronesis, with practical judgment as its plain-language description. Existing catalog identity, English lookup alias, judgment API and skill identities remain compatible. Keep Knowledge Stewardship distinct from the shared Knowledge Graph representation; move the current guide to `docs/reference/phronesis.md`.
 
 - The boundary push check names its reason when a push's refs together exceed the evidence budget (`push-evidence-too-large`, with `limitBytes`, as when one ref's commits do), where before that refusal carried no reason. The text output of `atelier boundary check` and `atelier boundary push-check` lists a scan that could not finish (`content-scan-incomplete`, `semantic-field-scan-incomplete`, `repo-unscannable`) before the content findings and says how many findings past the first 50 it leaves out, so a long list no longer hides why a commit or push was refused. The guard documentation says the 1000-commit limit applies to each ref update and what to do with a single commit over the budget on its own.

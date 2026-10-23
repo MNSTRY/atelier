@@ -302,14 +302,16 @@ function finding({ severity = 'error', code, message, repo = null, path: itemPat
   return { severity, code, message, repo, path: itemPath, node, details }
 }
 
-// Text output lists at most this many findings. A scan that could not finish is
-// reported after the content findings it did reach, so those come first: a
-// refused commit or push always says why the check stopped. --json lists all.
+// Text output lists blocking errors before warnings, with incomplete or unresolved evidence first within each
+// severity group. The report and --json keep every finding in their original order.
 const PRINTED_FINDINGS_MAX = 50
-const INCOMPLETE_SCAN_CODES = new Set(['content-scan-incomplete', 'semantic-field-scan-incomplete', 'repo-unscannable'])
+const INCOMPLETE_SCAN_CODES = new Set(['content-scan-incomplete', 'semantic-field-scan-incomplete', 'repo-unscannable', 'pre-commit-repo-unresolved', 'push-check-repo-unresolved'])
 
 function printedFindings(findings) {
-  const ordered = [...findings.filter((item) => INCOMPLETE_SCAN_CODES.has(item.code)), ...findings.filter((item) => !INCOMPLETE_SCAN_CODES.has(item.code))]
+  const ordered = [true, false].flatMap((blocking) => {
+    const group = findings.filter((item) => (item.severity === 'error') === blocking)
+    return [...group.filter((item) => INCOMPLETE_SCAN_CODES.has(item.code)), ...group.filter((item) => !INCOMPLETE_SCAN_CODES.has(item.code))]
+  })
   return { shown: ordered.slice(0, PRINTED_FINDINGS_MAX), hidden: Math.max(0, ordered.length - PRINTED_FINDINGS_MAX) }
 }
 
@@ -433,11 +435,14 @@ function stagedPathsResult(targets, { gitExecutable = 'git' } = {}) {
   const paths = []
   const failures = []
   for (const [repo, target] of targets) {
-    if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) continue
+    if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) {
+      failures.push({ repo, reason: 'configured-path-absent-or-not-git' })
+      continue
+    }
     // NUL-separated names are exact: a quoted name could never match a forbidden-path glob.
-    const result = gitOutputResult(target.root, ['diff', '--cached', '--name-only', '-z', '--no-relative', '--diff-filter=ACMR'], { gitExecutable, indexFile: target.indexFile })
-    if (!result.ok) {
-      failures.push({ repo, reason: result.code })
+    const result = gitOutputResult(target.root, ['diff', '--cached', '--name-only', '-z', '--no-relative', '--no-renames', '--diff-filter=ACMRT'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES })
+    if (!result.ok || (result.stdout && !result.stdout.endsWith('\0'))) {
+      failures.push({ repo, reason: result.code ?? 'unterminated-staged-path-evidence' })
       continue
     }
     for (const rel of result.stdout.split('\0').filter(Boolean)) {
@@ -448,7 +453,11 @@ function stagedPathsResult(targets, { gitExecutable = 'git' } = {}) {
 }
 
 export function stagedPathsForProject(project, { gitExecutable = 'git', hookIndex = null } = {}) {
-  return stagedPathsResult(stagedTargets(project, hookIndex, gitExecutable).targets, { gitExecutable }).paths
+  const { targets, unresolved } = stagedTargets(project, hookIndex, gitExecutable)
+  const result = stagedPathsResult(targets, { gitExecutable })
+  if (unresolved) throw new Error('the committing repository could not be resolved; staged paths are incomplete')
+  if (result.failures.length) throw new Error('staged paths could not be listed completely')
+  return result.paths
 }
 
 function forbiddenPathFindings({ policy, stagedPaths }) {
@@ -485,6 +494,28 @@ export function semanticFieldOnLine(line) {
   return { field: null, value: null, raw: line.trim() }
 }
 
+// A hunk cannot establish the quote/comment state at its first line. Every literal boundary assignment therefore
+// remains a review signal, including examples inside quoted text. A plain mention is not an assignment. Keep the
+// whole suffix: trimming a partial collection or comment could misread it as the private initialization default.
+function semanticFieldsOnLine(line) {
+  const raw = String(line).trim()
+  const values = []
+  const match = raw.match(/(?:^|[^\w.])["']?(kg\.audience|audience|handling|sensitivity|data_boundary)["']?\s*:/i)
+  if (match) values.push({ field: match[1].toLowerCase().replace(/^kg\./, ''), value: unquoteValue(raw.slice(match.index + match[0].length)), raw })
+  // Complete escaped JSON keys add signals without guessing the document context or changing the legacy helper.
+  for (const escaped of raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)) {
+    if (!escaped[1].includes('\\')) continue
+    try {
+      const field = JSON.parse(escaped[1]).toLowerCase().replace(/^kg\./, '')
+      if (['audience', 'handling', 'sensitivity', 'data_boundary'].includes(field)) {
+        values.push({ field, value: unquoteValue(raw.slice(escaped.index + escaped[0].length)), raw })
+        break
+      }
+    } catch { /* Invalid quoted key text has no decoded field identity. */ }
+  }
+  return values
+}
+
 function isInitializationDefault(field, value) {
   const defaults = SEMANTIC_INITIALIZATION_DEFAULTS[field]
   return Array.isArray(defaults) && defaults.includes(value)
@@ -503,8 +534,8 @@ export function diffFileSections(diff) {
 export function semanticChangesInFile(file) {
   const changes = []
   for (const hunk of file.hunks ?? []) {
-    const pending = hunk.removed.map(semanticFieldOnLine).filter(Boolean)
-    for (const entry of hunk.added.map(semanticFieldOnLine).filter(Boolean)) {
+    const pending = hunk.removed.flatMap(semanticFieldsOnLine)
+    for (const entry of hunk.added.flatMap(semanticFieldsOnLine)) {
       const index = pending.findIndex((item) => item.field === entry.field)
       const prior = index === -1 ? null : pending.splice(index, 1)[0]
       if (prior) {
@@ -529,7 +560,7 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
       continue
     }
     // --text: a document declared binary, or holding a NUL byte, still has its fields read.
-    const result = gitOutputResult(target.root, [...canonicalDiffArgs(['--cached'], ['--text']), '--', '*.md', '*.kg.json'], { gitExecutable, indexFile: target.indexFile })
+    const result = gitOutputResult(target.root, [...canonicalDiffArgs(['--cached'], ['--text', '--no-renames']), '--', '*.md', '*.kg.json'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES })
     if (!result.ok) {
       findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
       continue
@@ -639,7 +670,7 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
   const findings = []
   let totalBytes = 0
   for (const update of updates) {
-    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, remote, gitRunner, maxBytes: CHECK_AGGREGATE_MAX_BYTES - totalBytes })
+    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, remote, gitRunner, maxBytes: CHECK_AGGREGATE_MAX_BYTES - totalBytes, aggregateLimitBytes: CHECK_AGGREGATE_MAX_BYTES })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
     // The per-commit scan reports its own budget refusal; say it once.
