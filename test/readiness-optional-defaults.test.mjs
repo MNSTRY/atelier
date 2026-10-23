@@ -237,3 +237,56 @@ test('custom-only selection keeps the existing byte-locked pack refusal before r
   assert.throws(() => loadExtensionPacks(project), /lock digest mismatch/)
   assert.equal(fs.existsSync(path.join(sample.dir, '.atelier-local', 'readiness')), false)
 })
+
+
+for (const selection of ['true', 'absent']) {
+  test(`reselecting bundled readiness through ${selection} refuses a modern opt-out lock until explicit writing`, (t) => {
+    const sample = workspace(t, { custom: true })
+    versionContent(sample)
+    successful(sample, 'lock', 'write')
+    const lockPath = path.join(sample.dir, 'atelier.lock.json')
+    const previousBytes = fs.readFileSync(lockPath, 'utf8')
+    const previous = JSON.parse(previousBytes)
+    assert.deepEqual(previous.extensionPacks.map((pack) => pack.id), ['sample.readiness'])
+    const config = read(sample.config)
+    if (selection === 'true') config.ext['mnstry.atelier'].readiness.includeBundled = true
+    else delete config.ext['mnstry.atelier'].readiness
+    write(sample.config, config)
+    const lockCheck = cli(sample, 'lock', 'check')
+    const upgrade = cli(sample, 'upgrade', '--dry-run')
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), previousBytes)
+    assert.deepEqual({ lockCheckRefused: lockCheck.status !== 0, upgradeRefused: upgrade.status !== 0 }, { lockCheckRefused: true, upgradeRefused: true })
+    assert.match(lockCheck.stdout + lockCheck.stderr, /bundled readiness pack.*selected.*not recorded/i)
+    assert.ok(JSON.parse(upgrade.stdout).blockers.some((message) => /bundled readiness pack.*selected.*not recorded/i.test(message)))
+    successful(sample, 'lock', 'write')
+    successful(sample, 'lock', 'check')
+    const selected = read(lockPath)
+    assert.ok(selected.extensionPacks.some((pack) => pack.id === 'mnstry-readiness-pack'))
+    assert.deepEqual(selected.extensionPacks.filter((pack) => pack.id !== 'mnstry-readiness-pack'), previous.extensionPacks)
+    const nextBytes = fs.readFileSync(lockPath, 'utf8')
+    assert.equal(JSON.parse(successful(sample, 'upgrade', '--dry-run').stdout).ok, true)
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), nextBytes)
+  })
+}
+
+for (const inventory of ['empty', 'absent']) {
+  test(`pre-bundle alpha.0 lock with ${inventory} pack inventory retains legacy default planning behavior`, (t) => {
+    const sample = workspace(t, { includeBundled: true })
+    versionContent(sample)
+    successful(sample, 'lock', 'write')
+    const lockPath = path.join(sample.dir, 'atelier.lock.json')
+    const previous = read(lockPath)
+    previous.package.version = '0.1.0-alpha.0'
+    if (inventory === 'empty') previous.extensionPacks = []
+    else delete previous.extensionPacks
+    write(lockPath, previous)
+    const previousBytes = fs.readFileSync(lockPath, 'utf8')
+    assert.equal(JSON.parse(successful(sample, 'upgrade', '--dry-run').stdout).ok, true)
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), previousBytes)
+    const checked = JSON.parse(cli(sample, 'lock', 'check').stdout)
+    assert.equal(checked.ok, false)
+    assert.ok(checked.errors.some((message) => /lock package version/.test(message)))
+    if (inventory === 'absent') assert.ok(checked.errors.some((message) => /extensionPacks/.test(message)))
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), previousBytes)
+  })
+}

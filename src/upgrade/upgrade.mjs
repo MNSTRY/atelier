@@ -67,9 +67,17 @@ const asArray = (value) => (Array.isArray(value) ? value : [])
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value)
 
 function bundledSelectionLockErrors(includeBundled, lock) {
-  return !includeBundled && asArray(lock?.extensionPacks).some((entry) => entry?.id === bundledMnstryReadinessPackV1.id)
-    ? ['bundled readiness pack is disabled but remains recorded in the lock; explicitly write the lock after reviewing pack selection']
-    : []
+  if (!lock) return []
+  const recorded = asArray(lock.extensionPacks).some((entry) => entry?.id === bundledMnstryReadinessPackV1.id)
+  if (recorded === includeBundled) return []
+  // The original alpha.0 writer predates bundled pack pins. Preserve its
+  // existing default upgrade path; later empty inventories can be opt-outs.
+  const legacyUnpinned = lock.package?.version === '0.1.0-alpha.0'
+    && (!Object.hasOwn(lock, 'extensionPacks') || (Array.isArray(lock.extensionPacks) && lock.extensionPacks.length === 0))
+  if (includeBundled && legacyUnpinned) return []
+  return [includeBundled
+    ? 'bundled readiness pack is selected but is not recorded in the lock; explicitly write the lock after reviewing pack selection'
+    : 'bundled readiness pack is disabled but remains recorded in the lock; explicitly write the lock after reviewing pack selection']
 }
 
 function sha256(value) {
