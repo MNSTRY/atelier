@@ -14,6 +14,7 @@
 
 - Persist personal-selection continuity across service starts. A shortened history stays refused until its removed records return or a fresh confirmation accepts it; previously observed records cannot stand in for a new confirmation. A missing checkpoint with retained private ownership evidence refuses instead of becoming a first start.
 - Initialize an undecided personal vault audience as owner only in machine settings. Explicit choices and clears keep their meaning; personal bindings permit `audience set me` and `audience clear`, and refuse custom audience lists. Initialization rereads under the same lock as setting writes so a concurrent clear stays empty.
+- Keep blocking boundary diagnostics visible before warnings, report one aggregate evidence limit, and pin path quoting in Git evidence. Staged acquisition refuses missing or incomplete repository evidence and covers type changes without rename collapse. Conservative semantic assignment detection and runner-error handling preserve classified-document deletion review. Boundary checks flush complete JSON diagnostics through pipes before returning their refusal exit code.
 
 - Name the practical-judgment responsibility Phronesis, with practical judgment as its plain-language description. Existing catalog identity, English lookup alias, judgment API and skill identities remain compatible. Keep Knowledge Stewardship distinct from the shared Knowledge Graph representation; move the current guide to `docs/reference/phronesis.md`.
 

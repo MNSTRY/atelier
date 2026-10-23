@@ -59,6 +59,13 @@ The staged guard (`atelier boundary check --staged`) inspects every staged
 `*.md` and `*.kg.json` diff for changes to boundary fields — `kg.audience`,
 `audience`, `handling`, `sensitivity`, `data_boundary`.
 
+Only a literal field assignment is a review signal; an ordinary mention such
+as a title about audience research is not. Compact JSON and escaped JSON field
+names are inspected too. A diff cannot establish the quote or comment context
+before a changed line, so an assignment written as an example still counts.
+The complete value suffix is kept; an incomplete collection or comment is not
+silently treated as a private initialization default.
+
 It distinguishes two cases:
 
 - **Initialization.** A boundary field added with no prior value, set to a
@@ -79,6 +86,14 @@ The marker must travel **in the same file's diff** as the change it approves.
 A marker committed in a sibling file, or already sitting elsewhere in a file
 that this commit does not touch, approves nothing — the guard reads the diff,
 not the working tree.
+
+Removed declarations still require review when a classified document is
+deleted, renamed or changed to another file type. Staged paths are acquired
+without folding renames, including type changes, from the index actually being
+committed. A missing configured repository, unresolved committing repository,
+failed listing or incomplete NUL-delimited listing refuses the check rather
+than yielding partial clean evidence. Git's path quoting is pinned for diff
+acquisition regardless of the repository's display configuration.
 
 ## Owner-signed operator delegation
 
@@ -282,11 +297,14 @@ machine for weeks.
   repositories alike, so nothing slips through unscanned. A ref update carrying
   more than 1000 such commits, or a push whose refs together carry more
   evidence than the aggregate budget, is refused with `content-scan-incomplete`;
-  push it in smaller parts, an earlier commit first. A single commit whose
-  evidence alone is over the budget, as a merge bringing in large changes can
-  be, cannot be split that way: merge in smaller steps, or rebase onto the
-  remote, and push again. The text output lists an incomplete scan first and
-  at most 50 findings; `--json` lists every finding. Each diff reads
+  push it in smaller parts, an earlier commit first. The aggregate counts the
+  net change and the additional evidence read from individual commits. If the
+  net change together with a commit's evidence exceeds that budget, merge in
+  smaller steps, or rebase onto the remote, and push again. `limitBytes` names
+  the full aggregate budget, including when earlier refs have used part of it.
+  The text output lists blocking errors before warnings, with incomplete or
+  unresolved evidence first within each group, and at most 50 findings;
+  `--json` lists every finding in the report's original order. Each diff reads
   what it needs, so a history that swaps large binaries back and forth makes
   the hook slow, within the commit cap and per-diff limits. The remote's
   tracking refs are found by name: a remote whose fetch refspec writes into

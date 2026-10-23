@@ -12,7 +12,9 @@ import {
   installBoundaryHooks,
   resolveCurrentActor,
   runBoundaryCheckCommand,
+  semanticFieldOnLine,
   semanticChangesInFile,
+  stagedPathsForProject,
   validateBoundaryPolicy,
 } from '../src/boundary/policy.mjs'
 import { generatedFrontmatter } from '../src/graph/knowledge-graph.mjs'
@@ -647,4 +649,118 @@ test('deleting a document with semantic fields still needs review', () => {
   git(privateRepo, ['rm', '-q', 'doc.md'])
   const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
   assert.ok(report.errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'doc.md'), JSON.stringify(report.errors))
+})
+
+test('semantic changes distinguish plain mentions from literal compact and escaped assignments without changing the legacy helper', () => {
+  const added = (line) => semanticChangesInFile({ hunks: [{ removed: [], added: [line] }] })
+  for (const line of ['Audience research: an ordinary title', 'title: "Audience research"', 'Handling advice: an ordinary paragraph', 'ordinary sensitivity prose']) {
+    assert.deepEqual(added(line), [], line)
+  }
+  const declarations = [
+    '  audience: team',
+    '{"title":"Example","audience":"team"}',
+    '{"\\u0061udience":"team"}',
+    '{"kg\\u002eaudience":"team"}',
+    'kg: { title: "Example, audience: prose", audience: team }',
+    'title: "example, audience: team"',
+    '], audience: team }',
+    '- { sensitivity: high }',
+    '!!str handling: restricted',
+    '# example audience: team',
+    'audience: private#suffix',
+    'audience: private, team',
+  ]
+  for (const line of declarations) {
+    assert.ok(added(line).length > 0, `addition: ${line}`)
+    assert.ok(semanticChangesInFile({ hunks: [{ removed: [line], added: [] }] }).length > 0, `removal: ${line}`)
+  }
+  assert.ok(semanticChangesInFile({ hunks: [{ removed: ['{"audience":"private","handling":"internal"}'], added: ['{"audience":"private","handling":"public"}'] }] }).length)
+  assert.deepEqual(added('audience: private'), [], 'only the exact fail-closed initial value needs no marker')
+  assert.deepEqual(semanticFieldOnLine('Audience research: an ordinary title'), { field: null, value: null, raw: 'Audience research: an ordinary title' })
+  assert.equal(semanticFieldOnLine('{"\\u0061udience":"team"}'), null, 'the legacy public helper keeps its historical result')
+})
+
+test('staged compact and escaped declarations require review on addition, edit and deletion', (t) => {
+  const { root, project: cfg, policy, privateRepo } = makeWorkspace()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+  writeDoc(privateRepo, 'seed.md', 'mnstry-private-author:seed', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-qm', 'synthetic baseline'])
+  const file = path.join(privateRepo, 'fragment.kg.json')
+  for (const line of ['{"title":"Example","audience":"team"}', '{"\\u0061udience":"team"}', 'kg: { sensitivity: high }']) {
+    fs.writeFileSync(file, `${line}\n`)
+    git(privateRepo, ['add', '.'])
+    const checked = () => checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+    assert.ok(checked().errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'fragment.kg.json'), `addition: ${line}`)
+    git(privateRepo, ['commit', '-qm', 'synthetic declaration'])
+    fs.writeFileSync(file, `${line.replace(/team|high/g, 'private')}\n`)
+    git(privateRepo, ['add', '.'])
+    assert.ok(checked().errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'fragment.kg.json'), `edit: ${line}`)
+    git(privateRepo, ['reset', '--quiet', 'HEAD', '--', 'fragment.kg.json'])
+    fs.rmSync(file)
+    git(privateRepo, ['add', '-A'])
+    assert.ok(checked().errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'fragment.kg.json'), `deletion: ${line}`)
+    git(privateRepo, ['commit', '-qm', 'synthetic removal'])
+  }
+})
+
+test('staged path acquisition refuses absent repos and an unresolved committing index instead of returning partial paths', (t) => {
+  const { root, project: cfg, policy, privateRepo } = makeWorkspace()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+  const missing = { ...cfg, repos: [{ ...cfg.repos[0], path: path.join(root, 'absent') }] }
+  assert.throws(() => stagedPathsForProject(missing), /could not be listed completely/)
+  const report = checkBoundaryPolicy({ project: missing, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.code === 'repo-unscannable' && item.message.includes('configured-path-absent-or-not-git')))
+  writeDoc(privateRepo, 'seed.md', 'mnstry-private-author:seed', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-qm', 'synthetic baseline'])
+  const hookIndex = { workTree: path.join(root, 'undeclared'), commonDir: path.join(root, 'unrelated.git'), indexFile: path.join(privateRepo, '.git', 'index') }
+  assert.throws(() => stagedPathsForProject(cfg, { hookIndex }), /committing repository could not be resolved/)
+  assert.ok(checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true, hookIndex }).errors.some((item) => item.code === 'pre-commit-repo-unresolved'))
+})
+
+test('staged paths require complete NUL evidence and retain the temporary committing index', { skip: process.platform === 'win32' && 'POSIX Git wrapper' }, (t) => {
+  const { root, project: cfg, policy, privateRepo } = makeWorkspace()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+  writeDoc(privateRepo, 'seed.md', 'mnstry-private-author:seed', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-qm', 'synthetic baseline'])
+  const wrapper = path.join(root, 'git-incomplete-list')
+  fs.writeFileSync(wrapper, '#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = "--name-only" ]; then printf incomplete.md; exit 0; fi; done\nexec git "$@"\n')
+  fs.chmodSync(wrapper, 0o755)
+  assert.throws(() => stagedPathsForProject(cfg, { gitExecutable: wrapper }), /could not be listed completely/)
+  assert.ok(checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true, gitExecutable: wrapper }).errors.some((item) => item.code === 'repo-unscannable' && item.message.includes('unterminated-staged-path-evidence')))
+
+  const indexFile = path.join(root, 'temporary-index')
+  fs.copyFileSync(path.join(privateRepo, '.git', 'index'), indexFile)
+  writeDoc(privateRepo, 'queued.md', 'mnstry-private-author:queued', 'team')
+  execFileSync('git', ['-C', privateRepo, 'add', 'queued.md'], { env: { ...process.env, GIT_INDEX_FILE: indexFile } })
+  assert.equal(stagedPathsForProject(cfg).some((item) => item.path === 'queued.md'), false, 'the ordinary index is unchanged')
+  const hookIndex = { workTree: fs.realpathSync.native(privateRepo), commonDir: fs.realpathSync.native(path.join(privateRepo, '.git')), indexFile }
+  assert.ok(stagedPathsForProject(cfg, { hookIndex }).some((item) => item.path === 'queued.md'))
+  assert.ok(checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true, hookIndex }).errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'queued.md'))
+})
+
+test('rename and type-change acquisition preserve forbidden-path and removed-classification review', { skip: process.platform === 'win32' && 'symbolic links' }, (t) => {
+  const { root, project: cfg, policy, privateRepo } = makeWorkspace()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+  writeDoc(privateRepo, 'classified.md', 'mnstry-private-author:classified', 'sensitive')
+  fs.mkdirSync(path.join(privateRepo, 'transcripts'))
+  fs.writeFileSync(path.join(privateRepo, 'transcripts', 'kept.txt'), 'invented text\n')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-qm', 'synthetic baseline'])
+  git(privateRepo, ['mv', 'classified.md', 'renamed.md'])
+  git(privateRepo, ['config', 'diff.renames', 'copies'])
+  let report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'classified.md'), 'rename still reviews the removed classification')
+  git(privateRepo, ['reset', '--hard', '--quiet', 'HEAD'])
+  fs.rmSync(path.join(privateRepo, 'classified.md'))
+  fs.symlinkSync('target.txt', path.join(privateRepo, 'classified.md'))
+  fs.rmSync(path.join(privateRepo, 'transcripts', 'kept.txt'))
+  fs.symlinkSync('../target.txt', path.join(privateRepo, 'transcripts', 'kept.txt'))
+  git(privateRepo, ['add', '-A'])
+  report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(stagedPathsForProject(cfg).some((item) => item.path === 'transcripts/kept.txt'), 'type changes belong to the staged path evidence')
+  assert.ok(report.errors.some((item) => item.code === 'forbidden-path-staged' && item.path === 'transcripts/kept.txt'))
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'classified.md'), 'type change still reviews removed classification')
 })
