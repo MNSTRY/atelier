@@ -10,6 +10,10 @@
 - Cover the Astro presentation example in weekly dependency updates. Update Astro to 7.3.8 and refresh its locked sharp and HTTP cache-semantics dependencies to their patched releases.
 
 - Event-loop benchmark results record the host logical CPU count and the one-, five- and fifteen-minute load averages at the start and end, including failed runs, so responsiveness evidence can be read with its host conditions.
+- Keep all enrolled repository roots outside private service state when locating a personal workspace. Login-item removal and uninstall can retain their off choice before any generation is confirmed, and report the actual kept workspace pointer. Clarify which generation reads and assembly still run on the caller thread.
+
+- Persist personal-selection continuity across service starts. A shortened history stays refused until its removed records return or a fresh confirmation accepts it; previously observed records cannot stand in for a new confirmation. A missing checkpoint with retained private ownership evidence refuses instead of becoming a first start.
+- Initialize an undecided personal vault audience as owner only in machine settings. Explicit choices and clears keep their meaning; personal bindings permit `audience set me` and `audience clear`, and refuse custom audience lists. Initialization rereads under the same lock as setting writes so a concurrent clear stays empty.
 
 - Name the practical-judgment responsibility Phronesis, with practical judgment as its plain-language description. Existing catalog identity, English lookup alias, judgment API and skill identities remain compatible. Keep Knowledge Stewardship distinct from the shared Knowledge Graph representation; move the current guide to `docs/reference/phronesis.md`.
 

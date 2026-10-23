@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { LOCAL_STATE_DIR, localStateRoot } from '../../project/config.mjs'
+import { withPrivateLock } from '../../project/durable-state.mjs'
 import { checkManagedRoots } from '../../project/file-class.mjs'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow } from '../../project/private-state.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract } from '../../projection/obsidian/contracts.mjs'
@@ -260,6 +261,18 @@ export function defaultMachineSettings({ workspaceId, updatedAt }) {
   }
 }
 
+// The already adopted owner-only audience for a personal binding, recorded in the same machine setting an ordinary
+// workspace uses. Existing explicit decisions keep their exact list and unclassified choice; a clear stays empty.
+export function ownerOnlyPersonalSettings(settings, { decidedAt }) {
+  const decision = settings.decisions.audience
+  if (decision === null && settings.audienceAllow.length === 0) {
+    return withDecision({ ...settings, audienceAllow: [...ONLY_YOU_AUDIENCES], updatedAt: decidedAt }, 'audience',
+      { choice: 'only-you', unclassified: 'shown' }, { decidedAt, via: 'defaults' })
+  }
+  if (decision?.choice === 'only-you' || (decision?.choice === 'custom' && settings.audienceAllow.length === 0)) return settings
+  refuse('personal-binding-owner-only', 'a personal workspace vault is owner only; select `audience set me` or clear its audience before publishing')
+}
+
 // The settings with one decision recorded, validated; nothing is written. `decision` holds the decision's own members
 // (`{ choice, unclassified }`, `{ parent }`, `{ choice }`); the stamp says when, by whom (an identifier, or null when not
 // known) and how.
@@ -278,13 +291,36 @@ export function readMachineSettings({ workspaceRoot, workspaceId }) {
   return document === null ? null : normalizeMachineSettings(document, workspaceId)
 }
 
-// Writes v2, whatever version it is handed, and returns what it wrote.
-export function writeMachineSettings({ workspaceRoot, workspaceId, settings, repositoryRoots }) {
-  const document = normalizeMachineSettings(settings, workspaceId)
+function withMachineSettingsWriteLock({ workspaceRoot, repositoryRoots }, operation) {
   assertOutsideRepositories({ managedRoot: workspaceRoot, repositoryRoots })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
+  return withPrivateLock(path.join(settingsDirectory(workspaceRoot), 'machine-settings.lock'), operation)
+}
+
+function writeMachineSettingsUnlocked({ workspaceRoot, document }) {
   atomicReplacePrivateText(path.join(settingsDirectory(workspaceRoot), 'machine.json'), canonicalJson(document))
   return document
+}
+
+// Writes v2, whatever version it is handed, and returns what it wrote. Commands and initialization share this lock.
+export function writeMachineSettings({ workspaceRoot, workspaceId, settings, repositoryRoots }) {
+  const document = normalizeMachineSettings(settings, workspaceId)
+  return withMachineSettingsWriteLock({ workspaceRoot, repositoryRoots }, () => writeMachineSettingsUnlocked({ workspaceRoot, document }))
+}
+
+// Read-only when already decided. If initialization is needed, reread under the write lock so a committed clear wins.
+export function initializeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, updatedAt, personal = false }) {
+  const initialized = (current) => {
+    const initial = current ?? defaultMachineSettings({ workspaceId, updatedAt })
+    return personal ? ownerOnlyPersonalSettings(initial, { decidedAt: updatedAt }) : initial
+  }
+  const existing = readMachineSettings({ workspaceRoot, workspaceId })
+  if (initialized(existing) === existing) return existing
+  return withMachineSettingsWriteLock({ workspaceRoot, repositoryRoots }, () => {
+    const current = readMachineSettings({ workspaceRoot, workspaceId })
+    const document = normalizeMachineSettings(initialized(current), workspaceId)
+    return document === current ? current : writeMachineSettingsUnlocked({ workspaceRoot, document })
+  })
 }
 
 // ---------------------------------------------------------------------------

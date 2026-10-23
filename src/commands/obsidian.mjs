@@ -17,7 +17,7 @@ import { BUILT_IN_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createObsidianRegistr
 import { LIFECYCLE_PRIMITIVES, readServiceStatusDocument, requestServiceTick, runtimeRelease, serviceStatus, startService, stopService } from '../runtime/obsidian/lifecycle.mjs'
 import {
   DECISIONS, ONLY_YOU_AUDIENCES, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, localPointerPath, protectedRoots,
-  readInstalledApplyPolicy, readMachineSettings, revokeApplyPolicy, withDecision, writeMachineSettings,
+  readInstalledApplyPolicy, readLocalPointer, readMachineSettings, revokeApplyPolicy, withDecision, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
 import {
   currentLoginItemPlan, installLoginItem, loginItemDataRoot, loginItemLabel, loginItemStarter, loginItemStatus, planLoginItem, projectNameOf, readLoginItemRecord, realNodePath,
@@ -115,7 +115,7 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
 workspace (the personal-workspace module's selection); its views come from the overlay. Nothing here confirms one: while
 none is confirmed and current nothing is published, and status, open and service start refuse with the reason. service
 status and stop, unit --remove and uninstall find the service from the home alone. Who may see its vaults stays this
-machine's audience setting, none by default.
+machine's audience setting: owner only when undecided; an explicit clear stays empty.
 Reaching the installed app needs --adapter=${PRODUCTION_ADAPTER} once for a workspace; it is remembered after that.
 Obsidian's own settings file (obsidian.json) is written only while no Obsidian runs: open adds the view's vault to its
 list, turns its command line on (cli: true), and creates the file for an Obsidian that never started; every write is
@@ -383,7 +383,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const personalHome = flags['personal-home'] === undefined ? null : path.resolve(cwd, flags['personal-home'])
     if (personalHome !== null && configFlag !== undefined) refuse('usage', '--personal-home is given instead of --project, not with it')
     const selection = personalHome === null ? null : await import('../runtime/obsidian/personal-selection.mjs')
-    const loadProject = options.loadProject ?? (selection !== null ? () => selection.loadSelectedProject({ personalHome }) : () => resolveProjectConfig({ argv: configFlag === undefined ? [] : [`--project=${path.resolve(cwd, configFlag)}`], cwd, env, writeLocalState: false }))
+    const loadProject = options.loadProject ?? (selection !== null ? () => selection.loadSelectedProject({ personalHome, dataRoot, env, platform }) : () => resolveProjectConfig({ argv: configFlag === undefined ? [] : [`--project=${path.resolve(cwd, configFlag)}`], cwd, env, writeLocalState: false }))
     const locateProject = selection === null ? null : () => selection.locatePersonalHome({ personalHome })
     const registry = createObsidianRegistry({ reservedOperations: BUILT_IN_OPERATIONS, contributions: contributions ?? await loadContributions(contributionsDirectory === undefined ? {} : { directory: contributionsDirectory }) })
     const applyAvailable = registry.extensions.applyOperation() !== UNAVAILABLE_APPLY_OPERATION
@@ -470,8 +470,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const pluginOf = async (scopeId) => pluginPresenceOf((await readServiceStatusDocument(lifecycle, lifecycleRules)).document, scopeId)
     const pluginLine = (plugin) => `${plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : plugin.reason === 'turned-off-in-this-vault' ? '; plugin turned off in this vault' : `; plugin not present (${plugin.reason})`}${plugin.files === 'waits-for-app' ? '; plugin files wait for the app' : ''}`
 
-    // A project bound to a personal workspace takes its views from the overlay, and has no place for these decisions
-    // yet: the operations that would write them refuse before anything is resolved or written.
+    // A personal binding takes its views from the overlay and keeps its audience owner only (or explicitly empty).
+    // Operations outside those machine decisions refuse before anything is resolved or written.
     const refuseOnPersonalBinding = async (project, operation) => (await import('../projection/obsidian/personal-workspace.mjs')).refuseOnPersonalBinding(project, operation)
     const configured = () => {
       const project = loadProject()
@@ -632,7 +632,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const removed = await removeLoginItem({ loadProject: locateProject ?? loadProject, dataRoot, env, platform, manager, clock })
       const failed = removed.removed !== true && removed.reason !== undefined && removed.reason !== 'workspace-not-prepared'
       if (failed) return { exit: EXIT.notSuccess, document: { loginItem: removed }, human: [`login item not removed: ${removed.reason}${removed.message ? ` (${removed.message})` : ''}`, `Next: ${NEXT[removed.reason] ?? 'see `atelier obsidian status`'}`] }
-      const remembered = removed.reason === 'workspace-not-prepared' ? false : rememberLoginItem('off')
+      const remembered = removed.reason === 'workspace-not-prepared' ? false : rememberLoginItem('off', { locate: true })
       let service = null
       if (removed.removed === true) {
         let entry = null
@@ -657,9 +657,18 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // The person's answer to "start at login?", remembered for this workspace as the `loginItem` decision of its machine
     // settings, given on the command line. By whom: the actor named, else a person at a terminal by the account's name,
     // else nobody known. Answers whether it wrote; an answer already remembered is not written again.
-    const rememberLoginItem = (choice) => {
-      if (readable().enablement.reason === 'not-configured') return false
-      const { workspace, repositoryRoots, now } = writable()
+    const rememberLoginItem = (choice, { locate = false } = {}) => {
+      let workspace, repositoryRoots, now
+      if (locate && locateProject !== null) {
+        const project = locateProject()
+        workspace = resolveServiceWorkspace({ project, dataRoot, env, platform })
+        if (!workspace?.workspaceRoot) return false
+        repositoryRoots = protectedRoots(project)
+        now = isoTime(clock)
+      } else {
+        if (readable().enablement.reason === 'not-configured') return false
+        ;({ workspace, repositoryRoots, now } = writable())
+      }
       const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
       if (current.decisions.loginItem?.choice === choice) return false
       const decidedBy = flags['consent-actor'] ?? (interactive ? accountActor(account()) : null)
@@ -693,7 +702,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       }
       const vaults = [...new Set([...underDataRoot, ...allocated])].sort()
       const userDataDir = obsidianUserDataDir({ platform, env })
-      return { vaults, privateState: workspace?.workspaceRoot ?? null, projectFile: project.configPath ?? null, pointer: project.configPath ? localPointerPath(project) : null, obsidianList: userDataDir === null ? null : path.join(userDataDir, OBSIDIAN_SETTINGS_FILE) }
+      return { vaults, privateState: workspace?.workspaceRoot ?? null, projectFile: project.configPath ?? null, pointer: typeof project.configDir === 'string' && readLocalPointer(project) !== null ? localPointerPath(project) : null, obsidianList: userDataDir === null ? null : path.join(userDataDir, OBSIDIAN_SETTINGS_FILE) }
     }
 
     // Where a view's vault is, or will be: { path, origin }. A view the next tick will place is shown where it would go,
@@ -901,7 +910,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         // `me` stands for "only you". Named beside other audiences, it adds its own to theirs, and the list is the person's own choice.
         const audienceAllow = [...new Set(named.flatMap((item) => (item === 'me' ? ONLY_YOU_AUDIENCES : [item])))]
         const choice = named.length === 1 && named[0] === 'me' ? 'only-you' : 'custom'
-        await refuseOnPersonalBinding(loadProject(), `audience ${sub}`)
+        await refuseOnPersonalBinding(loadProject(), choice === 'only-you' ? 'audience set me' : `audience ${sub}`)
         const { workspace, repositoryRoots, now } = writable()
         const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
         // A vault that is only yours shows the notes that carry no classification too; any other list withholds them.
@@ -1099,7 +1108,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const service = workspace === null ? { state: 'stopped', stopped: false, refused: false, reason: 'workspace-not-prepared' } : await stopService(lifecycle, lifecycleRules)
         const itemGone = item.removed === true || item.reason === 'not-installed' || item.reason === 'workspace-not-prepared'
         const serviceGone = service.stopped === true || service.state === 'stopped'
-        const remembered = workspace !== null && itemGone ? rememberLoginItem('off') : false
+        const remembered = workspace !== null && itemGone ? rememberLoginItem('off', { locate: true }) : false
         return {
           exit: itemGone && serviceGone ? EXIT.ok : EXIT.notSuccess,
           document: { loginItem: item, service, kept, rememberedNow: { loginItem: remembered ? 'off' : null } },
@@ -1111,6 +1120,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             ...kept.vaults.map((vault) => `  vault           ${vault}`),
             ...(kept.privateState === null ? [] : [`  private state   ${kept.privateState}`]),
             `  project file    ${kept.projectFile ?? '(none)'}; its Obsidian settings stay`,
+            ...(kept.pointer === null ? [] : [`  workspace pointer ${kept.pointer}`]),
             ...(kept.obsidianList === null ? [] : [`  Obsidian's list ${kept.obsidianList}; the vaults stay in it`]),
           ],
         }

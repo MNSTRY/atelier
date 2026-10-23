@@ -1,8 +1,12 @@
+import fs from 'node:fs'
 import path from 'node:path'
-import { PersonalWorkspaceRefusal, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
+import { PersonalWorkspaceRefusal } from '@mnstry/atelier/personal-workspace'
 import { ensureLocalState } from '@mnstry/atelier/project'
 import { assertPersonalSelection, loadBoundProject, loadBoundProjectOffThread, notePersonalSelectionHead, personalSelectionOf, pinPersonalSelection } from '../../projection/obsidian/personal-workspace.mjs'
 import { refuse } from './errors.mjs'
+import { readPersonalSelectionSnapshot } from '../../personal-workspace/selection.mjs'
+import { assertOutsideRepositories, ensureWorkspaceIdentity, resolveDataRoot, workspaceStateRoot } from './machine-settings.mjs'
+import { createSelectionContinuity } from './selection-continuity.mjs'
 
 // A person's confirmed selection, bound to the maintenance runtime.
 //
@@ -42,21 +46,19 @@ import { refuse } from './errors.mjs'
 // already loaded, and a read the engine asks for when its guard stops a view
 // because an observed file changed or could not be read (once for views
 // stopped one after another). A
-// history that ends earlier than the highest record noted refuses
-// `selection-history-shortened` at a load and at a recheck, and nothing is
-// loaded or used from it while it is shorter; the guard's read only notes, and
+// history that ends earlier than the highest record noted requires a fresh confirmation or refuses
+// `selection-history-shortened` at a load and at a recheck; the guard's read only notes, and
 // its view says `mixed-read`. An engine whose project is pinned below the
 // highest record noted loads it again at its next tick
 // (personalSelectionBehind). A record added and removed between two of those
 // reads was never read, and does not count.
 //
-// Only the record number is kept, and only in this process. A record in a
-// place already read, with other content, is read as a confirmation. A process
-// started after the cut reads the history as it then stands and publishes what
-// it ends with: starting the service again accepts the shorter history, and so
-// does any start of it (a login, a restart after an upgrade or a failure).
+// The highest number, accepted head and observed record identities are also kept in the workspace's private
+// continuity state. A start of the service reads that evidence too. A shorter history remains refused until the
+// removed records return or the person makes a fresh confirmation. New confirmations have a unique identity, so
+// confirming the same generation against the same predecessor is distinct from restoring an old record's bytes.
 //
-// Who may see a vault is not decided here: that stays the machine's setting.
+// Who may see a vault stays the machine's setting: the engine initializes an undecided personal binding as owner only.
 //
 // Where the workspace is does not wait for a load: a bound project's folder is
 // its private home, so the home alone locates it (locatePersonalHome). A
@@ -78,30 +80,77 @@ export const SELECTION_PRIMITIVES = Object.freeze({
 const SOURCE = Object.freeze({ source: 'personal-workspace' })
 const LOCATED = Symbol('atelier.obsidian.located-personal-home')
 
-// The record the history ends with. A history without one refuses, and so does one shorter than this process read it.
-function confirmedHead(personalHome, rules) {
+const CONTINUITY = new Map()
+
+// Exclusion roots only, shared by location and continuity. Composition remains
+// the authority for the manifest and generation. Never wait on an irregular
+// file while resolving the machine's private state.
+function manifestExclusionRoots(personalHome) {
+  let manifest
+  let descriptor
+  try {
+    descriptor = fs.openSync(path.join(personalHome, 'atelier.personal.json'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0))
+    const stat = fs.fstatSync(descriptor)
+    if (!stat.isFile() || stat.size > 1024 * 1024) throw new PersonalWorkspaceRefusal('malformed-input')
+    const bytes = fs.readFileSync(descriptor)
+    if (bytes.length > 1024 * 1024) throw new PersonalWorkspaceRefusal('malformed-input')
+    try { manifest = JSON.parse(bytes) } catch { throw new PersonalWorkspaceRefusal('malformed-input') }
+    if (!Array.isArray(manifest?.repos) || manifest.repos.some((repo) => typeof repo?.root !== 'string' || !path.isAbsolute(repo.root) || repo.root.includes('\0'))) throw new PersonalWorkspaceRefusal('malformed-input')
+  } catch (error) {
+    refuse(error instanceof PersonalWorkspaceRefusal ? error.code : 'personal-home-unavailable', 'the personal workspace manifest could not be read; no selection is loaded', SOURCE)
+  } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
+  return manifest.repos.map((repo) => repo.root)
+}
+
+function continuityFor({ personalHome, dataRoot, env = process.env, platform = process.platform }) {
+  const project = locatePersonalHome({ personalHome })
+  const pointer = ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }) })
+  const root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId)
+  assertOutsideRepositories({ managedRoot: root, repositoryRoots: [personalHome, ...project.repos.map((repo) => repo.path)] })
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 })
+  const workspaceRoot = fs.realpathSync(root)
+  const key = `${personalHome}\0${workspaceRoot}`
+  if (!CONTINUITY.has(key)) CONTINUITY.set(key, createSelectionContinuity({ workspaceRoot, workspaceId: pointer.workspaceId, personalHome }))
+  return CONTINUITY.get(key)
+}
+
+function confirmedHead(options, rules) {
+  const { personalHome } = options
+  locatePersonalHome({ personalHome })
   let head
-  try { head = readPersonalSelectionHead({ personalHome }) } catch (error) {
+  try { head = readPersonalSelectionSnapshot({ personalHome }) } catch (error) {
     if (!(error instanceof PersonalWorkspaceRefusal)) throw error
     refuse(error.code, 'the selection history of the personal workspace could not be read; nothing is loaded from it', SOURCE)
   }
-  notePersonalSelectionHead(personalHome, head, rules)
+  const continuity = continuityFor(options)
+  const note = (current) => { if (rules.refusesShortened) continuity.note(current) }
+  notePersonalSelectionHead(personalHome, head, { ...rules, note })
   if (head.selected === null) refuse('nothing-selected', 'no generation of the personal workspace is confirmed; nothing is loaded until one is', SOURCE)
-  return head
+  return { head, note }
 }
 
-function pinned(project, head, rules) {
-  pinPersonalSelection(project, head, { ...rules.pin, refusesShortened: rules.refusesShortened })
+function pinned(project, { head, note }, rules) {
+  pinPersonalSelection(project, head, { ...rules.pin, refusesShortened: rules.refusesShortened, note })
   if (rules.readsHeadAgain) assertPersonalSelection(project)
   return project
 }
 
 // What the workspace of a bound personal home is resolved from, without loading anything: a project that holds the home
-// as its folder and nothing else, as a bound project's folder is. Its pointer is under the home, the data root is the
-// pointer's or the caller's, and a home is outside every Git worktree. Synchronous; nothing is composed.
+// as its folder, plus the manifest's repository roots for exclusion only. A locator never admits a generation or
+// notes a history head. Its pointer is under the home, the data root is the pointer's or the caller's, and a home is
+// outside every Git worktree. Synchronous; nothing is composed. A missing home still locates no prepared workspace.
 export function locatePersonalHome({ personalHome } = {}) {
   if (typeof personalHome !== 'string' || !path.isAbsolute(personalHome) || path.resolve(personalHome) !== personalHome) refuse('path-not-absolute', 'a personal home is named by its absolute path', SOURCE)
-  const located = { configDir: personalHome, [LOCATED]: personalHome }
+  let stat = null
+  try { stat = fs.lstatSync(personalHome) } catch (error) { if (error.code !== 'ENOENT') refuse('personal-home-unavailable', 'the personal home could not be inspected', SOURCE) }
+  if (stat !== null) {
+    if (stat.isSymbolicLink() || !stat.isDirectory() || fs.realpathSync(personalHome) !== personalHome) refuse('root-symlinked', 'a personal home is its private directory, not a link', SOURCE)
+    if (typeof process.getuid !== 'function' || stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0) refuse('not-private-location', 'a personal home is private to its owner', SOURCE)
+  }
+  // Include all declared roots, even a withdrawn enrollment: locating state
+  // must not write into a repository while composition is unavailable.
+  const roots = stat === null ? [] : manifestExclusionRoots(personalHome)
+  const located = { configDir: personalHome, repos: roots.map((root) => ({ path: root, external: false })), [LOCATED]: personalHome }
   located.localState = ensureLocalState(located, { write: false, env: { PATH: process.env.PATH } })
   return located
 }
@@ -113,13 +162,15 @@ export { personalSelectionOf }
 
 // The project of the confirmed selection, for a loader that may block (a command run once). `bind` and `rules` are
 // test seams.
-export function loadSelectedProject({ personalHome } = {}, { bind, rules = SELECTION_PRIMITIVES } = {}) {
-  const head = confirmedHead(personalHome, rules)
-  return pinned(loadBoundProject({ personalHome, generationId: head.selected }, { bind }), head, rules)
+export function loadSelectedProject(options = {}, { bind, rules = SELECTION_PRIMITIVES } = {}) {
+  const { personalHome } = options
+  const selected = confirmedHead(options, rules)
+  return pinned(loadBoundProject({ personalHome, generationId: selected.head.selected }, { bind }), selected, rules)
 }
 
 // The same, for a loader on a service's event loop: the composition runs in a worker, and the engine awaits it.
-export async function loadSelectedProjectOffThread({ personalHome } = {}, { bind, rules = SELECTION_PRIMITIVES } = {}) {
-  const head = confirmedHead(personalHome, rules)
-  return pinned(await loadBoundProjectOffThread({ personalHome, generationId: head.selected }, { bind }), head, rules)
+export async function loadSelectedProjectOffThread(options = {}, { bind, rules = SELECTION_PRIMITIVES } = {}) {
+  const { personalHome } = options
+  const selected = confirmedHead(options, rules)
+  return pinned(await loadBoundProjectOffThread({ personalHome, generationId: selected.head.selected }, { bind }), selected, rules)
 }

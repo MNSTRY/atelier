@@ -19,6 +19,7 @@ const MAX_RECORD = 1024 * 1024
 const MAX_GENERATION_FILE = 8 * 1024 * 1024
 const MAX_RESTORE_RECORD = 4 * MAX_RECORD
 const ID = /^[0-9a-f]{64}$/
+const CONFIRMATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 // Every temporary name this module writes, including restore aside copies
 // (.restore-<uuid>-aside-<key>.json).
 const TEMPORARY = /^\.(selection|restore|validate)-[0-9a-f-]{36}(-[a-z]+)*\.json$/
@@ -136,7 +137,7 @@ function readHistory(personalHome) {
     let record
     try { record = JSON.parse(bytes) } catch { refuse('selection-history-corrupt') }
     if (record?.schema !== SELECTION_SCHEMA || record.sequence !== index + 1 || record.previous !== head || !ID.test(record.generationId ?? '') ||
-      canonical(record) !== bytes.toString('utf8')) refuse('selection-history-corrupt')
+      (record.confirmationId !== undefined && !CONFIRMATION_ID.test(record.confirmationId)) || canonical(record) !== bytes.toString('utf8')) refuse('selection-history-corrupt')
     records.push(record)
     head = hash(bytes)
     files.push({ name, bytes: bytes.length, digest: head })
@@ -163,7 +164,7 @@ export function selectPersonalGeneration(options) {
     const { eligible, reason } = eligibility(personalHome, generationId)
     if (!eligible) refuse(reason)
     const dir = privateDir(personalHome, 'selections', true)
-    const record = { schema: SELECTION_SCHEMA, sequence: records.length + 1, previous: head, generationId }
+    const record = { schema: SELECTION_SCHEMA, sequence: records.length + 1, previous: head, generationId, confirmationId: randomUUID() }
     const content = canonical(record)
     try { publishExclusive(dir, `${String(record.sequence).padStart(6, '0')}.json`, content, 'selection') }
     catch (error) { if (error.code === 'EEXIST') refuse('selection-concurrent'); throw error }
@@ -195,6 +196,20 @@ export function readPersonalSelectionHead(options) {
     const { records, head } = readHistory(personalHome)
     const current = records.at(-1) ?? null
     return freeze({ selected: current?.generationId ?? null, sequence: current?.sequence ?? 0, head })
+  }, 'personal-home-unavailable')
+}
+
+// Package-internal snapshot for a host that keeps continuity across starts. The public head reader keeps its exact
+// result. These identities come from the same verified history read, including every previously confirmed prefix.
+export function readPersonalSelectionSnapshot(options) {
+  return safe(() => {
+    const { personalHome } = options ?? {}
+    privateHome(personalHome)
+    const { records, files, head } = readHistory(personalHome)
+    const current = records.at(-1) ?? null
+    return freeze({ selected: current?.generationId ?? null, sequence: current?.sequence ?? 0, head,
+      confirmationId: current?.confirmationId ?? null, recordDigests: files.map((file) => file.digest),
+      confirmationIds: records.flatMap((record) => record.confirmationId === undefined ? [] : [record.confirmationId]) })
   }, 'personal-home-unavailable')
 }
 
