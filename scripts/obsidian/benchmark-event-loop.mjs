@@ -4,6 +4,7 @@ import childProcess from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { cpus, loadavg } from 'node:os'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { createEventLoopCorpus, createTransitionDriver, initializeTransitionRepositories, TRANSITION_SCENARIOS } from '../../test/helpers/obsidian-event-loop-corpus.mjs'
@@ -314,7 +315,7 @@ async function controller() {
   if (scenario !== 'publication' && !TRANSITION_SCENARIOS.includes(scenario) && !SECOND_TICK_SCENARIOS.includes(scenario)) throw new TypeError('unknown scenario')
   if (scenario === 'observe-16' && notes < 17) throw new TypeError('observe-16 needs at least17 invented notes')
   if (output && fs.existsSync(output)) throw new Error('measurement output already exists; preserve it and choose a fresh result path')
-  const result = { kind: 'production-service-event-loop-measurement', scenario, node: process.version, notes, scopes, source: sourcePin(), status: 'failed', events: [], probes: [], cleanup: null }
+  const result = { kind: 'production-service-event-loop-measurement', scenario, node: process.version, notes, scopes, source: sourcePin(), hostLoad: { logicalCpuCount: cpus().length, startedAt: new Date().toISOString(), loadAverageAtStart: loadavg() }, status: 'failed', events: [], probes: [], cleanup: null }
   let corpus = null, child = null, probeLoop = null, probing = true, interrupted = false
   // When the health request under way was sent, or null between two requests.
   let probeSentAt = null
@@ -432,6 +433,8 @@ async function controller() {
     }
     for (const signal of ['SIGINT', 'SIGTERM']) process.off(signal, interrupt)
     result.elapsedMs = epochMs() - startedMs
+    result.hostLoad.endedAt = new Date().toISOString()
+    result.hostLoad.loadAverageAtEnd = loadavg()
   }
   const text = `${JSON.stringify(result, null, 2)}\n`
   if (output) fs.writeFileSync(output, text, { flag: 'wx', mode: 0o600 })
