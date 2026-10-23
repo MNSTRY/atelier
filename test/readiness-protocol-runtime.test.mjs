@@ -68,6 +68,7 @@ function syntheticRun(project, { createdAt, label = 'Synthetic actor', complete 
     displayName: label,
     ...(complete ? { localId: 'synthetic-actor', role: 'operator', sourceRef: 'source:readiness-notes', runtimeOwner: 'identity', ownerRationale: 'Owns the synthetic review.' } : {}),
   }] }
+  if (!complete) answers['actors[].localId'] = ''
   return buildReadinessRun({ project, protocol: protocolById('mnstry.readiness:identity-map'), answers, createdAt })
 }
 
@@ -89,6 +90,7 @@ test('journey and tenant packet choose creation time when generated run hashes s
   const [older, newer] = pair
   assert.equal(older.status, 'review-needed')
   assert.equal(newer.status, 'draft')
+  assert.ok(newer.blockers.includes('missing-answer:actors[].localId'))
   writeReadinessRun(project, newer)
   writeReadinessRun(project, older)
   const listed = listProtocolRuns(project)
@@ -319,7 +321,11 @@ test('extension-pack journey and packet contribution use the same chronological 
   const { project, registry } = packProject(t)
   const protocol = registry.protocolById(PACK_PROTOCOL_ID)
   const older = buildReadinessRun({ project, protocol, answers: packAnswers, createdAt: '2026-01-01T00:00:00Z' })
-  const newer = buildReadinessRun({ project, protocol, answers: {}, createdAt: '2026-01-02T00:00:00Z' })
+  const newer = buildReadinessRun({ project, protocol, answers: { scope: {} }, createdAt: '2026-01-02T00:00:00Z' })
+  assert.equal(older.status, 'review-needed')
+  assert.equal(newer.status, 'draft')
+  assert.ok(newer.blockers.includes('missing-answer:scope.name'))
+  assert.ok(newer.blockers.includes('missing-answer:scope.sourceRef'))
   for (const runs of [[newer, older], [older, newer]]) {
     assert.equal(summarizeReadinessJourney(project, { runs, registry }).packDimensions[0].status, 'draft')
     const packet = buildTenantPacket(project, { runs, registry })

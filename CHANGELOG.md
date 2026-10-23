@@ -7,7 +7,7 @@
 - Order journey runs by their validated creation instant, with run identity as the deterministic tie-break. Latest-per-protocol summaries and tenant packets share that rule; malformed times refuse rather than inherit hash-filename order. Clarify that a review-workspace decision concerns its run claims and source linkage alone does not establish logical support.
 
 - Refuse a view as mixed-read when a previously observed source becomes a directory or changes during its pinned read, or a graph-declared sidecar disappears during the build. Other views can proceed; never-observed and unreadable sources retain their own errors.
-- Cover the Astro presentation example in weekly dependency updates and update its Astro dependency to 7.3.8.
+- Cover the Astro presentation example in weekly dependency updates. Update Astro to 7.3.8 and refresh its locked sharp and HTTP cache-semantics dependencies to their patched releases.
 
 - Event-loop benchmark results record the host logical CPU count and the one-, five- and fifteen-minute load averages at the start and end, including failed runs, so responsiveness evidence can be read with its host conditions.
 
