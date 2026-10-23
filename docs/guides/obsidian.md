@@ -971,9 +971,10 @@ confirmed there (see "A confirmed selection", below).
   (`personal-views-exceed-settings-limit`), within the Obsidian settings
   contract. The preferred view, when it names a saved one, is the default. No
   generation file is written. `view add` refuses `views-from-personal-overlay`;
-  `audience set`, `audience clear` and `location set` refuse
-  `personal-binding-decision-unavailable`. Each refuses before anything is
-  resolved or written.
+  `audience set me` records owner-only visibility in the machine settings, and
+  `audience clear` withholds every audience. Custom audience lists refuse
+  `personal-binding-owner-only`; `location set` still refuses
+  `personal-binding-decision-unavailable`. Refused operations write nothing.
 - **Preferences and coverage.** `preferences` are returned read only. A theme
   is reported and never written: `appearance.json` stays the person's.
   `coverage` is passed through untouched. No Obsidian code reads it: it states
@@ -1024,10 +1025,10 @@ unit and loader is what it was.
   a confirmed generation. `status`, `open` and `service start` load the
   selection and refuse with its code; the service's freshness shows every view
   `stale` with it, and its status document has it as the last tick's reason.
-  `selection-history-shortened` comes only from a process that read the
-  history longer, which is the running service: a command of the command line
-  reads the history in a process of its own, as it then stands, so `status`
-  reports the selection a cut history ends with while the service refuses it.
+  The command and service read the same machine-private continuity state, so a
+  restart or a separate command does not accept a shortened history. An invalid
+  checkpoint refuses `invalid-selection-continuity`; a checkpoint that cannot be
+  kept refuses `selection-continuity-unavailable`. No project is returned in either case.
   A confirmed selection is reported by `status` (`selection`: the generation
   and the number of its record).
 - **The service starts whatever the selection.** A bound project's folder is its
@@ -1070,7 +1071,7 @@ unit and loader is what it was.
   another), whether or not the
   record's generation could be used, and whichever part of the service read
   it. A history that ends earlier refuses `selection-history-shortened` at a
-  load and at a recheck, and nothing is loaded from it while it is shorter; at
+  load and at a recheck until a fresh confirmation accepts it; at
   the read made when a tick stops a view, the view says `mixed-read` at that
   tick and the code at the next. A project already loaded is loaded again at
   the next tick once any part of the service has read the history ending at a
@@ -1086,18 +1087,26 @@ unit and loader is what it was.
   noted. The views say why (`open` and
   `status --json` name the ways out), and the vault keeps what it last
   published.
-- **What ends that refusal.** The removed records put back; a history as long
-  again, since a record in a place already read, with other content, is read
-  as a confirmation (after a cut of one record the person's next confirmation
-  is followed; after a cut of several, one confirmation is not enough); or a
-  start of the service. The number is kept in the process only, so a service
-  started after the cut cannot tell a cut history from one never longer: it
-  reads the history as it then stands and follows what it ends with,
-  publishing it if its generation still holds. Every start counts, the
-  person's own and one at login, after an upgrade or after a failure. Stopping
-  and starting the service is therefore how a person accepts a shorter
-  history, and a start nobody chose accepts it too. Nothing here keeps the
-  number across a start.
+- **What ends that refusal.** Put the removed records back, or explicitly confirm
+  the currently eligible generation through `selectPersonalGeneration` again.
+  That existing confirmation operation is the accepting act; no new command is
+  needed. One fresh confirmation accepts a shorter history even when its record
+  number remains below the highest ever observed. Its unique confirmation
+  identity distinguishes it from a previously observed record restored to the
+  same position. Replaying a previously observed prefix refuses, including after
+  a shorter history was accepted. Composition still decides whether the chosen
+  generation is eligible.
+- **Continuity across starts.** The highest observed number, accepted head and
+  previously observed record digests live in
+  `state/maintenance/selection-continuity.json` under the existing private
+  workspace. Reads validate its closed schema, workspace and personal-home
+  identities; changed writes are serialized through the existing private-state
+  lock, owner-only and atomic. State is bounded at 1 MiB and 8,192 observed record
+  identities; exhausting the identity budget refuses `selection-continuity-capacity`.
+  First use initializes from the current valid history, including historical v1
+  records without a confirmation identity. Retain this private state: deleting
+  all of it removes the evidence that distinguishes prior observation from a first
+  installation. Damaged existing state is never treated as a new installation.
 - **What the history is checked for besides.** At every full reconciliation the
   history is read again, so a record before the last that no longer links, or
   a confirmation that landed before the engine first looked at the record,
@@ -1106,7 +1115,8 @@ unit and loader is what it was.
   refuses `mixed-read` at its next wait, before its generation commits (one
   already committed stays), so do the views after it, and the next tick
   publishes under the new record. While the last load was refused, every tick
-  loads again: with nothing confirmed only the history is read, and with a
+  loads again: with nothing confirmed the manifest, history and private continuity
+  state are read without composition, and with a
   confirmed generation that no longer holds, one composition runs in a worker
   per tick.
 - **A narrowing.** When the newly confirmed generation drops a source (a
@@ -1118,10 +1128,14 @@ unit and loader is what it was.
   published (`held-for-your-edit`, `publication-withheld-for-your-edit`): the
   note is neither removed nor overwritten. A note edited during the
   publication itself stays in the vault (`retained-edit`).
-- **Who may see.** The binding never decides it. It stays this machine's
-  audience setting, none by default, and `audience set` still refuses for a
-  bound project: until an audience is allowed some other way, a bound vault
-  shows no note. Deciding who may see a bound vault is not built.
+- **Who may see.** The existing machine audience setting owns this decision.
+  For a personal binding, an undecided empty audience initializes to `only-you`
+  with notes without a classification shown, recorded with `defaults` provenance.
+  Existing explicit `only-you` lists and unclassified choices retain their exact
+  meaning. An explicit `audience clear` stays empty across ticks and restarts.
+  A nonempty custom setting refuses `personal-binding-owner-only` until
+  `audience set me` or `audience clear` is recorded. Nothing is written into a
+  generation or the personal overlay.
 - **Reading the history on the service's event loop.** The head is one
   directory listing and one bounded read per record. A record that is not a
   regular file (a FIFO, a device) refuses `selection-history-corrupt` without

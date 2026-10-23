@@ -123,7 +123,7 @@ function makePerson(t) {
   // The person's explicit confirmation, as its command records it.
   person.select = (generationId = person.generationId) => selectPersonalGeneration({ personalHome: home, generationId, confirm: selectionConfirmDigest({ generationId, previous: readPersonalSelectionHead({ personalHome: home }).head }) })
   person.record = (sequence) => path.join(home, 'selections', `${String(sequence).padStart(6, '0')}.json`)
-  person.load = (options = {}) => loadSelectedProject({ personalHome: home }, { bind: inThread(), ...options })
+  person.load = (options = {}) => loadSelectedProject({ personalHome: home, dataRoot: person.dataRoot }, { bind: inThread(), ...options })
   person.locate = () => locatePersonalHome({ personalHome: home })
   person.workspaceRoot = () => fs.realpathSync(workspaceStateRoot(person.dataRoot, person.workspaceId))
   person.vault = (scopeId) => path.join(person.workspaceRoot(), 'vaults', scopeId)
@@ -145,7 +145,7 @@ function makePerson(t) {
   })
   person.materialize()
   const project = bindPersonalWorkspace({ personalHome: home, generationId: person.generationId }).project
-  person.workspaceId = ensureWorkspaceIdentity({ project, randomBytes: person.randomBytes }).workspaceId
+  person.workspaceId = ensureWorkspaceIdentity({ project, dataRoot: person.dataRoot, randomBytes: person.randomBytes }).workspaceId
   const settings = withDecision({ ...defaultMachineSettings({ workspaceId: person.workspaceId, updatedAt: NOW }), audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
   writeMachineSettings({ workspaceRoot: workspaceStateRoot(person.dataRoot, person.workspaceId), workspaceId: person.workspaceId, repositoryRoots: protectedRoots(project), settings })
   return person
@@ -244,10 +244,11 @@ test('a history cut short does not publish a restore nobody confirmed; mutation 
   assert.match(annotation(), /Revised\./, 'the vault keeps the last confirmed content')
   const again = await engine.tick()
   assert.deepEqual([again.state, again.refusal?.code], ['refused', 'selection-history-shortened'], 'and at every tick while it is shorter')
-  // What a view held for this reason is told: both ways out, and that starting the service again accepts the history as it stands.
+  // What a held view is told: restore the removed records or make a fresh confirmation; a restart keeps the refusal.
   const next = nextStep('stale-readable', 'selection-history-shortened')
   assert.match(next, /Put the removed records back/)
-  assert.match(next, /a service started again .* reads the history as it is and follows the selection it then ends with, publishing it if its generation still holds/)
+  assert.match(next, /fresh confirmation accepts the shorter history/)
+  assert.match(next, /Restarting the service preserves this refusal/)
   // The record back in its place: composition decides again, and the restore still waits for its confirmation.
   fs.writeFileSync(ari.record(2), second)
   const back = await engine.tick()
@@ -271,8 +272,8 @@ test('the loaders refuse a history shorter than this process read it, whatever i
   assert.equal(personalSelectionOf(ari.load({ rules: { ...SELECTION_PRIMITIVES, refusesShortened: false } })).sequence, 1, 'the oracle can fail')
   // One confirmation after the cut: a record in the second place, and the history is still shorter than it was read.
   ari.select()
-  assert.throws(() => ari.load(), refusedWith('selection-history-shortened'))
-  // A second one: as long again, and read as the confirmation it is.
+  assert.equal(personalSelectionOf(ari.load()).sequence, 2, 'one fresh confirmation accepts a shorter history')
+  // A second one appends normally while the historical maximum remains three.
   ari.select()
   assert.equal(personalSelectionOf(ari.load()).sequence, 3)
   // The whole history removed says that it was cut, not that nothing was ever confirmed.
@@ -561,18 +562,21 @@ test('a confirmation that stops a view in the middle of a tick is read while it 
   assert.ok(after.state === 'refused' ? after.refusal?.code === 'selection-history-shortened' : everyView(after, 'stale', 'selection-history-shortened'), JSON.stringify(after))
 })
 
-test('the record number is kept in the process only: a process started after the cut reads the history as it then stands', (t) => {
+test('the private checkpoint preserves a shortened-history refusal across a process start and one fresh confirmation accepts it', (t) => {
   const ari = makePerson(t)
   ari.select()
   ari.select()
   assert.equal(personalSelectionOf(ari.load()).sequence, 2)
   fs.rmSync(ari.record(2))
   assert.throws(() => ari.load(), refusedWith('selection-history-shortened'))
-  // What a service started again, and a command run once, do: the documented limit of a number kept in memory.
+  // A fresh process reads the machine-private checkpoint before loading any generation.
   const module = new URL('../src/runtime/obsidian/personal-selection.mjs', import.meta.url).href
   const body = `const { loadSelectedProject, personalSelectionOf } = await import(${JSON.stringify(module)}); try { console.log(personalSelectionOf(loadSelectedProject({ personalHome: ${JSON.stringify(ari.home)} })).sequence) } catch (error) { console.log(error.code) }`
   const started = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', body], { encoding: 'utf8', timeout: 120_000, env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME } })
-  assert.equal(started.stdout.trim(), '1', started.stderr)
+  assert.equal(started.stdout.trim(), 'selection-history-shortened', started.stderr)
+  ari.select()
+  const confirmed = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', body], { encoding: 'utf8', timeout: 120_000, env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME } })
+  assert.equal(confirmed.stdout.trim(), '2', confirmed.stderr)
 })
 
 test('a confirmation during a tick refuses the view being published as mixed-read, and the next tick publishes under the new record', async (t) => {

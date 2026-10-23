@@ -260,6 +260,18 @@ export function defaultMachineSettings({ workspaceId, updatedAt }) {
   }
 }
 
+// The already adopted owner-only audience for a personal binding, recorded in the same machine setting an ordinary
+// workspace uses. Existing explicit decisions keep their exact list and unclassified choice; a clear stays empty.
+export function ownerOnlyPersonalSettings(settings, { decidedAt }) {
+  const decision = settings.decisions.audience
+  if (decision === null && settings.audienceAllow.length === 0) {
+    return withDecision({ ...settings, audienceAllow: [...ONLY_YOU_AUDIENCES], updatedAt: decidedAt }, 'audience',
+      { choice: 'only-you', unclassified: 'shown' }, { decidedAt, via: 'defaults' })
+  }
+  if (decision?.choice === 'only-you' || (decision?.choice === 'custom' && settings.audienceAllow.length === 0)) return settings
+  refuse('personal-binding-owner-only', 'a personal workspace vault is owner only; select `audience set me` or clear its audience before publishing')
+}
+
 // The settings with one decision recorded, validated; nothing is written. `decision` holds the decision's own members
 // (`{ choice, unclassified }`, `{ parent }`, `{ choice }`); the stamp says when, by whom (an identifier, or null when not
 // known) and how.

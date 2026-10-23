@@ -12,7 +12,7 @@ import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { createMaintenanceExtensions } from './extension-points.mjs'
 import {
-  assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
+  assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, ownerOnlyPersonalSettings, protectedRoots, readLocalPointer,
   readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
 } from './machine-settings.mjs'
 import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, reconcileCooperatively, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
@@ -107,7 +107,7 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // A change the guard sees in the middle of a tick is read, where it may be a confirmed selection, while it is there.
   noteSelectionAtGuard: notePersonalSelectionNow,
-  // A loaded project pinned to a selection record below the highest record this process has read the history ending at
+  // A loaded project pinned to a selection different from the most recently accepted head in this process
   // is loaded again at the next tick, whatever the files say: another reader in the process may have read a
   // confirmation that is gone again before this engine looked (personalSelectionBehind).
   reloadsBehindSelection: personalSelectionBehind,
@@ -475,8 +475,10 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const workspaceRoot = fs.realpathSync(requestedRoot)
     const lock = await takeLock(workspaceRoot, workspaceId)
     if (!lock.acquired) return { state: 'busy', reason: 'engine-lock-held', lock: { reason: lock.reason, holder: lock.holder ?? null }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
-    const machine = readMachineSettings({ workspaceRoot, workspaceId })
-      ?? writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: defaultMachineSettings({ workspaceId, updatedAt: now }) })
+    const existingMachine = readMachineSettings({ workspaceRoot, workspaceId })
+    const initialMachine = existingMachine ?? defaultMachineSettings({ workspaceId, updatedAt: now })
+    const machine = personalWorkspaceBindingOf(project) === null ? initialMachine : ownerOnlyPersonalSettings(initialMachine, { decidedAt: now })
+    if (machine !== existingMachine) writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: machine })
     const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }

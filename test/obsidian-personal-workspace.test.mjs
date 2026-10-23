@@ -65,7 +65,7 @@ const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createMaintenanceExtensions } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { readObsidianEnablement } = await import('../src/runtime/obsidian/enablement.mjs')
-const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, ownerOnlyPersonalSettings, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { resolveServiceWorkspace, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
@@ -205,8 +205,7 @@ function makePerson(world, { name, repos, overlay, fill }) {
   person.bind()
   const pointer = ensureWorkspaceIdentity({ project: person.bound.project, randomBytes: person.randomBytes })
   person.workspaceId = pointer.workspaceId
-  // "Only you", notes without a classification withheld: what `audience set` would record, written as a fixture since a
-  // personal binding refuses that command (test 6).
+  // An explicit existing owner-only choice that withholds unclassified notes must retain that exact meaning.
   person.decideAudience = () => {
     const settings = withDecision({ ...defaultMachineSettings({ workspaceId: pointer.workspaceId, updatedAt: NOW }), audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
     writeMachineSettings({ workspaceRoot: workspaceStateRoot(person.dataRoot, pointer.workspaceId), workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(person.bound.project), settings })
@@ -526,7 +525,56 @@ test('5. projection fidelity for both people: each vault is that person\'s eligi
   assert.deepEqual([treeListing(world.a), treeListing(world.b)], world.sharedBefore)
 })
 
-test('6. views come from the overlay; view add, audience and location refuse typed and write nothing', async (t) => {
+nodeTest('personal owner-only defaults keep explicit settings and never widen a recorded audience list', () => {
+  const defaults = defaultMachineSettings({ workspaceId: 'synthetic-workspace', updatedAt: NOW })
+  const ownerOnly = ownerOnlyPersonalSettings(defaults, { decidedAt: NOW })
+  assert.deepEqual(ownerOnly.audienceAllow, [...ONLY_YOU_AUDIENCES])
+  assert.deepEqual(ownerOnly.decisions.audience, { choice: 'only-you', unclassified: 'shown', decidedAt: NOW, decidedBy: null, via: 'defaults' })
+  const existing = withDecision({ ...defaults, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  assert.equal(ownerOnlyPersonalSettings(existing, { decidedAt: NOW }), existing)
+  const clear = withDecision(defaults, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  assert.equal(ownerOnlyPersonalSettings(clear, { decidedAt: NOW }), clear)
+  const custom = withDecision({ ...defaults, audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  assert.throws(() => ownerOnlyPersonalSettings(custom, { decidedAt: NOW }), (error) => error.code === 'personal-binding-owner-only')
+})
+
+test('an undecided personal binding persists owner-only visibility; clear stays empty after another engine starts, and set me restores it', async (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  const settings = () => readMachineSettings({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId })
+  const write = (value) => writeMachineSettings({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId, repositoryRoots: protectedRoots(ari.bound.project), settings: value })
+  write(defaultMachineSettings({ workspaceId: ari.workspaceId, updatedAt: NOW }))
+  const generationBefore = treeListing(path.join(ari.home, 'generations'))
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  const first = await engine.tick()
+  assert.ok(first.scopes.every((scope) => scope.state === 'current'), JSON.stringify(first))
+  assert.deepEqual(settings().audienceAllow, [...ONLY_YOU_AUDIENCES])
+  assert.deepEqual([settings().decisions.audience.choice, settings().decisions.audience.via, settings().decisions.audience.decidedBy], ['only-you', 'defaults', null])
+  assert.ok(ari.manifestOf(EVERYTHING_SCOPE_ID).notes.length > 0)
+  assert.equal((await ari.command(['audience', 'clear'])).exit, EXIT.ok)
+  engine.stop()
+  const restarted = ari.engine()
+  t.after(() => restarted.stop())
+  const cleared = await restarted.tick()
+  assert.ok(cleared.scopes.every((scope) => scope.state === 'current'), JSON.stringify(cleared))
+  assert.deepEqual(settings().audienceAllow, [])
+  assert.equal(settings().decisions.audience.choice, 'custom')
+  assert.equal(ari.manifestOf(EVERYTHING_SCOPE_ID).notes.length, 0)
+  const restored = await ari.command(['audience', 'set', 'me'])
+  assert.equal(restored.exit, EXIT.ok, JSON.stringify(restored))
+  assert.equal(settings().decisions.audience.via, 'command')
+  const again = await restarted.tick()
+  assert.ok(again.scopes.every((scope) => scope.state === 'current'), JSON.stringify(again))
+  assert.ok(ari.manifestOf(EVERYTHING_SCOPE_ID).notes.length > 0)
+  const custom = withDecision({ ...settings(), audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  write(custom)
+  const refused = await restarted.tick()
+  assert.equal(refused.refusal?.code, 'personal-binding-owner-only', JSON.stringify(refused))
+  assert.deepEqual(settings(), custom, 'the refused custom setting is never relabeled or widened')
+  assert.deepEqual(treeListing(path.join(ari.home, 'generations')), generationBefore, 'audience writes never change generation files')
+})
+
+test('6. views come from the overlay; view add, custom audience and location refuse typed and write nothing', async (t) => {
   const world = makeWorld(t, { people: ['ari'] })
   const { ari } = world
   const enablement = readObsidianEnablement(ari.bound.project)
@@ -553,8 +601,8 @@ test('6. views come from the overlay; view add, audience and location refuse typ
   for (const [argv, code] of [
     [['view', 'add', 'extra', '--all', '--yes'], 'views-from-personal-overlay'],
     [['view', 'add', 'extra', '--repo', 'a', '--folder', 'notes', '--default', '--allow-empty', '--yes'], 'views-from-personal-overlay'],
-    [['audience', 'set', 'me'], 'personal-binding-decision-unavailable'],
-    [['audience', 'clear'], 'personal-binding-decision-unavailable'],
+    [['audience', 'set', 'team'], 'personal-binding-owner-only'],
+    [['audience', 'set', 'me,sensitive'], 'personal-binding-owner-only'],
     [['location', 'set', path.join(world.base, 'elsewhere')], 'personal-binding-decision-unavailable'],
   ]) {
     const result = await ari.command(argv)

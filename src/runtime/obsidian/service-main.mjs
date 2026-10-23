@@ -200,7 +200,7 @@ export function serviceOptionsFromArgv(argv, { env = process.env } = {}) {
   const intervalMs = args['interval-ms'] === undefined ? undefined : Number(args['interval-ms'])
   if (intervalMs !== undefined && (!Number.isInteger(intervalMs) || intervalMs < 1)) throw Object.assign(new Error('--interval-ms must be a positive integer'), { code: 'service-arguments-invalid' })
   return {
-    loadProject: personalHome !== null ? () => loadSelectedProjectOffThread({ personalHome }) : () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: path.dirname(configPath), env, writeLocalState: false }),
+    loadProject: personalHome !== null ? () => loadSelectedProjectOffThread({ personalHome, dataRoot, env }) : () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: path.dirname(configPath), env, writeLocalState: false }),
     ...(personalHome === null ? {} : { locateProject: () => locatePersonalHome({ personalHome }) }),
     ...(dataRoot === undefined ? {} : { dataRoot }), ...(workspaceId === undefined ? {} : { workspaceId }), ...(intervalMs === undefined ? {} : { intervalMs }),
     ...(firstString(args['runtime-id']) ? { runtimeId: firstString(args['runtime-id']) } : {}),
