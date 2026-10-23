@@ -607,7 +607,27 @@ test('the graph is built with the event loop given a turn between the Markdown s
   // The settings are checked before the first source is read: a guard that refuses from the start refuses the build,
   // even under a budget that never waits.
   const refusal = new Error('the settings moved')
-  await assert.rejects(DEFAULT.buildGraphCooperatively({ project, eligibility: DEFAULT_ELIGIBILITY, scheduling: { maxUnits: 1_000_000, budgetMs: 1_000_000, guard: () => { throw refusal } } }), (error) => error === refusal)
+  const markdownSources = new Set([
+    ...Object.keys(FILES).filter((relative) => relative.endsWith('.md')),
+    ...Array.from({ length: 70 }, (_, number) => `east-wing/notes/buoy-${String(number).padStart(2, '0')}.md`),
+  ].map((relative) => world.source(relative)))
+  const readSync = fs.readFileSync
+  let sourceReads = 0
+  fs.readFileSync = function (file, ...args) {
+    if (typeof file === 'string' && markdownSources.has(file)) sourceReads += 1
+    return readSync.call(this, file, ...args)
+  }
+  try {
+    const scheduling = { maxUnits: 1_000_000, budgetMs: 1_000_000 }
+    await assert.rejects(DEFAULT.buildGraphCooperatively({ project, eligibility: DEFAULT_ELIGIBILITY, scheduling: { ...scheduling, guard: () => { throw refusal } } }), (error) => error === refusal)
+    assert.equal(sourceReads, 0, 'an initial settings refusal precedes every Markdown source read')
+    // Mutation control: a disabled guard reaches the real uncached read seam. A census before the first refusal would
+    // therefore fail the zero-read assertion even if it still threw the same refusal later.
+    const unchecked = await DEFAULT.buildGraphCooperatively({ project, eligibility: DEFAULT_ELIGIBILITY, scheduling: { ...scheduling, guard: () => {} } })
+    assert.deepEqual(unchecked, once)
+    assert.ok(sourceReads > 0, 'the zero-read oracle can fail when the guard is disabled')
+  } finally { fs.readFileSync = readSync }
+
   // With the engine's file cache: filled by the first build, reused by the second. The observation index that spares
   // the reads is the engine's; the engine test of a warm tick pins it.
   const cache = DEFAULT.createGraphCache()
@@ -653,6 +673,10 @@ test('cooperative engine builds the graph with turns of the event loop, and refu
     // Under the new scope settings the east view is published and the whole view, no longer configured, is disabled.
     const expected = kind === 'scope' ? [EAST_SCOPE.scopeId] : [FULL_SCOPE.scopeId]
     assert.deepEqual(next.scopes.filter((entry) => entry.state === 'current').map((entry) => entry.scopeId), expected)
+    if (kind === 'scope') {
+      const whole = next.scopes.find((entry) => entry.scopeId === FULL_SCOPE.scopeId)
+      assert.deepEqual([whole?.state, whole?.reason], ['disabled', 'scope-not-configured'])
+    }
     assert.deepEqual(world.calls.publishView, expected, 'the next tick publishes under the new setting')
   })
 })
