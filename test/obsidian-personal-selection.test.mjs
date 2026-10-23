@@ -154,6 +154,28 @@ function makePerson(t) {
 const reviseOverlay = (person) => { person.overlay.annotations[0].note += ' Revised.'; person.save() }
 const everyView = (report, state, reason) => report.scopes.length === 3 && report.scopes.every((scope) => scope.state === state && (reason === undefined || scope.reason === reason))
 
+test('the selection loader resolves manifest exclusion roots and keeps its checkpoint in the explicit data root', (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  assert.equal(personalSelectionOf(ari.load()).sequence, 1)
+  const checkpoint = path.join(ari.workspaceRoot(), 'state', 'maintenance', 'selection-continuity.json')
+  const before = fs.readFileSync(checkpoint)
+  assert.equal(JSON.parse(before).highestSequence, 1)
+  const manifest = path.join(ari.home, 'atelier.personal.json')
+  const original = fs.readFileSync(manifest)
+  for (const replacement of ['{', JSON.stringify({ repos: [{ root: 'relative-root' }] }), ' '.repeat(1024 * 1024 + 1)]) {
+    fs.writeFileSync(manifest, replacement)
+    assert.throws(() => ari.load(), refusedWith('malformed-input'))
+    assert.deepEqual(fs.readFileSync(checkpoint), before, 'a refused exclusion-root read changes no checkpoint')
+  }
+  fs.unlinkSync(manifest)
+  fs.mkdirSync(manifest)
+  assert.throws(() => ari.load(), refusedWith('malformed-input'))
+  fs.rmdirSync(manifest)
+  fs.writeFileSync(manifest, original)
+  assert.equal(personalSelectionOf(ari.load()).sequence, 1)
+})
+
 test('nothing is published until a generation is confirmed; then the confirmed generation is, composed off the event loop', async (t) => {
   const ari = makePerson(t)
   const engine = ari.engine({ loadProject: () => loadSelectedProjectOffThread({ personalHome: ari.home }) })

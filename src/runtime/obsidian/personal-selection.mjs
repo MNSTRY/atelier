@@ -82,13 +82,23 @@ const LOCATED = Symbol('atelier.obsidian.located-personal-home')
 
 const CONTINUITY = new Map()
 
-// Resolve the existing workspace authority after the history verified its private home. The manifest supplies the protected roots;
-// nothing is written into any repository, and an invalid manifest refuses before a history head is observed.
+// Resolve the existing workspace authority after the history verified its private home. This manifest read supplies
+// exclusion roots only; composition remains the authority for the manifest and generation. Never wait on an irregular
+// file or write continuity evidence into a repository while resolving the machine's private state.
 function continuityFor({ personalHome, dataRoot, env = process.env, platform = process.platform }) {
   let manifest
-  try { manifest = loadPersonalManifest(path.join(personalHome, 'atelier.personal.json'), { personalHome }) } catch (error) {
+  let descriptor
+  try {
+    descriptor = fs.openSync(path.join(personalHome, 'atelier.personal.json'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0))
+    const stat = fs.fstatSync(descriptor)
+    if (!stat.isFile() || stat.size > 1024 * 1024) throw new PersonalWorkspaceRefusal('malformed-input')
+    const bytes = fs.readFileSync(descriptor)
+    if (bytes.length > 1024 * 1024) throw new PersonalWorkspaceRefusal('malformed-input')
+    try { manifest = JSON.parse(bytes) } catch { throw new PersonalWorkspaceRefusal('malformed-input') }
+    if (!Array.isArray(manifest?.repos) || manifest.repos.some((repo) => typeof repo?.root !== 'string' || !path.isAbsolute(repo.root) || repo.root.includes('\0'))) throw new PersonalWorkspaceRefusal('malformed-input')
+  } catch (error) {
     refuse(error instanceof PersonalWorkspaceRefusal ? error.code : 'personal-home-unavailable', 'the personal workspace manifest could not be read; no selection is loaded', SOURCE)
-  }
+  } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
   const project = locatePersonalHome({ personalHome })
   const pointer = ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }) })
   const root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId)
