@@ -846,7 +846,8 @@ export function runBoundaryCheckCommand(argv = process.argv.slice(2)) {
     for (const item of shown) console.log(`${item.severity ?? 'error'} ${item.code}: ${item.message}`)
     if (hidden) console.log(`${hidden} more not shown; --json lists every finding`)
   }
-  process.exit(report.ok ? 0 : 1)
+  // Let queued stdout drain before the command process exits, including a complete JSON report through a pipe.
+  process.exitCode = report.ok ? 0 : 1
 }
 
 export function installBoundaryHooks({ project, force = false } = {}) {

@@ -1623,9 +1623,10 @@ test('canonical content acquisition pins Git quoting despite local diff configur
   assert.deepEqual([renamed.path, renamed.incomplete], ['\ufeffafter.txt', null])
 })
 
-test('staged-check text keeps errors ahead of incomplete warnings, prioritizes unresolved evidence and counts overflow', (t) => {
+test('staged-check text keeps errors ahead of legacy warnings, prioritizes unresolved evidence and counts overflow', (t) => {
   const { root, site, policy } = makeWorkspace(t)
   policy.mode = 'legacy-warning'
+  policy.actors.operator = { gitEmails: ['operator@example.invalid'], privateDomainRepo: 'example-site' }
   policy.repos['example-mirror'] = { ...policy.repos['example-site'], kind: 'shared' }
   writeJson(path.join(root, 'boundary-policy.v1.json'), policy)
   const configPath = path.join(root, 'atelier.project.json')
@@ -1634,27 +1635,32 @@ test('staged-check text keeps errors ahead of incomplete warnings, prioritizes u
   writeJson(configPath, config)
   for (let index = 0; index < 51; index += 1) fs.writeFileSync(path.join(site, 'src/scripts', `cart-${String(index).padStart(2, '0')}.ts`), CART_SOURCE)
   git(site, ['add', '.'])
-  // An unmerged document yields a warning from semantic inspection in legacy mode and a blocking incomplete content
-  // diagnostic. Its two object ids are ordinary synthetic text; update-index changes only this disposable index.
+  // The declared non-owner actor produces a genuine legacy warning before the staged findings. An unmerged document
+  // still yields blocking incomplete semantic/content diagnostics; update-index changes only this disposable index.
   const blob = git(site, ['hash-object', '-w', '--stdin'], { input: 'audience: team\n' })
   const indexInfo = `100644 ${blob} 2\tunmerged.md\n100644 ${blob} 3\tunmerged.md\n`
   git(site, ['update-index', '--index-info'], { input: indexInfo })
   const cli = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
-  const run = (extra) => spawnSync(process.execPath, [cli, 'boundary', 'check', `--project-config=${configPath}`, '--staged', '--staged-only', '--actor=author', ...extra], {
+  const run = (extra) => spawnSync(process.execPath, [cli, 'boundary', 'check', `--project-config=${configPath}`, '--staged', '--staged-only', '--actor=operator', ...extra], {
     cwd: site, encoding: 'utf8', env: { ...process.env, GIT_INDEX_FILE: path.join(site, '.git', 'index') },
   })
   const json = run(['--json'])
   assert.equal(json.status, 1, `${json.stderr}\n${json.stdout}`)
   const report = JSON.parse(json.stdout)
   assert.ok(report.errors.some((item) => item.code === 'pre-commit-repo-unresolved'), json.stdout)
-  assert.ok(report.warnings.some((item) => item.code === 'semantic-field-scan-incomplete'), json.stdout)
-  assert.ok(report.findings.length > 50)
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-scan-incomplete'), json.stdout)
+  assert.ok(report.warnings.some((item) => item.code === 'private-domain-actor-mismatch'), json.stdout)
+  for (const repo of ['example-site', 'example-mirror']) {
+    assert.equal(report.errors.filter((item) => item.code === 'content-rule-violation' && item.repo === repo).length, 51, `JSON retains every staged content finding for ${repo}`)
+  }
+  assert.ok(report.errors.length > 50)
+  assert.ok(report.findings.findIndex((item) => item.code === 'private-domain-actor-mismatch') < report.findings.findIndex((item) => item.code === 'content-rule-violation'), 'the report retains a warning before content errors, so text ordering has an observable effect')
   const text = run([])
   assert.equal(text.status, 1, `${text.stderr}\n${text.stdout}`)
   const lines = text.stdout.trim().split('\n')
   assert.match(lines[1], /^error pre-commit-repo-unresolved: /, text.stdout)
   const shown = lines.filter((line) => /^(error|warning) /.test(line))
   assert.equal(shown.length, 50, text.stdout)
-  assert.ok(shown.every((line) => line.startsWith('error ')), 'blocking errors are not displaced by incomplete warnings')
+  assert.ok(shown.every((line) => line.startsWith('error ')), 'blocking errors are not displaced by legacy warnings')
   assert.ok(lines.includes(`${report.findings.length - 50} more not shown; --json lists every finding`), text.stdout)
 })

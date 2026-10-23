@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Keep blocking boundary diagnostics visible before warnings, report one aggregate evidence limit, and pin path quoting in Git evidence. Staged acquisition refuses missing or incomplete repository evidence and covers type changes without rename collapse. Conservative semantic assignment detection and runner-error handling preserve classified-document deletion review.
+- Keep blocking boundary diagnostics visible before warnings, report one aggregate evidence limit, and pin path quoting in Git evidence. Staged acquisition refuses missing or incomplete repository evidence and covers type changes without rename collapse. Conservative semantic assignment detection and runner-error handling preserve classified-document deletion review. Boundary checks flush complete JSON diagnostics through pipes before returning their refusal exit code.
 
 - Name the practical-judgment responsibility Phronesis, with practical judgment as its plain-language description. Existing catalog identity, English lookup alias, judgment API and skill identities remain compatible. Keep Knowledge Stewardship distinct from the shared Knowledge Graph representation; move the current guide to `docs/reference/phronesis.md`.
 
