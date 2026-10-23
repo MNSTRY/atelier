@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { withPrivateLock } from '../../project/durable-state.mjs'
+import { inspectPrivateLock, withPrivateLock } from '../../project/durable-state.mjs'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularFileNoFollow } from '../../project/private-state.mjs'
 import { canonicalJson, closedObject } from './documents.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
@@ -34,9 +34,10 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
   const homeDigest = createHash('sha256').update(personalHome).digest('hex')
   const directory = () => ensureContainedPrivateDirectory({ workspaceRoot, directory: path.join(workspaceRoot, 'state', 'maintenance'), label: 'selection continuity state' })
   const file = path.join(workspaceRoot, 'state', 'maintenance', 'selection-continuity.json')
+  const lockPath = path.join(workspaceRoot, 'state', 'maintenance', 'selection-continuity.lock')
   let observedState = false
   let pending = null // an observed head whose durable write has not yet been proved
-  function read() {
+  function read({ initializing = false } = {}) {
     directory()
     let fd
     try {
@@ -48,7 +49,13 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
       observedState = true
       return document
     } catch (error) {
-      if (error.code === 'ENOENT' && !observedState) return null
+      if (error.code === 'ENOENT' && !observedState) {
+        const ownership = inspectPrivateLock(lockPath)
+        const unused = ownership.available && ownership.reason === 'unused' && ownership.generation === 0
+        // Only called inside withPrivateLock's operation: generation one is this operation's own first ticket.
+        const ownFirstTicket = initializing && !ownership.available && ownership.reason === 'process exists' && ownership.generation === 1
+        if (ownership.legacyDigest === null && (initializing ? ownFirstTicket : unused)) return null
+      }
       invalid()
     } finally { if (fd !== undefined) fs.closeSync(fd) }
   }
@@ -81,8 +88,8 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
       const planned = next(before, head)
       if (disk !== null && canonicalJson(disk) === canonicalJson(planned)) { pending = null; return head }
       pending = planned
-      withPrivateLock(path.join(directory(), 'selection-continuity.lock'), () => {
-        const current = read()
+      withPrivateLock(lockPath, () => {
+        const current = read({ initializing: disk === null })
         const document = next(withPending(current), head)
         pending = document
         const text = canonicalJson(document)

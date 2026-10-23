@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { LOCAL_STATE_DIR, localStateRoot } from '../../project/config.mjs'
+import { withPrivateLock } from '../../project/durable-state.mjs'
 import { checkManagedRoots } from '../../project/file-class.mjs'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow } from '../../project/private-state.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract } from '../../projection/obsidian/contracts.mjs'
@@ -290,13 +291,36 @@ export function readMachineSettings({ workspaceRoot, workspaceId }) {
   return document === null ? null : normalizeMachineSettings(document, workspaceId)
 }
 
-// Writes v2, whatever version it is handed, and returns what it wrote.
-export function writeMachineSettings({ workspaceRoot, workspaceId, settings, repositoryRoots }) {
-  const document = normalizeMachineSettings(settings, workspaceId)
+function withMachineSettingsWriteLock({ workspaceRoot, repositoryRoots }, operation) {
   assertOutsideRepositories({ managedRoot: workspaceRoot, repositoryRoots })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
+  return withPrivateLock(path.join(settingsDirectory(workspaceRoot), 'machine-settings.lock'), operation)
+}
+
+function writeMachineSettingsUnlocked({ workspaceRoot, document }) {
   atomicReplacePrivateText(path.join(settingsDirectory(workspaceRoot), 'machine.json'), canonicalJson(document))
   return document
+}
+
+// Writes v2, whatever version it is handed, and returns what it wrote. Commands and initialization share this lock.
+export function writeMachineSettings({ workspaceRoot, workspaceId, settings, repositoryRoots }) {
+  const document = normalizeMachineSettings(settings, workspaceId)
+  return withMachineSettingsWriteLock({ workspaceRoot, repositoryRoots }, () => writeMachineSettingsUnlocked({ workspaceRoot, document }))
+}
+
+// Read-only when already decided. If initialization is needed, reread under the write lock so a committed clear wins.
+export function initializeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, updatedAt, personal = false }) {
+  const initialized = (current) => {
+    const initial = current ?? defaultMachineSettings({ workspaceId, updatedAt })
+    return personal ? ownerOnlyPersonalSettings(initial, { decidedAt: updatedAt }) : initial
+  }
+  const existing = readMachineSettings({ workspaceRoot, workspaceId })
+  if (initialized(existing) === existing) return existing
+  return withMachineSettingsWriteLock({ workspaceRoot, repositoryRoots }, () => {
+    const current = readMachineSettings({ workspaceRoot, workspaceId })
+    const document = normalizeMachineSettings(initialized(current), workspaceId)
+    return document === current ? current : writeMachineSettingsUnlocked({ workspaceRoot, document })
+  })
 }
 
 // ---------------------------------------------------------------------------

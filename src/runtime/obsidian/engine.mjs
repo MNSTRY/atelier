@@ -12,8 +12,8 @@ import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { createMaintenanceExtensions } from './extension-points.mjs'
 import {
-  assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, ownerOnlyPersonalSettings, protectedRoots, readLocalPointer,
-  readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
+  assertOutsideRepositories, authorizeAutomaticApply, ensureWorkspaceIdentity, initializeMachineSettings, protectedRoots, readLocalPointer,
+  readMachineSettings, resolveDataRoot, workspaceStateRoot,
 } from './machine-settings.mjs'
 import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, reconcileCooperatively, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
@@ -475,10 +475,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const workspaceRoot = fs.realpathSync(requestedRoot)
     const lock = await takeLock(workspaceRoot, workspaceId)
     if (!lock.acquired) return { state: 'busy', reason: 'engine-lock-held', lock: { reason: lock.reason, holder: lock.holder ?? null }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
-    const existingMachine = readMachineSettings({ workspaceRoot, workspaceId })
-    const initialMachine = existingMachine ?? defaultMachineSettings({ workspaceId, updatedAt: now })
-    const machine = personalWorkspaceBindingOf(project) === null ? initialMachine : ownerOnlyPersonalSettings(initialMachine, { decidedAt: now })
-    if (machine !== existingMachine) writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: machine })
+    const machine = initializeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, updatedAt: now, personal: personalWorkspaceBindingOf(project) !== null })
     const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }

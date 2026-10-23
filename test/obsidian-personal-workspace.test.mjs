@@ -65,7 +65,8 @@ const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createMaintenanceExtensions } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { readObsidianEnablement } = await import('../src/runtime/obsidian/enablement.mjs')
-const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, ownerOnlyPersonalSettings, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, initializeMachineSettings, ownerOnlyPersonalSettings, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { inspectPrivateLock } = await import('../src/project/durable-state.mjs')
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { resolveServiceWorkspace, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
@@ -536,6 +537,83 @@ nodeTest('personal owner-only defaults keep explicit settings and never widen a 
   assert.equal(ownerOnlyPersonalSettings(clear, { decidedAt: NOW }), clear)
   const custom = withDecision({ ...defaults, audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
   assert.throws(() => ownerOnlyPersonalSettings(custom, { decidedAt: NOW }), (error) => error.code === 'personal-binding-owner-only')
+})
+
+function settingsInitializationFixture(t) {
+  const workspaceRoot = fs.mkdtempSync(path.join(SCRATCH, 'machine-initialization-'))
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  const options = { workspaceRoot, workspaceId: 'synthetic-workspace', repositoryRoots: [], updatedAt: NOW, personal: true }
+  const defaults = defaultMachineSettings(options)
+  const cleared = withDecision(defaults, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  const file = path.join(workspaceRoot, 'state', 'settings', 'machine.json')
+  const lock = path.join(workspaceRoot, 'state', 'settings', 'machine-settings.lock')
+  writeMachineSettings({ ...options, settings: defaults })
+  return { options, cleared, file, lock }
+}
+
+function clearAfterInitialSettingsRead(t, initialize) {
+  const f = settingsInitializationFixture(t)
+  const identity = fs.statSync(f.file)
+  const original = fs.readFileSync
+  let interleaved = false
+  fs.readFileSync = function (file, ...rest) {
+    const bytes = original.call(this, file, ...rest)
+    if (!interleaved && typeof file === 'number') {
+      const opened = fs.fstatSync(file)
+      if (opened.dev === identity.dev && opened.ino === identity.ino) {
+        interleaved = true
+        writeMachineSettings({ ...f.options, settings: f.cleared })
+      }
+    }
+    return bytes
+  }
+  let returned
+  try { returned = initialize(f.options) } finally { fs.readFileSync = original }
+  assert.equal(interleaved, true, 'the clear committed after the actual initial machine-file read')
+  return { returned, persisted: readMachineSettings(f.options), cleared: f.cleared }
+}
+
+function assertClearRetained({ returned, persisted, cleared }) {
+  assert.deepEqual(returned, cleared, 'eligibility receives the committed clear')
+  assert.deepEqual(persisted, cleared, 'initialization does not overwrite the committed clear')
+}
+
+nodeTest('a clear committed after the initial settings read wins personal owner-only initialization', (t) => {
+  assertClearRetained(clearAfterInitialSettingsRead(t, initializeMachineSettings))
+})
+
+nodeTest('mutation control: the clear interleaving oracle rejects initialization from a stale settings read', (t) => {
+  const staleInitializer = (options) => {
+    const initial = readMachineSettings(options) ?? defaultMachineSettings(options)
+    return writeMachineSettings({ ...options, settings: ownerOnlyPersonalSettings(initial, { decidedAt: options.updatedAt }) })
+  }
+  const observed = clearAfterInitialSettingsRead(t, staleInitializer)
+  assert.equal(observed.persisted.decisions.audience.choice, 'only-you', 'the stale write actually replaced the clear')
+  assert.throws(() => assertClearRetained(observed), assert.AssertionError)
+})
+
+nodeTest('personal initialization holds the command write lock while rereading and decided reads acquire no new ticket', (t) => {
+  const f = settingsInitializationFixture(t)
+  const original = fs.readFileSync
+  let blocked = false
+  fs.readFileSync = function (file, ...rest) {
+    const bytes = original.call(this, file, ...rest)
+    // Avoid inspecting the lock recursively while its immutable ticket is itself being read.
+    if (!blocked && typeof file === 'number') {
+      const opened = fs.fstatSync(file)
+      const machine = fs.statSync(f.file)
+      if (opened.dev === machine.dev && opened.ino === machine.ino && inspectPrivateLock(f.lock).reason === 'process exists') {
+        blocked = true
+        assert.throws(() => writeMachineSettings({ ...f.options, settings: f.cleared }), (error) => error.code === 'EEXIST')
+      }
+    }
+    return bytes
+  }
+  try { initializeMachineSettings(f.options) } finally { fs.readFileSync = original }
+  assert.equal(blocked, true, 'the same command writer contends on the initialization lock')
+  const generation = inspectPrivateLock(f.lock).generation
+  assert.equal(initializeMachineSettings(f.options).decisions.audience.choice, 'only-you')
+  assert.equal(inspectPrivateLock(f.lock).generation, generation, 'unchanged initialization writes and locks nothing')
 })
 
 test('an undecided personal binding persists owner-only visibility; clear stays empty after another engine starts, and set me restores it', async (t) => {

@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { inspectPrivateLock, withPrivateLock } from '../src/project/durable-state.mjs'
 import { createSelectionContinuity, MAX_SELECTION_CONTINUITY_BYTES, MAX_SELECTION_IDENTITIES } from '../src/runtime/obsidian/selection-continuity.mjs'
 
 const hash = (value) => createHash('sha256').update(value).digest('hex')
@@ -13,8 +14,9 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const options = { workspaceRoot: root, workspaceId: 'workspace-synthetic', personalHome: path.join(root, 'personal-home') }
   const file = path.join(root, 'state', 'maintenance', 'selection-continuity.json')
+  const lock = path.join(root, 'state', 'maintenance', 'selection-continuity.lock')
   const store = () => createSelectionContinuity(options)
-  return { root, file, store, options }
+  return { root, file, lock, store, options }
 }
 function head(labels, { legacy = false } = {}) {
   const recordDigests = labels.map(hash)
@@ -104,6 +106,61 @@ test('a checkpoint removed after this reader observed it is refused', (t) => {
   store.note(selected)
   fs.unlinkSync(f.file)
   assert.throws(() => store.note(selected), refused('invalid-selection-continuity'))
+})
+
+test('genuine first use initializes under its first ownership ticket and unchanged reads take no new ticket', (t) => {
+  const f = fixture(t)
+  assert.equal(inspectPrivateLock(f.lock).reason, 'unused')
+  const selected = head(['a', 'b'])
+  f.store().note(selected)
+  assert.deepEqual([inspectPrivateLock(f.lock).reason, inspectPrivateLock(f.lock).generation], ['released', 1])
+  f.store().note(selected)
+  assert.equal(inspectPrivateLock(f.lock).generation, 1)
+})
+
+const assertMissingCheckpointRefuses = (initialize) => assert.throws(initialize, refused('invalid-selection-continuity'))
+
+test('a new store refuses a removed checkpoint while prior released ownership remains', (t) => {
+  const f = fixture(t)
+  f.store().note(head(['a', 'b', 'c']))
+  fs.unlinkSync(f.file)
+  assert.equal(inspectPrivateLock(f.lock).reason, 'released')
+  assertMissingCheckpointRefuses(() => f.store().note(head(['a'])))
+  assert.equal(fs.existsSync(f.file), false)
+  assert.equal(inspectPrivateLock(f.lock).generation, 1, 'refusal does not acquire a new ticket')
+})
+
+test('mutation control: removing all ownership evidence defeats the missing-checkpoint oracle', (t) => {
+  const f = fixture(t)
+  f.store().note(head(['a', 'b', 'c']))
+  fs.unlinkSync(f.file)
+  const initialize = () => f.store().note(head(['a']))
+  assertMissingCheckpointRefuses(initialize)
+  // All continuity evidence gone is indistinguishable from first installation; the oracle must detect its acceptance.
+  fs.rmSync(`${f.lock}.owners`, { recursive: true })
+  assert.throws(() => assertMissingCheckpointRefuses(initialize), assert.AssertionError)
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).highestSequence, 1)
+})
+
+test('a prior ownership generation without a checkpoint cannot be adopted as first use', (t) => {
+  const f = fixture(t)
+  fs.mkdirSync(path.dirname(f.lock), { recursive: true, mode: 0o700 })
+  withPrivateLock(f.lock, () => {})
+  assertMissingCheckpointRefuses(() => f.store().note(head(['a'])))
+  assert.equal(fs.existsSync(f.file), false)
+})
+
+test('a failed first replacement leaves ownership evidence that a fresh store cannot ignore', (t) => {
+  const f = fixture(t)
+  const original = fs.renameSync
+  fs.renameSync = function (from, to) {
+    if (to === f.file) throw Object.assign(new Error('synthetic initial write refusal'), { code: 'EIO' })
+    return original.call(this, from, to)
+  }
+  try { assert.throws(() => f.store().note(head(['a', 'b', 'c'])), refused('selection-continuity-unavailable')) }
+  finally { fs.renameSync = original }
+  assert.deepEqual([fs.existsSync(f.file), inspectPrivateLock(f.lock).reason], [false, 'released'])
+  assertMissingCheckpointRefuses(() => f.store().note(head(['a'])))
 })
 
 test('a failed durable write returns no authority and the same process keeps the observed maximum', (t) => {
