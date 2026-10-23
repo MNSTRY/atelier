@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Copy workshop fixture children into the exclusively created destination, retaining refusal of an existing destination or a conflicting child without overwriting it. This avoids relying on recursive copy behavior for an already-created destination directory.
+
 - Order journey runs by their validated creation instant, with run identity as the deterministic tie-break. Latest-per-protocol summaries and tenant packets share that rule; malformed times refuse rather than inherit hash-filename order. Clarify that a review-workspace decision concerns its run claims and source linkage alone does not establish logical support.
 
 - Refuse a view as mixed-read when a previously observed source becomes a directory or changes during its pinned read, or a graph-declared sidecar disappears during the build. Other views can proceed; never-observed and unreadable sources retain their own errors.

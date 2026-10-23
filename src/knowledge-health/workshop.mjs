@@ -32,7 +32,10 @@ function read(file) {
 export function initializeKnowledgeHealthWorkshop(destination) {
   const root = path.resolve(destination)
   fs.mkdirSync(root, { recursive: false })
-  fs.cpSync(fileURLToPath(new URL('../../fixtures/knowledge-health/workshop/', import.meta.url)), root,
+  const fixture = fileURLToPath(new URL('../../fixtures/knowledge-health/workshop/', import.meta.url))
+  // The root was created exclusively above. Copy children to new destinations rather than asking cp to merge into
+  // that existing root; a child that appeared meanwhile still refuses, with no overwrite or cleanup of unknown files.
+  for (const name of fs.readdirSync(fixture)) fs.cpSync(path.join(fixture, name), path.join(root, name),
     { recursive: true, force: false, errorOnExist: true })
   fs.writeFileSync(path.join(root, '.gitignore'), '.atelier-local/\noutput/\n', { flag: 'wx' })
   const git = spawnSync('git', ['init', '--quiet'], { cwd: root, encoding: 'utf8', timeout: 15000,
