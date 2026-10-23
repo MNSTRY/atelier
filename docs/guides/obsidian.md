@@ -974,7 +974,9 @@ confirmed there (see "A confirmed selection", below).
   `audience set me` records owner-only visibility in the machine settings, and
   `audience clear` withholds every audience. Custom audience lists refuse
   `personal-binding-owner-only`; `location set` still refuses
-  `personal-binding-decision-unavailable`. Refused operations write nothing.
+  `personal-binding-decision-unavailable`. Refused operations do not change
+  audience, view or location settings. Following a selection may still keep
+  machine-private continuity evidence before the setting operation refuses.
 - **Preferences and coverage.** `preferences` are returned read only. A theme
   is reported and never written: `appearance.json` stays the person's.
   `coverage` is passed through untouched. No Obsidian code reads it: it states
