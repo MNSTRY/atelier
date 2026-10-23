@@ -19,6 +19,38 @@ write through a browser view.
    commerce, sessions, audit, and client-grade sharing as MNSTRY runtime
    authority.
 
+## Select the Readiness Pack
+
+Projects include the bundled MNSTRY readiness pack by default. To use only
+declared custom protocols, set this in the tracked `atelier.project.json`,
+preserving the project's other settings:
+
+```json
+{
+  "ext": {
+    "mnstry.atelier": {
+      "readiness": { "includeBundled": false }
+    }
+  }
+}
+```
+
+An absent setting or explicit `true` keeps the existing bundled protocols and
+twelve-dimension tenant journey. Local preferences cannot re-enable a bundle
+that the tracked project deselects.
+
+After reviewing a selection change, update the existing lock explicitly:
+
+```bash
+atelier lock write --project ./atelier.project.json
+atelier lock check --project ./atelier.project.json
+```
+
+The lock records the selected packs while preserving its template and migration
+history. A lock that still pins the deselected bundle fails `lock check` and
+`upgrade --dry-run`. To select the bundle again, set `includeBundled` to `true`
+and write the lock after review.
+
 ## Local Review Pass
 
 Run checks from the copied workspace:
@@ -35,6 +67,13 @@ atelier upgrade --dry-run --project ./atelier.project.json
 Use `--check` modes where available when validating committed generated output.
 If a command is unavailable in an older workspace, report the exact command and
 stderr instead of substituting a new protocol.
+
+With the bundle deselected, the graph, project projection and generic readiness
+checks remain available. The projection and readiness output omit the MNSTRY
+tenant journey; they do not create a replacement journey or packet. Selected
+custom protocols use the existing [extension-pack workflow](extensions.md#readiness-extension-packs).
+`readiness journey`, `readiness packet` and `readiness export --dry-run` refuse
+with `readiness-pack-disabled`, including when custom packs are selected.
 
 ## Claim-First Output
 

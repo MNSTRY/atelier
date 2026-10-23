@@ -149,8 +149,10 @@ Workspace projections read
 }
 ```
 
-The "MNSTRY Tenant Readiness" section heading in the rendered projection stays
-as is: it names the bundled MNSTRY pack.
+When the bundled readiness pack is selected, the rendered projection keeps the
+"MNSTRY Tenant Readiness" heading: it names that pack. An explicit
+`readiness.includeBundled: false` in the project's `ext["mnstry.atelier"]` omits
+the section; absent or `true` retains the existing default.
 
 ### 5. Add an extension pack
 
@@ -165,10 +167,13 @@ The manifest carries the advisory attribution key:
 }
 ```
 
-Extension protocols load alongside the bundled twelve; they never replace
-them. Note that pack contributions to the tenant readiness packet ride in an
-unschema'd runtime document (`mnstry.tenant-readiness-packet@v1`) whose shape
-is pinned by tests, not by the versioned contracts the compat gate checks.
+Extension protocols load alongside the bundled twelve by default. A project
+can [deselect the bundle](tenant-readiness.md#select-the-readiness-pack) and use
+only its selected custom protocols; this does not create a replacement tenant
+journey or packet. When the bundle is selected, pack contributions to the tenant
+readiness packet ride in an unschema'd runtime document
+(`mnstry.tenant-readiness-packet@v1`) whose shape is pinned by tests, not by the
+versioned contracts the compat gate checks.
 
 Declared pack paths resolve from the directory holding `atelier.project.json`
 and may not contain `..` segments, so the pack directory has to sit inside the

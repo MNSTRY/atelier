@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { commandProject, readJson, writeJson } from '../project/config.mjs'
 import { summarizeReadinessJourney } from '../readiness-protocols/runtime.mjs'
+import { bundledReadinessEnabled } from '../readiness-protocols/bundled-selection.mjs'
 import { atelierControlStyles } from '../ui/control-system.mjs'
 
 const esc = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
@@ -45,11 +46,12 @@ function resolveDistributionBranding(project) {
 }
 
 export function buildProjectProjection(project) {
+  const includeBundled = bundledReadinessEnabled(project)
   const graph = readJson(project.graphPath)
   const branding = resolveDistributionBranding(project)
-  const readinessJourney = summarizeReadinessJourney(project)
+  const readinessJourney = includeBundled ? summarizeReadinessJourney(project) : null
   const output = path.join(project.outputRoot, 'index.html')
-  const dimensionCards = readinessJourney.dimensions.map((item) => `<article class="readiness-card" data-protocol="${esc(item.protocolId)}">
+  const dimensionCards = (readinessJourney?.dimensions ?? []).map((item) => `<article class="readiness-card" data-protocol="${esc(item.protocolId)}">
     <p class="eyebrow">${esc(item.label)}</p>
     <h3>${esc(item.title)}</h3>
     <p><strong>${esc(item.status)}</strong> · ${esc(item.score)} / 100 answers complete</p>
@@ -90,7 +92,7 @@ ${branding.themeCss}</style>
 <p class="eyebrow">${esc(branding.name)} · ${esc(branding.eyebrow)}</p>
 <h1>${esc(project.config.name || 'Project Workspace')}</h1>
 <p>${graph.counts.nodes} graph nodes · ${graph.counts.edges} graph edges · ${graph.counts.diagnostics} diagnostics</p>
-<section class="readiness" aria-labelledby="tenant-readiness-title">
+${readinessJourney ? `<section class="readiness" aria-labelledby="tenant-readiness-title">
   <div class="readiness-head">
     <div>
       <p class="eyebrow">MNSTRY Tenant Readiness</p>
@@ -101,7 +103,7 @@ ${branding.themeCss}</style>
     <div class="readiness-score">${esc(readinessJourney.score)}%</div>
   </div>
   <div class="readiness-grid">${dimensionCards}</div>
-</section>
+</section>` : ''}
 <section class="grid">${cards}</section>
 <script>
 document.addEventListener('click', async (event) => {
@@ -126,16 +128,18 @@ export function buildProjectManifest(project, projection) {
     generatedAt: 'deterministic',
     graphPath: path.relative(project.outputRoot, project.graphPath).split(path.sep).join('/'),
     entry: 'index.html',
-    tenantReadiness: {
-      score: projection.readinessJourney.score,
-      ready: projection.readinessJourney.ready,
-      dimensions: projection.readinessJourney.dimensions.map((item) => ({
-        key: item.key,
-        protocolId: item.protocolId,
-        status: item.status,
-        score: item.score,
-      })),
-    },
+    ...(projection.readinessJourney ? {
+      tenantReadiness: {
+        score: projection.readinessJourney.score,
+        ready: projection.readinessJourney.ready,
+        dimensions: projection.readinessJourney.dimensions.map((item) => ({
+          key: item.key,
+          protocolId: item.protocolId,
+          status: item.status,
+          score: item.score,
+        })),
+      },
+    } : {}),
     nodes: projection.graph.nodes.map((node) => ({ id: node.id, title: node.title, audience: node.audience, path: node.path })),
   }
 }

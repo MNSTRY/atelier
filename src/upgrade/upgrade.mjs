@@ -23,6 +23,7 @@ import {
   loadBoundaryPolicy,
 } from '../boundary/policy.mjs'
 import { bundledMnstryReadinessPackV1 } from '../readiness-protocols/bundled-pack.mjs'
+import { bundledReadinessEnabled } from '../readiness-protocols/bundled-selection.mjs'
 import { loadExtensionPacks } from '../extension-packs/loader.mjs'
 import { inspectPackageProvenance, legacyPackageSource } from './provenance.mjs'
 import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, explainSavedUpgrade } from './transaction.mjs'
@@ -64,6 +65,12 @@ const FORBIDDEN_AUTHORITY_FLAGS = [
 const normalize = (value) => String(value ?? '').replaceAll('\\', '/').replace(/^\.\/+/, '')
 const asArray = (value) => (Array.isArray(value) ? value : [])
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value)
+
+function bundledSelectionLockErrors(includeBundled, lock) {
+  return !includeBundled && asArray(lock?.extensionPacks).some((entry) => entry?.id === bundledMnstryReadinessPackV1.id)
+    ? ['bundled readiness pack is disabled but remains recorded in the lock; explicitly write the lock after reviewing pack selection']
+    : []
+}
 
 function sha256(value) {
   return crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex')
@@ -117,6 +124,7 @@ function loadPolicyForLock(project) {
 }
 
 export function buildAtelierLock({ project, templateId = 'existing-workspace', appliedMigrations = [], packs = [] } = {}) {
+  const includeBundled = bundledReadinessEnabled(project)
   const policy = loadPolicyForLock(project)
   return {
     schema: ATELIER_LOCK_SCHEMA,
@@ -152,11 +160,11 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
     // the manifest bytes plus every referenced protocol file's bytes, so any
     // on-disk edit to the manifest or a protocol is visible byte-for-byte.
     extensionPacks: [
-      {
+      ...(includeBundled ? [{
         id: bundledMnstryReadinessPackV1.id,
         version: bundledMnstryReadinessPackV1.version,
         digest: `sha256:${sha256(bundledMnstryReadinessPackV1)}`,
-      },
+      }] : []),
       ...packs.map((pack) => ({ id: pack.id, version: pack.version, digest: pack.digest })),
     ],
     boundaryPolicy: {
@@ -431,6 +439,7 @@ function stagedSemanticFindings(project) {
 }
 
 export function planUpgrade({ project, migrations = BASE_MIGRATIONS, allowDirtyGenerated = false, confirmBreaking = [] } = {}) {
+  const includeBundled = bundledReadinessEnabled(project)
   const state = currentState(project)
   const registryErrors = validateMigrationRegistry(migrations)
   const planned = selectedMigrations({ lock: state.lock, migrations })
@@ -438,7 +447,7 @@ export function planUpgrade({ project, migrations = BASE_MIGRATIONS, allowDirtyG
   const warnings = []
   const requiredConfirmations = []
 
-  blockers.push(...registryErrors)
+  blockers.push(...registryErrors, ...bundledSelectionLockErrors(includeBundled, state.lock))
   if (!state.loadedPolicy.ok) blockers.push(...state.loadedPolicy.errors)
   if (state.boundaryReport && !state.boundaryReport.ok) blockers.push(...state.boundaryReport.errors.map((item) => item.message))
   blockers.push(...weakeningFindings({ lock: state.lock, currentPolicy: state.loadedPolicy.policy }))
@@ -614,6 +623,7 @@ export function applyUpgrade({ project, branch, allowDirtyGenerated = false, con
 }
 
 export function checkAtelierLock(project) {
+  const includeBundled = bundledReadinessEnabled(project)
   const { lock, lockPath } = loadAtelierLock(project)
   const errors = []
   if (!lock) errors.push(`lockfile not found: ${lockPath}`)
@@ -634,6 +644,7 @@ export function checkAtelierLock(project) {
       errors.push(item.packId ? `extension pack ${item.packId}: ${item.message}` : `extension packs: ${item.message}`)
     }
     const lockPacks = asArray(lock.extensionPacks)
+    errors.push(...bundledSelectionLockErrors(includeBundled, lock))
     for (const pack of packReport.packs) {
       const entry = lockPacks.find((item) => item?.id === pack.id)
       if (!entry) {

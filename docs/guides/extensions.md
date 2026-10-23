@@ -148,3 +148,42 @@ mutations may finish after disable. Public reactive feeds, revocation on feed
 reconnect, schema backfills, portability and complete host/privacy acceptance
 remain unqualified. The native starter's provider proof does not enable a
 receiving host's Convex profile or establish a complete customer journey.
+
+## Readiness extension packs
+
+Local readiness protocols use the existing extension-pack declarations in
+`atelier.project.json`. They are separate from database runtime adapters. A
+project can select custom protocols without the bundled MNSTRY readiness pack:
+
+```json
+{
+  "ext": {
+    "mnstry.atelier": {
+      "readiness": { "includeBundled": false },
+      "extensionPacks": [
+        {
+          "id": "sample.readiness",
+          "version": "v1",
+          "path": "packs/sample-pack.v1.json",
+          "enabled": true
+        }
+      ]
+    }
+  }
+}
+```
+
+Review the pack, then run `atelier extension-pack validate` and
+`atelier lock write`, both with `--project ./atelier.project.json`.
+Use `atelier readiness protocols --project ./atelier.project.json` to list the
+selected protocols, then pass a full namespaced ID to `atelier readiness run`
+or `atelier review run` with the same project. Evidence-bound review still
+requires the existing [pack compatibility declaration](../reference/extension-pack-lifecycle.md).
+Existing answer, proposal and evidence rules continue to apply.
+
+Omitting `readiness.includeBundled` or setting it to `true` keeps custom
+protocols alongside the bundle. With `false`, bundled IDs and aliases are
+unavailable to project runs. A standalone `readiness protocols` invocation
+without a project selection still lists the bundle. Generic graph, project and
+readiness checks remain available; the MNSTRY journey, packet and readiness
+export commands refuse. See [pack selection and lock transitions](tenant-readiness.md#select-the-readiness-pack).
