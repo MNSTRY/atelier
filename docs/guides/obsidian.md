@@ -1034,9 +1034,13 @@ unit and loader is what it was.
   A confirmed selection is reported by `status` (`selection`: the generation
   and the number of its record).
 - **The service starts whatever the selection.** A bound project's folder is its
-  private home, so the home alone locates the workspace: the service resolves
-  its workspace from that at once and starts, and its engine awaits the loader
-  at each tick. `atelier obsidian --personal-home` does this for a bound home. A
+  private home. The locator reads the home and the current manifest's repository
+  roots for exclusion, without composing or selecting a generation. A data root
+  inside a declared repository is refused before private state is created or a
+  login item is removed for a restart, including when nothing is confirmed.
+  The service resolves its workspace from that at once and starts, and its
+  engine awaits the loader at each tick. `atelier obsidian --personal-home`
+  does this for a bound home. A
   program that runs the service itself (`runMaintenanceService` from
   `@mnstry/atelier/obsidian`) gives it the same through `locateProject`, a
   synchronous function that answers, without loading anything, a project whose
@@ -1057,6 +1061,12 @@ unit and loader is what it was.
   `service-locator-invalid`. The workspace pointer is under the home, so a home
   that is gone when the service starts leaves it no workspace to find
   (`service-workspace-not-prepared`).
+- **Cleanup with nothing confirmed.** `service unit --remove` and `uninstall`
+  locate the existing protected workspace without a generation, and remember
+  the machine's login-item decision as `off` there. They do not change the
+  audience or confirm anything. Uninstall reports the actual kept workspace
+  pointer under the personal home, and leaves its bytes, private state,
+  generations and selection history in place.
 - **Following the history.** A loaded project is pinned to the record it was
   loaded under, and the engine observes that record and the place of the next
   one as configuration. A confirmation is therefore loaded at the next tick. A
@@ -1145,6 +1155,9 @@ unit and loader is what it was.
   project (its permissions changed, not removed) fails the tick when the
   engine observes its files, as an unreadable configuration file does: nothing
   is published, and the service reports the failed tick.
+  After a worker composes a generation, the caller still reads generation
+  files, resolves the generation's project configuration and assembles the
+  bound project on its own thread. Composition itself remains in the worker.
 
 Measured once on 2,156 notes in three repositories, with 50 annotations and five
 saved views (six views in all). The production contributions were loaded, as

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep all enrolled repository roots outside private service state when locating a personal workspace. Login-item removal and uninstall can retain their off choice before any generation is confirmed, and report the actual kept workspace pointer. Clarify which generation reads and assembly still run on the caller thread.
+
 - Persist personal-selection continuity across service starts. A shortened history stays refused until its removed records return or a fresh confirmation accepts it; previously observed records cannot stand in for a new confirmation. A missing checkpoint with retained private ownership evidence refuses instead of becoming a first start.
 - Initialize an undecided personal vault audience as owner only in machine settings. Explicit choices and clears keep their meaning; personal bindings permit `audience set me` and `audience clear`, and refuse custom audience lists. Initialization rereads under the same lock as setting writes so a concurrent clear stays empty.
 

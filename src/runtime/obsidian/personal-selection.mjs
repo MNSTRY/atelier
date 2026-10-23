@@ -82,10 +82,10 @@ const LOCATED = Symbol('atelier.obsidian.located-personal-home')
 
 const CONTINUITY = new Map()
 
-// Resolve the existing workspace authority after the history verified its private home. This manifest read supplies
-// exclusion roots only; composition remains the authority for the manifest and generation. Never wait on an irregular
-// file or write continuity evidence into a repository while resolving the machine's private state.
-function continuityFor({ personalHome, dataRoot, env = process.env, platform = process.platform }) {
+// Exclusion roots only, shared by location and continuity. Composition remains
+// the authority for the manifest and generation. Never wait on an irregular
+// file while resolving the machine's private state.
+function manifestExclusionRoots(personalHome) {
   let manifest
   let descriptor
   try {
@@ -99,10 +99,14 @@ function continuityFor({ personalHome, dataRoot, env = process.env, platform = p
   } catch (error) {
     refuse(error instanceof PersonalWorkspaceRefusal ? error.code : 'personal-home-unavailable', 'the personal workspace manifest could not be read; no selection is loaded', SOURCE)
   } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
+  return manifest.repos.map((repo) => repo.root)
+}
+
+function continuityFor({ personalHome, dataRoot, env = process.env, platform = process.platform }) {
   const project = locatePersonalHome({ personalHome })
   const pointer = ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }) })
   const root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId)
-  assertOutsideRepositories({ managedRoot: root, repositoryRoots: [personalHome, ...manifest.repos.map((repo) => repo.root)] })
+  assertOutsideRepositories({ managedRoot: root, repositoryRoots: [personalHome, ...project.repos.map((repo) => repo.path)] })
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const workspaceRoot = fs.realpathSync(root)
   const key = `${personalHome}\0${workspaceRoot}`
@@ -132,11 +136,21 @@ function pinned(project, { head, note }, rules) {
 }
 
 // What the workspace of a bound personal home is resolved from, without loading anything: a project that holds the home
-// as its folder and nothing else, as a bound project's folder is. Its pointer is under the home, the data root is the
-// pointer's or the caller's, and a home is outside every Git worktree. Synchronous; nothing is composed.
+// as its folder, plus the manifest's repository roots for exclusion only. A locator never admits a generation or
+// notes a history head. Its pointer is under the home, the data root is the pointer's or the caller's, and a home is
+// outside every Git worktree. Synchronous; nothing is composed. A missing home still locates no prepared workspace.
 export function locatePersonalHome({ personalHome } = {}) {
   if (typeof personalHome !== 'string' || !path.isAbsolute(personalHome) || path.resolve(personalHome) !== personalHome) refuse('path-not-absolute', 'a personal home is named by its absolute path', SOURCE)
-  const located = { configDir: personalHome, [LOCATED]: personalHome }
+  let stat = null
+  try { stat = fs.lstatSync(personalHome) } catch (error) { if (error.code !== 'ENOENT') refuse('personal-home-unavailable', 'the personal home could not be inspected', SOURCE) }
+  if (stat !== null) {
+    if (stat.isSymbolicLink() || !stat.isDirectory() || fs.realpathSync(personalHome) !== personalHome) refuse('root-symlinked', 'a personal home is its private directory, not a link', SOURCE)
+    if (typeof process.getuid !== 'function' || stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0) refuse('not-private-location', 'a personal home is private to its owner', SOURCE)
+  }
+  // Include all declared roots, even a withdrawn enrollment: locating state
+  // must not write into a repository while composition is unavailable.
+  const roots = stat === null ? [] : manifestExclusionRoots(personalHome)
+  const located = { configDir: personalHome, repos: roots.map((root) => ({ path: root, external: false })), [LOCATED]: personalHome }
   located.localState = ensureLocalState(located, { write: false, env: { PATH: process.env.PATH } })
   return located
 }

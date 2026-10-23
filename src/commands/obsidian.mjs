@@ -17,7 +17,7 @@ import { BUILT_IN_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createObsidianRegistr
 import { LIFECYCLE_PRIMITIVES, readServiceStatusDocument, requestServiceTick, runtimeRelease, serviceStatus, startService, stopService } from '../runtime/obsidian/lifecycle.mjs'
 import {
   DECISIONS, ONLY_YOU_AUDIENCES, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, localPointerPath, protectedRoots,
-  readInstalledApplyPolicy, readMachineSettings, revokeApplyPolicy, withDecision, writeMachineSettings,
+  readInstalledApplyPolicy, readLocalPointer, readMachineSettings, revokeApplyPolicy, withDecision, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
 import {
   currentLoginItemPlan, installLoginItem, loginItemDataRoot, loginItemLabel, loginItemStarter, loginItemStatus, planLoginItem, projectNameOf, readLoginItemRecord, realNodePath,
@@ -632,7 +632,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const removed = await removeLoginItem({ loadProject: locateProject ?? loadProject, dataRoot, env, platform, manager, clock })
       const failed = removed.removed !== true && removed.reason !== undefined && removed.reason !== 'workspace-not-prepared'
       if (failed) return { exit: EXIT.notSuccess, document: { loginItem: removed }, human: [`login item not removed: ${removed.reason}${removed.message ? ` (${removed.message})` : ''}`, `Next: ${NEXT[removed.reason] ?? 'see `atelier obsidian status`'}`] }
-      const remembered = removed.reason === 'workspace-not-prepared' ? false : rememberLoginItem('off')
+      const remembered = removed.reason === 'workspace-not-prepared' ? false : rememberLoginItem('off', { locate: true })
       let service = null
       if (removed.removed === true) {
         let entry = null
@@ -657,9 +657,18 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // The person's answer to "start at login?", remembered for this workspace as the `loginItem` decision of its machine
     // settings, given on the command line. By whom: the actor named, else a person at a terminal by the account's name,
     // else nobody known. Answers whether it wrote; an answer already remembered is not written again.
-    const rememberLoginItem = (choice) => {
-      if (readable().enablement.reason === 'not-configured') return false
-      const { workspace, repositoryRoots, now } = writable()
+    const rememberLoginItem = (choice, { locate = false } = {}) => {
+      let workspace, repositoryRoots, now
+      if (locate && locateProject !== null) {
+        const project = locateProject()
+        workspace = resolveServiceWorkspace({ project, dataRoot, env, platform })
+        if (!workspace?.workspaceRoot) return false
+        repositoryRoots = protectedRoots(project)
+        now = isoTime(clock)
+      } else {
+        if (readable().enablement.reason === 'not-configured') return false
+        ;({ workspace, repositoryRoots, now } = writable())
+      }
       const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
       if (current.decisions.loginItem?.choice === choice) return false
       const decidedBy = flags['consent-actor'] ?? (interactive ? accountActor(account()) : null)
@@ -693,7 +702,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       }
       const vaults = [...new Set([...underDataRoot, ...allocated])].sort()
       const userDataDir = obsidianUserDataDir({ platform, env })
-      return { vaults, privateState: workspace?.workspaceRoot ?? null, projectFile: project.configPath ?? null, pointer: project.configPath ? localPointerPath(project) : null, obsidianList: userDataDir === null ? null : path.join(userDataDir, OBSIDIAN_SETTINGS_FILE) }
+      return { vaults, privateState: workspace?.workspaceRoot ?? null, projectFile: project.configPath ?? null, pointer: typeof project.configDir === 'string' && readLocalPointer(project) !== null ? localPointerPath(project) : null, obsidianList: userDataDir === null ? null : path.join(userDataDir, OBSIDIAN_SETTINGS_FILE) }
     }
 
     // Where a view's vault is, or will be: { path, origin }. A view the next tick will place is shown where it would go,
@@ -1099,7 +1108,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const service = workspace === null ? { state: 'stopped', stopped: false, refused: false, reason: 'workspace-not-prepared' } : await stopService(lifecycle, lifecycleRules)
         const itemGone = item.removed === true || item.reason === 'not-installed' || item.reason === 'workspace-not-prepared'
         const serviceGone = service.stopped === true || service.state === 'stopped'
-        const remembered = workspace !== null && itemGone ? rememberLoginItem('off') : false
+        const remembered = workspace !== null && itemGone ? rememberLoginItem('off', { locate: true }) : false
         return {
           exit: itemGone && serviceGone ? EXIT.ok : EXIT.notSuccess,
           document: { loginItem: item, service, kept, rememberedNow: { loginItem: remembered ? 'off' : null } },
@@ -1111,6 +1120,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             ...kept.vaults.map((vault) => `  vault           ${vault}`),
             ...(kept.privateState === null ? [] : [`  private state   ${kept.privateState}`]),
             `  project file    ${kept.projectFile ?? '(none)'}; its Obsidian settings stay`,
+            ...(kept.pointer === null ? [] : [`  workspace pointer ${kept.pointer}`]),
             ...(kept.obsidianList === null ? [] : [`  Obsidian's list ${kept.obsidianList}; the vaults stay in it`]),
           ],
         }
