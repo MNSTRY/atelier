@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refuse a view as mixed-read when a previously observed source becomes a directory or changes during its pinned read, or a graph-declared sidecar disappears during the build. Other views can proceed; never-observed and unreadable sources retain their own errors.
+- Cover the Astro presentation example in weekly dependency updates and update its Astro dependency to 7.3.8.
+
 - Event-loop benchmark results record the host logical CPU count and the one-, five- and fifteen-minute load averages at the start and end, including failed runs, so responsiveness evidence can be read with its host conditions.
 
 - Name the practical-judgment responsibility Phronesis, with practical judgment as its plain-language description. Existing catalog identity, English lookup alias, judgment API and skill identities remain compatible. Keep Knowledge Stewardship distinct from the shared Knowledge Graph representation; move the current guide to `docs/reference/phronesis.md`.

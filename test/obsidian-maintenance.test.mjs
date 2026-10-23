@@ -13,6 +13,7 @@ import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { resolveProjectConfig, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
 import { createEditorAdapter, publishView, resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publication/test-seam.mjs'
+import { readFileBytes } from '../src/projection/obsidian/recovery/store.mjs'
 import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src/runtime/obsidian/engine.mjs'
 import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 import { sourceKey } from '../src/runtime/obsidian/observation.mjs'
@@ -263,6 +264,77 @@ test('a source removed after this tick observed it and before the graph build re
   assert.equal(blind.removed(), true)
 })
 
+test('an observed sidecar removed during the graph build refuses mixed-read; its persistent absence remains an invalid graph until repaired', needsExchange, async (t) => {
+  for (const route of ['cooperative', 'synchronous']) await t.test(route, async (t) => {
+    const world = makeWorld(t)
+    const asset = world.source('west-wing/charts/harbor.pdf')
+    const sidecar = `${asset}.kg.json`
+    fs.mkdirSync(path.dirname(asset), { recursive: true })
+    fs.writeFileSync(asset, FILES['east-wing/charts/sounding.pdf'])
+    const metadata = `${JSON.stringify({ ...SIDECAR, asset: 'harbor.pdf', kg: { ...SIDECAR.kg, id: 'west-wing:harbor', relations: {} } }, null, 2)}\n`
+    fs.writeFileSync(sidecar, metadata)
+    let removed = false
+    const remove = () => { if (!removed) { removed = true; fs.rmSync(sidecar) } }
+    const seams = route === 'synchronous'
+      ? { buildGraph: (input) => { remove(); return DEFAULT.buildGraph(input) } }
+      : { buildGraphCooperatively: (input) => DEFAULT.buildGraphCooperatively({ ...input, scheduling: {
+        ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => { if (phase === 'graph-census') remove() },
+      } }) }
+    const engine = world.engine({ seams })
+    const report = await engine.tick()
+    assert.equal(removed, true)
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+    assert.deepEqual(report.refusalCauses, [{ scopeId: FULL_SCOPE.scopeId, code: 'mixed-read', cause: 'ENOENT' }])
+    assert.deepEqual([world.calls.prepareView, world.calls.publishView], [0, []])
+    assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
+    world.advance(1000)
+    const invalid = await engine.tick()
+    assert.deepEqual([invalid.full, world.scope(invalid).reason], [true, 'canonical-graph-invalid'], 'the next observation cannot vouch for an absent sidecar')
+    fs.writeFileSync(sidecar, metadata)
+    world.advance(1000)
+    assert.equal(world.scope(await engine.tick()).state, 'current', 'repair permits the next generation')
+  })
+})
+
+test('an observed source replaced by a directory during either graph build refuses mixed-read; a build without prior observation preserves EISDIR', needsExchange, async (t) => {
+  for (const route of ['cooperative', 'synchronous']) await t.test(route, async (t) => {
+    const world = makeWorld(t)
+    const bell = world.source('east-wing/notes/bell.md')
+    fs.writeFileSync(bell, note({ id: 'east-wing:bell', title: 'Bell', body: 'Sounded in fog.' }))
+    const engine = world.engine({ seams: route === 'synchronous' ? { buildGraph: (input) => DEFAULT.buildGraph(input) } : {} })
+    const read = fs.readFileSync
+    let replaced = false
+    fs.readFileSync = (file, ...rest) => {
+      if (!replaced && file === bell) { replaced = true; fs.rmSync(bell); fs.mkdirSync(bell) }
+      return read(file, ...rest)
+    }
+    let report
+    try { report = await engine.tick() } finally { fs.readFileSync = read }
+    assert.equal(replaced, true)
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+    assert.deepEqual(report.refusalCauses, [{ scopeId: FULL_SCOPE.scopeId, code: 'mixed-read', cause: 'EISDIR' }])
+    assert.deepEqual([world.calls.prepareView, world.calls.publishView], [0, []])
+    world.advance(1000)
+    const next = await engine.tick()
+    assert.deepEqual([next.full, world.scope(next).state], [true, 'current'])
+    assert.equal(world.manifest().notes.some((item) => item.nodeId === 'east-wing:bell'), false)
+
+    // No observation means no evidence that this was once a readable file. The same real EISDIR stays untyped.
+    fs.rmSync(bell, { recursive: true })
+    fs.writeFileSync(bell, note({ id: 'east-wing:bell', title: 'Bell', body: 'Sounded in fog.' }))
+    replaced = false
+    fs.readFileSync = (file, ...rest) => {
+      if (!replaced && file === bell) { replaced = true; fs.rmSync(bell); fs.mkdirSync(bell) }
+      return read(file, ...rest)
+    }
+    try {
+      const input = { project: world.loadProject(), eligibility: DEFAULT_ELIGIBILITY }
+      if (route === 'synchronous') assert.throws(() => DEFAULT.buildGraph(input), (error) => error.code === 'EISDIR')
+      else await assert.rejects(DEFAULT.buildGraphCooperatively(input), (error) => error.code === 'EISDIR')
+    } finally { fs.readFileSync = read }
+  })
+})
+
 test('a path the build can never read still stops every tick: a nested repository whose configured path is a file; mutation control: a rule that types every missing path inside a repository loops as mixed-read instead', needsExchange, async (t) => {
   const ticksOf = async (primitives) => {
     const world = makeWorld(t)
@@ -419,6 +491,80 @@ test('a selected source removed before an already committed generation is publis
   await assert.rejects(blind.engine.tick(), (error) => error.code === 'ENOENT')
   assert.equal(blind.publications(), 2)
 })
+
+// A real selected leaf changes in the production reader, after its graph was built. A directory is substituted at
+// preparation's first wait or before the commit's source recheck. For ELEAFCHANGED, rename happens inside openSync,
+// after openRegularFileNoFollow's lstat: the descriptor then names another inode. No real app or service is used.
+async function selectedSourceRace(t, { during, kind, normalized = true }) {
+  const WEST_SCOPE = { scopeId: 'scope-west', mode: 'scoped', selector: { repo: 'west-wing' } }
+  const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, WEST_SCOPE]) })
+  const sources = ['bell', 'whistle'].map((name) => world.source(`east-wing/notes/${name}.md`))
+  for (const file of sources) fs.writeFileSync(file, note({ id: `east-wing:${path.basename(file, '.md')}`, title: path.basename(file, '.md'), body: 'Sounded in fog.' }))
+  let armed = false
+  let armedOnce = false
+  let replaced = 0
+  const candidates = new Map(sources.map((file, index) => {
+    const candidate = path.join(world.dir, `replacement-${index}.md`)
+    fs.writeFileSync(candidate, fs.readFileSync(file))
+    return [file, candidate]
+  }))
+  const arm = () => {
+    if (armedOnce) return
+    armedOnce = true
+    if (kind === 'directory') {
+      for (const file of sources) { fs.rmSync(file); fs.mkdirSync(file); replaced += 1 }
+    } else {
+      // A changed stat hint makes the precommit check read the source rather than reuse its observed hint.
+      if (during === 'precommit') for (const file of sources) fs.appendFileSync(file, '\nThe bell was polished.\n')
+      armed = true
+    }
+  }
+  const seams = during === 'preparation'
+    ? { prepareViewCooperatively: (input) => prepareViewCooperatively({ ...input, scheduling: {
+      ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => { if (input.scope.scopeId === FULL_SCOPE.scopeId && phase === 'emit-note') arm() },
+    } }) }
+    : { publishView: (input) => publishView({ ...input, scheduling: {
+      ...input.scheduling, maxUnits: 1, onBurst: ({ phase }) => { if (input.recoveryStore.scopeId === FULL_SCOPE.scopeId && phase === 'publication-complete') arm() },
+    } }) }
+  if (!normalized) seams.captureSnapshot = (input) => ({ ...DEFAULT.captureSnapshot(input), readSource: (repo, relative) => readFileBytes(world.source(`${repo}/${relative}`)) })
+  const engine = world.engine({ seams })
+  const open = fs.openSync
+  fs.openSync = (file, ...rest) => {
+    if (armed && candidates.has(file)) {
+      armed = false
+      fs.renameSync(candidates.get(file), file)
+      replaced += 1
+    }
+    return open(file, ...rest)
+  }
+  let report
+  let thrown
+  try { report = await engine.tick() } catch (error) { thrown = error } finally { fs.openSync = open }
+  return { world, engine, report, thrown, replaced, WEST_SCOPE }
+}
+
+for (const during of ['preparation', 'precommit']) for (const kind of ['directory', 'leaf']) {
+  test(`an observed selected source changed to a ${kind} during ${during} refuses mixed-read and lets the other view publish`, needsExchange, async (t) => {
+    const { world, engine, report, thrown, replaced, WEST_SCOPE } = await selectedSourceRace(t, { during, kind })
+    assert.equal(thrown, undefined)
+    assert.ok(replaced > 0, 'the source changed through the real filesystem read path')
+    assert.deepEqual([world.scope(report).state, world.scope(report).reason], ['stale', 'mixed-read'])
+    assert.deepEqual(report.refusalCauses, [{ scopeId: FULL_SCOPE.scopeId, code: 'mixed-read', cause: kind === 'directory' ? 'EISDIR' : 'ELEAFCHANGED' }])
+    assert.equal(world.scope(report, WEST_SCOPE.scopeId).state, 'current')
+    assert.equal(world.calls.publishView.at(-1), WEST_SCOPE.scopeId, 'the later view is still published')
+    assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false, 'the refused generation has no committed pointer')
+    world.advance(1000)
+    const next = await engine.tick()
+    assert.deepEqual([next.full, world.scope(next).state], [true, 'current'])
+    if (kind === 'directory') assert.equal(world.manifest().notes.some((item) => ['east-wing:bell', 'east-wing:whistle'].includes(item.nodeId)), false)
+    // Without the snapshot's conversion, the same real read fault stops the tick before the later view.
+    const blind = await selectedSourceRace(t, { during, kind, normalized: false })
+    assert.ok(blind.thrown instanceof Error)
+    if (kind === 'leaf') assert.equal(blind.thrown.code, 'ELEAFCHANGED')
+    else assert.equal(blind.thrown.message, 'state leaf is not a regular file')
+    assert.equal(blind.world.calls.publishView.includes(WEST_SCOPE.scopeId), false)
+  })
+}
 
 test('a read of a selected source that fails for another reason still stops the tick: a source that cannot be read, or no such file at a source that is still there', needsExchange, async (t) => {
   for (const [name, fault] of Object.entries({
