@@ -31,8 +31,10 @@ the commit are the agent's or the person's.
    the graph check and the boundary guard run against its work as they would
    against anyone's.
 3. **A person decides, and the change lands.** The person reviews the draft
-   and, where the workflow records decisions, records one with its rationale.
-   The package does not require or check a decision before a commit. The
+   and, where the workflow records decisions, records one with its rationale
+   through the consumer adapter or the team's workflow. The optional review
+   workspace records decisions on review-run claims, not decisions about a draft
+   change. The package does not require or check a decision before a commit. The
    person or the agent commits the change through the boundary guard, and the
    graph and the pages built from it follow on their next build.
 
@@ -89,12 +91,13 @@ external delivery are integrations you configure in the harness.
   "every change passes the same checks" is true where the checks run on every
   commit.
 - **A contribution surface.** The package's loopback projection carries the
-  page and its passages. Notes and decisions are recorded by the package's
-  optional review workspace (`atelier dev --review`, described in
-  `docs/guides/local-review.md`) or by a consumer adapter built on the collaboration
-  ledger; `docs/reference/coauthor-session.md` describes the
-  experimental portable session reducer. Neither applies a source change; the
-  agent in the harness does, and the checks run against it.
+  page and its passages. Its optional review workspace (`atelier dev --review`,
+  described in `docs/guides/local-review.md`) records passage notes and decisions
+  on review-run claims. A consumer adapter built on the collaboration ledger
+  or the team's workflow records decisions about a draft change;
+  `docs/reference/coauthor-session.md` describes the experimental portable
+  session reducer. These records do not apply a source change; the agent in
+  the harness does, and the checks run against it.
 - **Examples with expected results.** By convention, each round of authoring
   adds reviewed examples with expected results beside the rules they test. The
   package keeps them and their links in the graph; it does not run them. An

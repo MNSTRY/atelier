@@ -8,12 +8,16 @@ import { runProjectCommand } from '../src/projection/project.mjs'
 import { createProtocolRegistry, loadExtensionPacks } from '../src/extension-packs/loader.mjs'
 import {
   buildReadinessExportDryRun,
+  buildReadinessRun,
   buildTenantPacket,
   listProtocolRuns,
   runProtocol,
+  readinessRunsDir,
   summarizeReadinessJourney,
   writeTenantPacket,
+  writeReadinessRun,
 } from '../src/readiness-protocols/runtime.mjs'
+import { protocolById } from '../src/readiness-protocols/bundled-pack.mjs'
 import { resolveProjectConfig } from '../src/project/config.mjs'
 import { makeSampleProject } from './helpers/sample-project.mjs'
 
@@ -57,6 +61,100 @@ function packProject(t, { gate = 'required' } = {}) {
 const packAnswers = {
   scope: { name: 'Neutral scope', sourceRef: 'source:readiness-notes' },
 }
+
+// These ordering cases need only the existing protocol evaluator and scratch-local run records, not a graph build.
+function syntheticRun(project, { createdAt, label = 'Synthetic actor', complete = true } = {}) {
+  const answers = { actors: [{
+    displayName: label,
+    ...(complete ? { localId: 'synthetic-actor', role: 'operator', sourceRef: 'source:readiness-notes', runtimeOwner: 'identity', ownerRationale: 'Owns the synthetic review.' } : {}),
+  }] }
+  return buildReadinessRun({ project, protocol: protocolById('mnstry.readiness:identity-map'), answers, createdAt })
+}
+
+function runProject(t) {
+  const sample = makeSampleProject(t)
+  return { config: { name: 'Synthetic readiness project' }, configDir: sample.dir, workspaceRoot: sample.dir }
+}
+
+test('journey and tenant packet choose creation time when generated run hashes sort in the opposite order', (t) => {
+  const project = runProject(t)
+  const candidates = Array.from({ length: 32 }, (_, index) => syntheticRun(project, {
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(), label: `Synthetic actor ${index}`, complete: index % 2 === 0,
+  }))
+  let pair
+  for (let index = 0; index < candidates.length - 1; index += 2) {
+    if (candidates[index].runId > candidates[index + 1].runId) { pair = candidates.slice(index, index + 2); break }
+  }
+  assert.ok(pair, 'the deterministic generated fixture includes a hash order opposed to creation time')
+  const [older, newer] = pair
+  assert.equal(older.status, 'review-needed')
+  assert.equal(newer.status, 'draft')
+  writeReadinessRun(project, newer)
+  writeReadinessRun(project, older)
+  const listed = listProtocolRuns(project)
+  assert.deepEqual(listed.map((run) => run.runId), [older.runId, newer.runId])
+  for (const runs of [undefined, [newer, older], [older, newer]]) {
+    const options = runs === undefined ? {} : { runs }
+    const journey = summarizeReadinessJourney(project, options)
+    assert.equal(journey.dimensions[0].status, 'draft')
+    assert.deepEqual(journey.dimensions[0].sourceRefs, [`readiness-run:${newer.runId}`])
+    assert.equal(buildTenantPacket(project, options).tenantCandidate, newer.answers.actors[0].displayName)
+  }
+  const supplied = [newer, older]
+  assert.deepEqual(buildTenantPacket(project, { runs: supplied }), buildTenantPacket(project, { runs: [older, newer] }))
+  assert.deepEqual(supplied, [newer, older], 'selection never sorts caller-owned arrays in place')
+})
+
+test('equal creation instants use runId as a deterministic tie-break, independent of timezone spelling or input order', (t) => {
+  const project = runProject(t)
+  const runs = [
+    syntheticRun(project, { createdAt: '2026-01-02T00:00:00.000Z', label: 'First synthetic actor' }),
+    syntheticRun(project, { createdAt: '2026-01-02T08:00:00+08:00', label: 'Second synthetic actor' }),
+  ]
+  const winner = [...runs].sort((left, right) => left.runId < right.runId ? -1 : 1).at(-1)
+  for (const input of [runs, [...runs].reverse()]) {
+    assert.deepEqual(summarizeReadinessJourney(project, { runs: input }).dimensions[0].sourceRefs, [`readiness-run:${winner.runId}`])
+    assert.equal(buildTenantPacket(project, { runs: input }).tenantCandidate, winner.answers.actors[0].displayName)
+  }
+})
+
+test('submillisecond creation fractions retain chronological order rather than collapsing into a runId tie', (t) => {
+  const project = runProject(t)
+  const earlier = { ...syntheticRun(project, { createdAt: '2026-01-02T00:00:00.0001Z', label: 'Earlier actor' }), runId: `readiness-run-${'f'.repeat(24)}` }
+  const later = { ...syntheticRun(project, { createdAt: '2026-01-02T00:00:00.0002Z', label: 'Later actor' }), runId: `readiness-run-${'0'.repeat(24)}` }
+  const runs = [later, earlier]
+  assert.equal(buildTenantPacket(project, { runs }).tenantCandidate, 'Later actor')
+  assert.deepEqual(summarizeReadinessJourney(project, { runs }).dimensions[0].sourceRefs, [`readiness-run:${later.runId}`])
+})
+
+test('invalid creation times refuse selection, construction and persistence instead of choosing a fallback run', (t) => {
+  const project = runProject(t)
+  const good = syntheticRun(project, { createdAt: '2026-01-02T00:00:00.000Z' })
+  for (const createdAt of [undefined, null, 0, '', 'not-a-time', '2026-01-02', '2026-02-30T00:00:00Z', '2026-01-02T00:00:00', '2026-01-02T00:00:60Z']) {
+    const invalid = { ...good, createdAt }
+    for (const runs of [[good, invalid], [invalid, good]]) {
+      assert.throws(() => summarizeReadinessJourney(project, { runs }), /invalid-readiness-run-created-at/)
+      assert.throws(() => buildTenantPacket(project, { runs }), /invalid-readiness-run-created-at/)
+    }
+    if (createdAt !== undefined) assert.throws(() => syntheticRun(project, { createdAt }), /invalid-readiness-run-created-at/)
+    assert.throws(() => writeReadinessRun(project, invalid), /invalid-readiness-run-created-at/)
+  }
+  assert.equal(fs.existsSync(readinessRunsDir(project)), false, 'refused writes create no run directory')
+  const directory = readinessRunsDir(project)
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, `${good.runId}.json`), JSON.stringify({ ...good, createdAt: 'invalid' }))
+  assert.throws(() => listProtocolRuns(project), /invalid-readiness-run-created-at/)
+})
+
+test('conflicting copies of one run identity cannot let caller array order decide readiness', (t) => {
+  const project = runProject(t)
+  const original = syntheticRun(project, { createdAt: '2026-01-02T00:00:00Z' })
+  const changed = { ...original, status: 'draft' }
+  for (const runs of [[original, changed], [changed, original]]) {
+    assert.throws(() => summarizeReadinessJourney(project, { runs }), /conflicting-readiness-run-id/)
+    assert.throws(() => buildTenantPacket(project, { runs }), /conflicting-readiness-run-id/)
+  }
+})
 
 test('readiness journey reports all bundled dimensions before protocol runs', (t) => {
   const { project } = sampleProject(t)
@@ -215,6 +313,19 @@ test('tenant packet carries the generic pack contribution under ext and blocks o
   assert.equal(contribution.status, 'review-needed')
   assert.equal(contribution.score, 100)
   assert.deepEqual(contribution.proposedClaims, result.run.claims.map((claim) => claim.claimId))
+})
+
+test('extension-pack journey and packet contribution use the same chronological run selection', (t) => {
+  const { project, registry } = packProject(t)
+  const protocol = registry.protocolById(PACK_PROTOCOL_ID)
+  const older = buildReadinessRun({ project, protocol, answers: packAnswers, createdAt: '2026-01-01T00:00:00Z' })
+  const newer = buildReadinessRun({ project, protocol, answers: {}, createdAt: '2026-01-02T00:00:00Z' })
+  for (const runs of [[newer, older], [older, newer]]) {
+    assert.equal(summarizeReadinessJourney(project, { runs, registry }).packDimensions[0].status, 'draft')
+    const packet = buildTenantPacket(project, { runs, registry })
+    assert.equal(packet.ext['mnstry.atelier'].extensionPacks[0].protocols[0].status, 'draft')
+    assert.ok(packet.exportBlockers.includes(`readiness-incomplete:${PACK_PROTOCOL_ID}`))
+  }
 })
 
 test('advisory pack protocols report through the packet but never block export', (t) => {

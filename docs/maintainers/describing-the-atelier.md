@@ -91,10 +91,11 @@ Three different things get called "validated". Keep them apart.
   against each protocol's required inputs and list the ones missing; an
   answer being present is not evidence that it is right. `atelier readiness
   run PROTOCOL_ID --answers FILE` is that input-completeness check, and its
-  runs are not evidence-bound. `atelier review run PROTOCOL_ID --answers
-  FILE` records an evidence-bound run, and accepting one of its claims in the
-  review workspace checks its source linkage (`docs/guides/local-review.md`). The
-  responsible people review coverage; an issuer can record its admission
+  runs are not evidence-bound. For a run bound to its sources, `atelier review
+  run PROTOCOL_ID --answers FILE` records that source-bound run. Accepting one
+  of its claims in the review workspace checks source linkage. Linked bytes
+  establish what was read, not whether they logically support the proposed claim
+  (`docs/guides/local-review.md`). The responsible people review coverage; an issuer can record its admission
   decision in an attestation bound to the canonical form of the document it
   judged (`docs/reference/attestation.md`).
 - **Behavior.** Representative inputs and expected results beside each rule,
