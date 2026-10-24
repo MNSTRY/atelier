@@ -2292,9 +2292,31 @@ const code = process.argv.find((arg) => arg.startsWith('code='))
 const payload = JSON.parse(Buffer.from(/atob\\('([A-Za-z0-9+/=]+)'\\)/.exec(code)[1], 'base64').toString('utf8'))
 const log = process.env.STAND_IN_LOG
 const running = log + '.running'
-if (fs.existsSync(running)) fs.appendFileSync(log, 'OVERLAP\\n')
-fs.writeFileSync(running, '')
-fs.appendFileSync(log, JSON.stringify({ pid: process.pid, op: payload.op, operationId: payload.operationId ?? null, path: payload.path, home: process.env.HOME }) + '\\n')
+let priorRunning = null
+if (fs.existsSync(running)) {
+  fs.appendFileSync(log, 'OVERLAP\\n')
+  priorRunning = { identity: null, liveness: 'unknown' }
+  try {
+    const bytes = Buffer.alloc(1025)
+    const fd = fs.openSync(running, 'r')
+    let size, count
+    try { size = fs.fstatSync(fd).size; count = fs.readSync(fd, bytes, 0, bytes.length, 0) } finally { fs.closeSync(fd) }
+    priorRunning.marker = bytes.subarray(0, Math.min(count, 1024)).toString('utf8')
+    priorRunning.truncated = size > 1024 || count > 1024
+    const previous = priorRunning.truncated || count !== size ? null : JSON.parse(priorRunning.marker)
+    if (!previous || !Number.isInteger(previous.pid) || previous.pid <= 0 || previous.pid > 2147483647 ||
+        !['inspect', 'publish', 'collect'].includes(previous.op) || typeof previous.path !== 'string' ||
+        !(previous.operationId === null || typeof previous.operationId === 'string')) throw new Error('invalid-marker')
+    priorRunning.identity = { pid: previous.pid, op: previous.op, operationId: previous.operationId, path: previous.path }
+    try { process.kill(previous.pid, 0); priorRunning.liveness = 'live-or-reused' } catch (error) {
+      priorRunning.error = String(error.code ?? error.message ?? error.name).slice(0, 64)
+      if (error.code === 'ESRCH') priorRunning.liveness = 'dead'
+    }
+  } catch (error) { priorRunning.error = String(error.code ?? error.message ?? error.name).slice(0, 64) }
+}
+const identity = { pid: process.pid, op: payload.op, operationId: payload.operationId ?? null, path: payload.path }
+fs.writeFileSync(running, JSON.stringify(identity))
+fs.appendFileSync(log, JSON.stringify({ ...identity, priorRunning, home: process.env.HOME }) + '\\n')
 const finish = (reply) => { fs.rmSync(running, { force: true }); console.log('=> ' + JSON.stringify(reply)) }
 if (payload.op === 'publish') { fs.rmSync(running, { force: true }); setInterval(() => {}, 1000) }
 else if (payload.op === 'collect') {
