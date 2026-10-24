@@ -193,7 +193,7 @@ test('deselecting the bundle does not permit a custom pack to claim a bundled sl
   assert.throws(() => loadExtensionPacks(project), /collides with a bundled protocol slug/)
 })
 
-test('the existing external starter records custom review evidence with the bundle deselected', (t) => {
+test('the external starter initializes custom-only readiness and preserves run/review evidence', (t) => {
   const sample = makeSampleProject(t)
   const adapter = path.join(fs.realpathSync(sample.dir), 'adapter')
   const result = spawnSync(process.execPath, [CLI, 'init', '--template', 'external-project', '--target', adapter], {
@@ -202,16 +202,26 @@ test('the existing external starter records custom review evidence with the bund
   assert.equal(result.status, 0, result.stderr)
   const project = { dir: adapter, config: path.join(adapter, 'atelier.project.json') }
   const config = read(project.config)
-  config.ext['mnstry.atelier'].readiness = { includeBundled: false }
-  write(project.config, config)
-  successful(project, 'lock', 'write')
-  const output = JSON.parse(successful(project, 'review', 'run', CUSTOM_ID, '--answers', path.join(adapter, 'answers.example.json')).stdout)
+  assert.equal(config.ext['mnstry.atelier'].readiness?.includeBundled, false, 'external-project init must explicitly deselect bundled readiness')
+  assert.deepEqual(read(path.join(adapter, 'atelier.lock.json')).extensionPacks.map((pack) => pack.id), ['sample.readiness'])
+  successful(project, 'lock', 'check')
+  const protocols = JSON.parse(successful(project, 'readiness', 'protocols', '--json').stdout).protocols
+  assert.deepEqual(protocols.map((protocol) => protocol.id), [CUSTOM_ID])
+  const answers = path.join(adapter, 'answers.example.json')
+  const run = JSON.parse(successful(project, 'readiness', 'run', CUSTOM_ID, '--answers', answers, '--no-proposal').stdout)
+  const savedBytes = fs.readFileSync(run.runPath, 'utf8')
+  const reopened = JSON.parse(savedBytes)
+  assert.equal(reopened.protocolId, CUSTOM_ID)
+  assert.equal(reopened.safety.runtimeMutation, false)
+  assert.ok(reopened.claims.length > 0 && reopened.claims.every((claim) => claim.status === 'proposed' && !claim.promoted))
+  const output = JSON.parse(successful(project, 'review', 'run', CUSTOM_ID, '--answers', answers).stdout)
   assert.equal(output.ok, true)
   assert.match(output.evidenceDigest, /^sha256:[a-f0-9]{64}$/)
   assert.equal(output.confidence, 'not-calibrated')
   const ledger = fs.readFileSync(path.join(adapter, '.atelier-local', 'review', 'evidence.ndjson'), 'utf8')
   assert.ok(ledger.includes(CUSTOM_ID))
-  assert.equal(fs.existsSync(path.join(adapter, '.atelier-local', 'readiness')), false)
+  assert.equal(fs.readFileSync(run.runPath, 'utf8'), savedBytes)
+  assert.deepEqual(fs.readdirSync(path.dirname(run.runPath)), [path.basename(run.runPath)])
 })
 
 
