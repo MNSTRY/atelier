@@ -104,6 +104,13 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
       'src/decisions/unapproved.d.mts': 'export type UnapprovedDeclaration = string\n',
       'src/other/contracts.d.mts': 'export type UnapprovedLocation = string\n',
       'src/extensions/server.d.mts': 'export type SyntheticServer = string\n',
+      ...Object.fromEntries(['adoption', 'project', 'standalone'].map((name) => [
+        `src/extensions/${name}.d.mts`,
+        `export type SyntheticDeclaration = string\n// ${['', 'Users', 'synthetic', 'fixture'].join('/')}\n`,
+      ])),
+      'src/extensions/adoption-private.d.mts': 'export type UnapprovedName = string\n',
+      'src/extensions/project/deep.d.mts': 'export type UnapprovedDeepPath = string\n',
+      'src/other/standalone.d.mts': 'export type UnapprovedNamespace = string\n',
       'src/extensions/unapproved.d.mts': 'export type UnapprovedExtension = string\n',
       'src/other/server.d.mts': 'export type UnapprovedServerLocation = string\n',
       'templates/knowledge-workspace/.gitattributes': 'records/*.md text eol=lf\n',
@@ -136,6 +143,14 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
     assert.match(result.stderr, /unexpected tarball file: src\/decisions\/unapproved\.d\.mts/)
     assert.match(result.stderr, /unexpected tarball file: src\/other\/contracts\.d\.mts/)
     assert.doesNotMatch(result.stderr, /unexpected tarball file: src\/extensions\/server\.d\.mts/)
+    for (const name of ['adoption', 'project', 'standalone']) {
+      assert.doesNotMatch(result.stderr, new RegExp(`unexpected tarball file: src/extensions/${name}\\.d\\.mts`))
+      assert.ok(result.stderr.includes(`src/extensions/${name}.d.mts contains absolute user path`),
+        `${name} declarations must remain subject to the actual structural content scan`)
+    }
+    assert.match(result.stderr, /unexpected tarball file: src\/extensions\/adoption-private\.d\.mts/)
+    assert.match(result.stderr, /unexpected tarball file: src\/extensions\/project\/deep\.d\.mts/)
+    assert.match(result.stderr, /unexpected tarball file: src\/other\/standalone\.d\.mts/)
     assert.match(result.stderr, /unexpected tarball file: src\/extensions\/unapproved\.d\.mts/)
     assert.match(result.stderr, /unexpected tarball file: src\/other\/server\.d\.mts/)
     assert.doesNotMatch(result.stderr, /unexpected tarball file: templates\/knowledge-workspace\/\.gitattributes/)
