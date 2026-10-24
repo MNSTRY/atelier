@@ -26,6 +26,9 @@
   ],
   "ext": {
     "mnstry.atelier": {
+      "readiness": {
+        "includeBundled": false
+      },
       "extensionPacks": [
         {
           "id": "sample.readiness",
