@@ -16,6 +16,7 @@ import { readBoundedSource } from './source-read.mjs'
 export { readBoundedSource } from './source-read.mjs'
 import { validReviewArtifact } from '../collaboration/review-contracts.mjs'
 import { buildReadinessRun, answerForField } from './runtime.mjs'
+import { bundledReadinessEnabled } from './bundled-selection.mjs'
 
 export const hashEvidence = (value) =>
   `sha256:${crypto
@@ -68,7 +69,7 @@ function currentInputs(project, protocolId, answers) {
   const packs = loaded.packs ?? loaded
   const lifecycle = inspectPackLifecycle(project, packs)
   if (!lifecycle.ok) throw new Error(lifecycle.errors.join('; '))
-  const registry = createProtocolRegistry({ packs })
+  const registry = createProtocolRegistry({ packs, includeBundled: bundledReadinessEnabled(project) })
   const protocol = registry.protocolById(protocolId)
   if (!protocol) throw new Error('protocol unavailable for evidence binding')
   const graph = buildGraph(project)

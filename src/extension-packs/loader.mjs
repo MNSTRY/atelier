@@ -468,7 +468,8 @@ export function loadExtensionPacks(project, { report = false, verifyLock = true 
 // Explicit registry object, no global state. Bundled resolution keeps its
 // existing id | slug | namespaced affordance; pack protocols resolve by full
 // namespaced id only, so a pack can never shadow or squat a bundled slug.
-export function createProtocolRegistry({ packs = [] } = {}) {
+export function createProtocolRegistry({ packs = [], includeBundled = true } = {}) {
+  if (typeof includeBundled !== 'boolean') throw new TypeError('includeBundled must be a boolean')
   const packProtocols = new Map()
   for (const pack of packs) {
     for (const record of pack.protocols ?? []) packProtocols.set(record.id, record)
@@ -476,14 +477,14 @@ export function createProtocolRegistry({ packs = [] } = {}) {
   return {
     packs,
     protocolById(id) {
-      const bundled = getBundledReadinessProtocol(id)
+      const bundled = includeBundled ? getBundledReadinessProtocol(id) : null
       if (bundled) return bundled
       const record = packProtocols.get(id)
       return record ? record.protocol : null
     },
     listProtocols() {
       return [
-        ...bundledReadinessProtocols,
+        ...(includeBundled ? bundledReadinessProtocols : []),
         ...[...packProtocols.values()].map((record) => record.protocol),
       ]
     },

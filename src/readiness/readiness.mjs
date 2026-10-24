@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { bundledReadinessProtocols } from '../readiness-protocols/bundled-pack.mjs'
+import { bundledReadinessEnabled, requireBundledReadiness, requireSelectedReadinessProtocol } from '../readiness-protocols/bundled-selection.mjs'
 import { createProtocolRegistry, loadExtensionPacks } from '../extension-packs/loader.mjs'
 import {
   buildReadinessExportDryRun,
@@ -131,6 +132,7 @@ function configRelative(project, file) {
 }
 
 function buildProjectReadiness({ project, graph = null } = {}) {
+  const includeBundled = bundledReadinessEnabled(project)
   const loadedGraph = graph || (fs.existsSync(project.graphPath) ? readJson(project.graphPath) : null)
   const projectionEntry = path.join(project.outputRoot, 'index.html')
   const manifest = path.join(project.outputRoot, 'atelier.manifest.json')
@@ -167,7 +169,7 @@ function buildProjectReadiness({ project, graph = null } = {}) {
       enabled: false,
       authority: 'claim-only',
     },
-    tenantReadiness: summarizeReadinessJourney(project),
+    ...(includeBundled ? { tenantReadiness: summarizeReadinessJourney(project) } : {}),
   }
 }
 
@@ -201,10 +203,11 @@ export function stableReadinessForCheck(value) {
 
 // Loads declared extension packs (fail closed: any pack error throws before a
 // protocol becomes resolvable) and composes the explicit registry. Projects
-// with no declared packs get a bundled-only registry.
+// without an explicit selection retain the bundled default.
 function projectRegistry(project) {
+  const includeBundled = bundledReadinessEnabled(project)
   const { packs } = loadExtensionPacks(project)
-  return createProtocolRegistry({ packs })
+  return createProtocolRegistry({ packs, includeBundled })
 }
 
 export function runReadinessCommand(argv = process.argv.slice(2)) {
@@ -219,15 +222,16 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
     const envConfig = process.env[PROJECT_CONFIG_ENV]
     const projectAware = projectConfigArg(argv) !== null
       || (typeof envConfig === 'string' && envConfig.trim() !== '')
-    const entries = bundledReadinessProtocols.map((protocol) => ({ protocol, source: null }))
+    let includeBundled = true
+    let entries = bundledReadinessProtocols.map((protocol) => ({ protocol, source: null }))
     if (projectAware) {
       const project = commandProject({ argv })
       const registry = projectRegistry(project)
-      for (const pack of registry.packs) {
-        for (const record of pack.protocols ?? []) {
-          entries.push({ protocol: record.protocol, source: pack.id })
-        }
-      }
+      includeBundled = bundledReadinessEnabled(project)
+      entries = registry.listProtocols().map((protocol) => ({
+        protocol,
+        source: registry.packs.find((pack) => pack.protocols?.some((record) => record.id === protocol.id))?.id ?? null,
+      }))
     }
     if (detail) {
       console.log(`${JSON.stringify({
@@ -235,7 +239,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
         protocols: entries.map(({ protocol, source }) => (source ? { ...protocol, source } : protocol)),
       }, null, 2)}\n`)
     } else {
-      console.log('MNSTRY readiness protocols')
+      console.log(includeBundled ? 'MNSTRY readiness protocols' : 'Atelier readiness protocols')
       for (const { protocol, source } of entries) {
         console.log(`- ${protocol.id}: ${protocol.title}${source ? ` (source: ${source})` : ''}`)
       }
@@ -245,6 +249,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
 
   if (subcommand === 'journey') {
     const project = commandProject({ argv })
+    requireBundledReadiness(project)
     const journey = summarizeReadinessJourney(project, { registry: projectRegistry(project) })
     console.log(`${JSON.stringify(journey, null, 2)}\n`)
     return
@@ -254,12 +259,14 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
     const project = commandProject({ argv })
     const protocolId = parsed._[1]
     if (!protocolId) throw new Error('readiness run requires a protocol id')
+    const registry = projectRegistry(project)
+    requireSelectedReadinessProtocol(project, registry, protocolId)
     const answers = parsed.answers ? readJson(path.resolve(process.cwd(), parsed.answers)) : {}
     const result = runProtocol(project, protocolId, {
       answers,
       write: parsed.write !== false,
       createProposal: parsed.proposal !== false && parsed['no-proposal'] !== true,
-      registry: projectRegistry(project),
+      registry,
     })
     console.log(`${JSON.stringify({
       ok: result.run.blockers.length === 0,
@@ -279,6 +286,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
 
   if (subcommand === 'packet') {
     const project = commandProject({ argv })
+    requireBundledReadiness(project)
     const packet = buildTenantPacket(project, { registry: projectRegistry(project) })
     const file = writeTenantPacket(project, packet)
     console.log(`${JSON.stringify({
@@ -292,6 +300,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
   if (subcommand === 'export') {
     if (!argv.includes('--dry-run')) throw new Error('readiness export only supports --dry-run')
     const project = commandProject({ argv })
+    requireBundledReadiness(project)
     const report = buildReadinessExportDryRun(project, { registry: projectRegistry(project) })
     console.log(`${JSON.stringify(report, null, 2)}\n`)
     if (!report.accepted) process.exitCode = 1

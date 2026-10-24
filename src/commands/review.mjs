@@ -7,6 +7,7 @@ import {
   createProtocolRegistry,
 } from '../extension-packs/loader.mjs'
 import { runProtocol } from '../readiness-protocols/runtime.mjs'
+import { bundledReadinessEnabled, requireSelectedReadinessProtocol } from '../readiness-protocols/bundled-selection.mjs'
 import { recordReviewEvidence } from '../readiness-protocols/evidence.mjs'
 import { createReviewStore } from '../collaboration/review-store.mjs'
 import {
@@ -73,7 +74,9 @@ let result
 if (args._[0] === 'run') {
   const registry = createProtocolRegistry({
     packs: loadExtensionPacks(project).packs,
+    includeBundled: bundledReadinessEnabled(project),
   })
+  requireSelectedReadinessProtocol(project, registry, args._[1])
   const answers = args.answers ? readJson(path.resolve(args.answers)) : {}
   const { run } = runProtocol(project, args._[1], {
     answers,
