@@ -31,6 +31,23 @@ Resolution may create ignored `.atelier-local/` directories; this diagnostic is
 not a promise of a write-free invocation. The ordinary config report retains
 its existing shape and local config path.
 
+## Bundled readiness selection
+
+The tracked `atelier.project.json` may set
+`ext["mnstry.atelier"].readiness.includeBundled` to `false` to deselect the bundled
+MNSTRY readiness pack. An absent setting or explicit `true` preserves the
+existing default. `readiness` must be an object and `includeBundled` a boolean;
+invalid values fail with `readiness-selection-invalid`. This is a project
+setting, not a CLI flag or local preference.
+
+Project-aware protocol listing and runs then use only selected custom packs;
+generic graph, projection and readiness checks remain available without the
+MNSTRY tenant journey. A bare protocol listing without a project selection
+retains its standalone bundled list. Review selection changes and run
+`atelier lock write --project ./atelier.project.json`; see
+[readiness pack selection](../guides/tenant-readiness.md#select-the-readiness-pack)
+for lock checks and commands that require the bundle.
+
 ## Command inventory
 
 | Family | Project handling | Other effects |
