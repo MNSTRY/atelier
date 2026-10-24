@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { MANIFEST_SCHEMA, OVERLAY_SCHEMA, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
 import { RESERVATIONS, ephemeralRange, firstStartPort, isEphemeral, releaseReservation, reservePort } from './helpers/loopback-port.mjs'
 import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { resolveProjectConfig, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
@@ -3554,7 +3555,43 @@ test('a service started on a personal home with nothing confirmed listens, ticks
   fs.mkdirSync(home, { mode: 0o700 })
   const { locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
   // The command side never loads the home's project to find, start or stop its service: the loader throws if asked.
-  const lifecycle = { loadProject: () => { throw new Error('a located home is never loaded by the lifecycle') }, locateProject: () => locatePersonalHome({ personalHome: home }), dataRoot: path.join(dir, 'data'), env: process.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL }
+  let loads = 0
+  const lifecycle = { loadProject: () => { loads++; throw new Error('a located home is never loaded by the lifecycle') }, locateProject: () => locatePersonalHome({ personalHome: home }), dataRoot: path.join(dir, 'data'), env: process.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL }
+  if (typeof process.getuid !== 'function') {
+    // The locator refuses an unverifiable owner before any manifest/history read or lifecycle preparation.
+    // Keep this negative scenario before the canonical selection reader, which needs private-root capability too.
+    const refused = (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'not-private-location' && error.detail?.source === 'personal-workspace'
+    let spawns = 0
+    assert.throws(() => locatePersonalHome({ personalHome: home }), refused)
+    await assert.rejects(startService({ ...lifecycle, consent: CONSENT, spawn: () => { spawns++; throw new Error('an unverifiable home must not start a child') } }), refused)
+    assert.deepEqual({ loads, spawns, ownedProcesses: mine.length }, { loads: 0, spawns: 0, ownedProcesses: 0 })
+    assert.deepEqual(fs.readdirSync(home), [], 'the refused home stays empty')
+    assert.equal(fs.existsSync(path.join(home, '.atelier-local', 'obsidian.json')), false, 'no pointer was issued')
+    assert.equal(fs.existsSync(path.join(home, '.atelier-local')), false, 'no local state was created')
+    assert.equal(fs.existsSync(lifecycle.dataRoot), false, 'no private data state was created')
+    return
+  }
+  // A bare existing home is unavailable, not an implicit empty enrollment. Prove the compatibility restriction
+  // before supplying authored inputs, without letting a refusal start a child or prepare either state location.
+  const manifestUnavailable = (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'personal-home-unavailable' && error.detail?.source === 'personal-workspace'
+  let bareSpawns = 0
+  assert.throws(() => locatePersonalHome({ personalHome: home }), manifestUnavailable)
+  await assert.rejects(startService({ ...lifecycle, consent: CONSENT, spawn: () => { bareSpawns++; throw new Error('a home without its manifest must not start a child') } }), manifestUnavailable)
+  assert.deepEqual({ loads, spawns: bareSpawns, ownedProcesses: mine.length }, { loads: 0, spawns: 0, ownedProcesses: 0 })
+  assert.deepEqual(fs.readdirSync(home), [], 'a missing manifest is not initialized implicitly')
+  assert.equal(fs.existsSync(path.join(home, '.atelier-local', 'obsidian.json')), false, 'no pointer was issued')
+  assert.equal(fs.existsSync(path.join(home, '.atelier-local')), false, 'no local state was created')
+  assert.equal(fs.existsSync(lifecycle.dataRoot), false, 'no private data state was created')
+  // Authored inputs initialize the home; no enrollment, generation or confirmation is manufactured by the lifecycle.
+  // The locator needs the manifest's roots for private-state exclusion even while no generation is confirmed.
+  const authored = {
+    'atelier.personal.json': JSON.stringify({ schema: MANIFEST_SCHEMA, workspaceId: 'service-home-synthetic', revision: 1, bindings: [], repos: [] }),
+    'atelier.overlay.json': JSON.stringify({ schema: OVERLAY_SCHEMA, workspaceId: 'service-home-synthetic', annotations: [], connections: [], collections: [], views: [], preferences: {} }),
+  }
+  for (const [name, bytes] of Object.entries(authored)) fs.writeFileSync(path.join(home, name), bytes, { mode: 0o600 })
+  const beforeSelection = readPersonalSelectionHead({ personalHome: home })
+  assert.deepEqual(beforeSelection, { selected: null, sequence: 0, head: 'genesis' })
+  assert.deepEqual(locatePersonalHome({ personalHome: home }).repos, [], 'explicitly empty enrollment supplies no repository roots')
   const spawn = (...args) => { const child = childProcess.spawn(...args); mine.push(registerProcess(t, child, 'a service started on a personal home')); return child }
   let words = null
   const port = await reservePort(t)
@@ -3563,11 +3600,13 @@ test('a service started on a personal home with nothing confirmed listens, ticks
   assert.ok(words.includes(`--personal-home=${home}`) && !words.some((word) => word.startsWith('--project')), words.join(' '))
   const record = readServiceRecord({ workspaceRoot: fs.realpathSync(workspaceStateRoot(lifecycle.dataRoot, started.workspaceId)), workspaceId: started.workspaceId })
   const status = await waitFor(async () => { const { body } = await callService(record, 'GET', '/status'); return body && body.loop.ticks >= 1 && !body.loop.ticking ? body : null }, { label: 'the first tick of the service', timeoutMs: 120000 })
-  // On Windows the personal-workspace module cannot verify a private root and refuses before it reads the history.
-  const why = process.platform === 'win32' ? 'private-root-unverifiable' : 'nothing-selected'
-  assert.deepEqual([status.service.status, status.lastTick?.state, status.lastTick?.reason], ['healthy', 'refused', why], JSON.stringify(status))
+  assert.deepEqual([status.service.status, status.lastTick?.state, status.lastTick?.reason], ['healthy', 'refused', 'nothing-selected'], JSON.stringify(status))
   const stopped = await stopService({ ...lifecycle, stopTimeoutMs: 20000 })
   assert.equal(stopped.stopped, true, JSON.stringify(stopped))
+  assert.equal(loads, 0, 'start and stop use the locator without admitting a generation')
+  assert.deepEqual(readPersonalSelectionHead({ personalHome: home }), beforeSelection)
+  for (const name of ['selections', 'generations']) assert.equal(fs.existsSync(path.join(home, name)), false, `the lifecycle creates no ${name}`)
+  for (const [name, bytes] of Object.entries(authored)) assert.equal(fs.readFileSync(path.join(home, name), 'utf8'), bytes, `${name} stays authored`)
 })
 
 test('a first start in these tests listens on a reserved port, never one the product found by listening on port 0 (#102)', async (t) => {

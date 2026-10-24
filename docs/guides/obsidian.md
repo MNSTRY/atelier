@@ -1033,9 +1033,15 @@ unit and loader is what it was.
   kept refuses `selection-continuity-unavailable`. No project is returned in either case.
   A confirmed selection is reported by `status` (`selection`: the generation
   and the number of its record).
-- **The service starts whatever the selection.** A bound project's folder is its
-  private home. The locator reads the home and the current manifest's repository
-  roots for exclusion, without composing or selecting a generation. A data root
+- **The service starts from an initialized home whatever the selection.** A bound
+  project's folder is its private home. The home must contain its caller-authored
+  `atelier.personal.json`, even when its enrollment is explicitly empty and no
+  generation is confirmed. A bare directory or a missing/unreadable manifest
+  refuses before startup; the locator cannot infer that no repositories were
+  enrolled from missing evidence. This tightens the former lower-level API
+  behavior that could start from a bare home. The locator reads the home and the
+  current manifest's repository roots for exclusion, without composing or
+  selecting a generation. A data root
   inside a declared repository is refused before private state is created or a
   login item is removed for a restart, including when nothing is confirmed.
   The service resolves its workspace from that at once and starts, and its

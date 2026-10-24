@@ -1577,6 +1577,7 @@ try {
 if (CLEANUP_ONLY) test('the rest of this file is skipped by ATELIER_OBSIDIAN_CLEANUP_ONLY=1', { skip: 'cleanup-only run: the acceptance cases below were not run' }, () => {})
 if (!CLEANUP_ONLY) {
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
+const { inspectPrivateLock } = await import('../src/project/durable-state.mjs')
 const { CORPUS_ROOT } = await import('../src/contracts/corpus.mjs')
 const { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, identitySuffix, validateObsidianContract } = await import('../src/projection/obsidian/contracts.mjs')
 const { openObjectStore } = await import('../src/projection/obsidian/edits/object-store.mjs')
@@ -1670,6 +1671,31 @@ function tempWorkspace(t, label) {
   fs.mkdirSync(repositoryRoots[0], { recursive: true })
   writeMachineSettings({ ...workspace, repositoryRoots, settings: defaultMachineSettings({ workspaceId: WORKSPACE_ID, updatedAt: NOW }) })
   return { dir, workspace, repositoryRoots }
+}
+
+// Both selection fixtures write machine settings once before selection work. The shared lock retains its
+// exact owner and matching release; selection operations must not acquire another settings generation.
+function assertReleasedMachineSettingsLock({ workspaceRoot }) {
+  const lock = path.join(workspaceRoot, 'state', 'settings', 'machine-settings.lock')
+  const ownerFile = path.join(`${lock}.owners`, '000000000001.json')
+  const releaseFile = path.join(`${lock}.owners`, '000000000001.released')
+  assert.equal(fs.existsSync(lock), false, 'no legacy lock file remains')
+  for (const file of [ownerFile, releaseFile]) {
+    const stat = fs.lstatSync(file)
+    assert.ok(stat.isFile(), 'ownership evidence is a regular file, never a link')
+    if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600, 'ownership evidence is owner-only')
+  }
+  const ownerBytes = fs.readFileSync(ownerFile, 'utf8')
+  const owner = JSON.parse(ownerBytes)
+  assert.deepEqual(Object.keys(owner).sort(), ['host', 'legacyDigest', 'nonce', 'pid'])
+  assert.equal(owner.pid, process.pid, 'the fixture settings write owns this ticket')
+  assert.equal(owner.host, createHash('sha256').update(os.hostname()).digest('hex'))
+  assert.match(owner.nonce, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.equal(owner.legacyDigest, null)
+  assert.equal(fs.readFileSync(releaseFile, 'utf8'), ownerBytes, 'release binds the exact owner, nonce and legacy identity')
+  assert.deepEqual(inspectPrivateLock(lock), {
+    available: true, reason: 'released', generation: 1, file: '000000000001.json', legacyDigest: null,
+  }, 'the completed settings write leaves no unresolved lock owner')
 }
 
 const select = (scope, extra = {}) => resolveSelection({ canonicalSnapshot: SNAPSHOT, profile: PROFILE, scope, ...extra })
@@ -1913,7 +1939,13 @@ test('a selection persists under state/selection, is read back exactly, and rewr
   const files = []
   const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const full = path.join(directory, entry.name); if (entry.isDirectory()) walk(full); else files.push(path.relative(workspace.workspaceRoot, full).split(path.sep).join('/')) } }
   walk(workspace.workspaceRoot)
-  assert.deepEqual(files.sort(), ['state/selection/view-a_north.json', 'state/selection/view-focus.json', 'state/settings/machine.json'])
+  assertReleasedMachineSettingsLock(workspace)
+  assert.deepEqual(files.sort(), [
+    'state/selection/view-a_north.json', 'state/selection/view-focus.json',
+    'state/settings/machine-settings.lock.owners/000000000001.json',
+    'state/settings/machine-settings.lock.owners/000000000001.released',
+    'state/settings/machine.json',
+  ])
   assert.ok(files.every((file) => !file.includes('.obsidian') && !file.startsWith('vaults/')))
 })
 
@@ -2321,7 +2353,13 @@ test('selection through the command: resolve, persist, show and list bind the de
   const found = []
   const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const full = path.join(directory, entry.name); if (entry.isDirectory()) walk(full); else found.push(path.relative(world.workspace.workspaceRoot, full).split(path.sep).join('/')) } }
   walk(world.workspace.workspaceRoot)
-  assert.deepEqual(found.sort(), ['state/selection/view-beacon.json', 'state/settings/machine.json'])
+  assertReleasedMachineSettingsLock(world.workspace)
+  assert.deepEqual(found.sort(), [
+    'state/selection/view-beacon.json',
+    'state/settings/machine-settings.lock.owners/000000000001.json',
+    'state/settings/machine-settings.lock.owners/000000000001.released',
+    'state/settings/machine.json',
+  ])
 })
 
 test('selection refusals through the command are typed: unknown view, withheld members, empty focus, usage', async (t) => {

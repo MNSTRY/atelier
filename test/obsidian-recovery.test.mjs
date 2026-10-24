@@ -2294,7 +2294,7 @@ const log = process.env.STAND_IN_LOG
 const running = log + '.running'
 if (fs.existsSync(running)) fs.appendFileSync(log, 'OVERLAP\\n')
 fs.writeFileSync(running, '')
-fs.appendFileSync(log, JSON.stringify({ op: payload.op, operationId: payload.operationId, home: process.env.HOME }) + '\\n')
+fs.appendFileSync(log, JSON.stringify({ pid: process.pid, op: payload.op, operationId: payload.operationId ?? null, path: payload.path, home: process.env.HOME }) + '\\n')
 const finish = (reply) => { fs.rmSync(running, { force: true }); console.log('=> ' + JSON.stringify(reply)) }
 if (payload.op === 'publish') { fs.rmSync(running, { force: true }); setInterval(() => {}, 1000) }
 else if (payload.op === 'collect') {
@@ -2310,8 +2310,14 @@ else if (payload.op === 'collect') {
   assert.equal(reply.status, 'published')
   assert.equal(reply.replyLost, true)
   assert.ok(Date.now() - started < 10000, 'the unanswered call was killed although it ignores SIGTERM')
-  const lines = fs.readFileSync(log, 'utf8').trim().split('\n')
-  assert.ok(!lines.includes('OVERLAP'), 'calls are serialized')
+  const callsLog = fs.readFileSync(log, 'utf8').trim()
+  const lines = callsLog.split('\n')
+  const serializationDiagnostic = JSON.stringify({
+    callsLogTail: callsLog.slice(-8192),
+    callsLogTruncated: callsLog.length > 8192,
+    transportRetries: adapter.transportRetries.slice(-16),
+  })
+  assert.ok(!lines.includes('OVERLAP'), `calls are serialized; ${serializationDiagnostic}`)
   const entries = lines.map((line) => JSON.parse(line))
   assert.deepEqual(entries.map((entry) => entry.op), ['inspect', 'publish', 'collect', 'inspect'])
   assert.ok(entries.every((entry) => entry.home === env.HOME), 'the transport uses the environment it was given, not the caller\'s HOME')
