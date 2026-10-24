@@ -18,6 +18,8 @@ The [responsibility architecture](reference/architecture.md) and versioned contr
 - [Distributions](guides/distributions.md)
 - [Local exact-plan upgrades](guides/exact-upgrades.md)
 - [Custom database extensions](guides/extensions.md)
+- [Existing databases and standalone applications](guides/extensions-adoption-standalone.md)
+- [Host-unbound checklist example](guides/extensions-checklist.md)
 - [Upgrade with your agent](guides/guided-upgrades.md)
 - [Progressive local ingestion](guides/ingestion.md)
 - [Discovery Harness and Research Harness](guides/inquiry-harnesses.md)

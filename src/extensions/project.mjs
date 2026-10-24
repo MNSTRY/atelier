@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { canonicalJson, parseManifest, parseReleaseBundle } from './contracts.mjs'
 import { sqlProjectFiles } from './scaffold-sql.mjs'
 import { convexProjectFiles } from './scaffold-convex.mjs'
+import { createChecklistProject } from './scaffold-checklist.mjs'
 import { releaseDigest } from './server.mjs'
 import { loadExtensionPacks, RESERVED_NAMESPACE_PATTERN } from '../extension-packs/loader.mjs'
 
@@ -140,9 +141,17 @@ The sample deletes its live rows and earlier provider receipts; backup retention
 the operator's responsibility. Provider qualification and actual Web/native acceptance
 are separate from scaffolding. Drizzle and Prisma have native project profiles. The native Convex starter has separate provider and host qualification requirements.
 `
-async function scaffoldProject({ directory, extensionId = 'sample.counter', profile = 'postgres-sql' }) {
+async function scaffoldProject({ directory, extensionId, profile = 'postgres-sql', model = 'counter' }) {
+  if (!['counter', 'checklist'].includes(model)) throw new Error('unsupported model')
+  if (extensionId === undefined) extensionId = model === 'checklist' ? 'sample.tasks' : 'sample.counter'
   if(!['postgres-sql','drizzle-db-first','drizzle-code-first','prisma-7-postgres','convex-native'].includes(profile))throw new Error('unsupported profile')
   if (extensionId.length > 128 || !/^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/.test(extensionId) || RESERVED_NAMESPACE_PATTERN.test(extensionId.split('.')[0])) throw new Error('invalid extension id')
+  if (model === 'checklist') {
+    if (profile !== 'postgres-sql') throw new Error('unsupported checklist profile')
+    const packageRoot = fileURLToPath(new URL('../..', import.meta.url))
+    const kit = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+    return createChecklistProject({ directory, extensionId, profile, packageVersion: kit.version, sealProject })
+  }
   const target = path.resolve(directory)
   await mkdir(target) // Exclusive reservation: an existing directory is never adopted or overwritten.
   const identity = await lstat(target)
