@@ -287,7 +287,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   let firstTick = true
   let running = false
   let watching = { signature: null, handle: null }
-  let known = null // { stateStore, maintenanceMode } once a workspace has been resolved
+  let known = null // { stateStore, maintenanceMode, repositoryRoots } once a workspace has been resolved
   let heldLock = null
   let releaseOwed = false
   // Views somebody asked to have prepared and published once more, at the next tick.
@@ -398,15 +398,17 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
   // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state. Nothing is
   // written for a location refusal, or unless the state root is proven outside every root declared now: a manifest
-  // that newly declares a root holding this state is never written into, cached store or not.
+  // that newly declares a root holding this state is never written into, cached store or not. When no project can be
+  // read now, a cached store is held to the roots it was last proven outside; without either, nothing is written.
   async function persistOutcome({ enablement, state, reason, now, scopeIds = [], locationRefused = false }) {
     if (locationRefused) return
     let located = null
     try { located = locateProject === null ? null : locateProject() } catch { located = null }
     const declared = [located, project].filter((value) => value !== null && value !== undefined)
-    if (declared.length === 0) return
     let repositoryRoots
-    try { repositoryRoots = declared.flatMap((value) => protectedRoots(value)) } catch { return }
+    if (declared.length > 0) { try { repositoryRoots = declared.flatMap((value) => protectedRoots(value)) } catch { return } }
+    else if (Array.isArray(known?.repositoryRoots)) repositoryRoots = known.repositoryRoots
+    else return
     const outside = (root) => { try { assertOutsideRepositories({ managedRoot: root, repositoryRoots }); return true } catch { return false } }
     if (!known) {
       const source = declared[0]
@@ -418,7 +420,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       if (!outside(root)) return
       const stateStore = createMaintenanceStateStore({ workspaceRoot: root, workspaceId: pointer.workspaceId })
       if (!stateStore.exists()) return
-      known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual' }
+      known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual', repositoryRoots }
     }
     if (!outside(known.stateStore.workspaceRoot)) return
     // Another engine is ticking this workspace: its state is not ours to write.
@@ -494,7 +496,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const machine = initializeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, updatedAt: now, personal: personalWorkspaceBindingOf(project) !== null })
     const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
-    known = { stateStore, maintenanceMode: machine.maintenanceMode }
+    known = { stateStore, maintenanceMode: machine.maintenanceMode, repositoryRoots }
     // A view refused for a file-system error (a vault folder that could not be allocated or placed, a configuration
     // file that could not be read again, a source removed while it was read, candidates that could not be staged) is
     // settled under the refusal's code alone, and such a tick ends without a failure. The error's code (`EACCES`, `EIO`,
