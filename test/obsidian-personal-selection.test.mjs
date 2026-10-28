@@ -364,6 +364,32 @@ test('a manifest that encloses the state root during engine-lock inspection publ
   assert.deepEqual(workspaceInventory(ari), before, 'no ownership ticket, settings or freshness was written')
 })
 
+test('a manifest that encloses the state root once the engine-lock ticket is published withdraws that ticket and prunes no predecessor', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const { acquirePrivateGenerationLock } = await import('../src/runtime/obsidian/private-lock.mjs')
+  let during = false
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, primitives: { acquireEngineLock: (args) => {
+    let calls = 0
+    const validate = args.validateLocation
+    return acquirePrivateGenerationLock({ ...args, validateLocation: () => {
+      // The third check follows the ticket's publication and comes before predecessors are pruned.
+      if (++calls === 3 && during) { during = false; enclose(ari) }
+      validate()
+    } })
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  before = workspaceInventory(ari)
+  during = true
+  const refused = await engine.tick()
+  assert.equal(during, false, 'the manifest changed after the ticket was published')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  // Lock cleanup is the one change permitted: the published ticket is withdrawn, so nothing is left or pruned.
+  assert.deepEqual(workspaceInventory(ari), before, 'the new ticket was withdrawn and no predecessor, settings or freshness changed')
+})
+
 test('a manifest that encloses the state root while the app vault list is read allocates no folder', async (t) => {
   const ari = makePerson(t)
   ari.select()

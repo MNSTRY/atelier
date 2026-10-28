@@ -1404,12 +1404,14 @@ test reported as a pass.
   - the plugin channel's bearer and the plugin choices it records, including a
     first-use bearer minted while a view is prepared and the confirmation
     written when a plugin session opens;
-  - the release of a lock already held when the proof fails: the engine lock
-    and the publication locks still write their release records, including a
-    release retried before the next publication, so that ownership is never
-    left behind. Apart from removing staged candidates, these release records
-    are the only change the engine and the publisher make after one of their
-    proofs refuses.
+  - lock cleanup when a proof fails: any private lock that is held, or whose
+    ticket was just published, when its proof refuses is still released or
+    withdrawn, so that ownership is never left behind. This covers the engine
+    lock (a release record, or the withdrawal of a ticket published before
+    the last check of its acquisition), the selection continuity lock and the
+    publication locks, including a release retried at the next acquisition.
+    Lock cleanup and removing staged candidates are the only changes the
+    engine and the publisher make after one of their proofs refuses.
 
   Each of these writers keeps its file inside the workspace's private state,
   but none checks the roots declared now. A manifest that comes to enclose the

@@ -129,8 +129,8 @@ export async function inspectPrivateGenerationLock({ directory, workspaceId, pro
 // { acquired: true, generation, release() } or { acquired: false, reason, holder }.
 // Never waits and never throws for a lock that is merely held.
 // `validateLocation`, when given, proves the private state's location before the lock directory is made, again after
-// the asynchronous inspection, and before a ticket is published or predecessors are pruned; a refusal there writes
-// nothing.
+// the asynchronous inspection, and once a ticket is published, before predecessors are pruned. A refusal at the first
+// two writes nothing; a refusal at the last withdraws the ticket just published, and prunes nothing.
 export async function acquirePrivateGenerationLock({ workspaceRoot, directory, workspaceId, purpose, service = null, clock, proveAbandoned, randomBytes = cryptoRandomBytes, validateLocation = () => {} }) {
   validateLocation()
   const contained = ensureContainedPrivateDirectory({ workspaceRoot, directory, label: 'private lock' })
