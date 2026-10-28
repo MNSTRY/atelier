@@ -29,7 +29,7 @@ import { pluginPresenceOf, turnPluginOnNext, withPluginFilesPending, withPluginR
 import { planViewAdd, viewFromRequest, writeViewPlan } from '../runtime/obsidian/project-views.mjs'
 import { askGoAhead, createQuestioner } from '../runtime/obsidian/questions.mjs'
 import { readServiceSettings } from '../runtime/obsidian/service-record.mjs'
-import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
+import { resolveServiceWorkspace, serviceLocationCheck } from '../runtime/obsidian/service.mjs'
 import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from '../runtime/obsidian/startup-adapters.mjs'
 import { OBSIDIAN_SETTINGS_FILE, obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../projection/obsidian/publication/vault-list.mjs'
 import { checkVaultParent, projectDisplayName, vaultFolderName } from '../runtime/obsidian/vault-location.mjs'
@@ -482,7 +482,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // Private state of this workspace, created on demand for an operation that writes it.
     const writable = () => {
       const { project, enablement } = configured()
-      ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }) })
+      ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }), validate: serviceLocationCheck({ project, dataRoot, env, platform }) })
       const workspace = resolveServiceWorkspace({ project, dataRoot, env, platform, create: true })
       return { project, enablement, workspace, repositoryRoots: protectedRoots(project), now: isoTime(clock) }
     }
@@ -1099,8 +1099,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       // again, then the proven service stops. Everything a person made or may want back stays, and is named.
       async uninstall() {
         const project = (locateProject ?? loadProject)()
-        let workspace = null
-        try { const found = resolveServiceWorkspace({ project, dataRoot, env, platform }); workspace = found?.workspaceRoot ? found : null } catch (error) { if (!isTyped(error)) throw error }
+        // Only an established absence (no pointer, or no private state yet) is unprepared. A location or identity refusal
+        // stops here, before any login-item or service action, so uninstall never reports success over it.
+        const found = resolveServiceWorkspace({ project, dataRoot, env, platform })
+        const workspace = found?.workspaceRoot ? found : null
         const record = workspace === null ? null : readLoginItemRecord(workspace)
         // What is kept is read before anything is stopped or removed, so nothing it finds can stop the answer after that.
         const kept = keptLocations(project, workspace)

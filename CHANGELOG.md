@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-- Copy workshop fixture children into the exclusively created destination, retaining refusal of an existing destination or a conflicting child without overwriting it. This avoids relying on recursive copy behavior for an already-created destination directory.
+- Accept a longer personal-selection history without a fresh confirmation only when it still holds the accepted record at its position. After a confirmed shortening, a divergent history at or above the earlier maximum refuses until it is confirmed again; ordinary appends and exact restoration are unchanged.
+
+- Check the private-state location before a first use writes the workspace pointer, and check the persisted identity again before any further write. A refused location now leaves no pointer and no local state behind.
+
+- Write no refusal bookkeeping for a private-state location refusal, and none unless the state root is still outside every root declared now, for a cached store as well as a newly located one.
+
+- Refuse `obsidian uninstall` when the workspace location or identity cannot be established, instead of reporting that nothing was installed. No login-item or service action is taken.
+
+- Create every workshop directory and file exclusively when initializing a new workshop, so a directory or file that arrives meanwhile refuses instead of being merged, and refuse before Git initialization if an unknown entry appears inside a directory the initialization created. Nothing is overwritten and nothing unknown is removed.
 
 - Order journey runs by their validated creation instant, with run identity as the deterministic tie-break. Latest-per-protocol summaries and tenant packets share that rule; malformed times refuse rather than inherit hash-filename order. Clarify that a review-workspace decision concerns its run claims and source linkage alone does not establish logical support.
 

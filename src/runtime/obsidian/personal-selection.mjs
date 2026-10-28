@@ -104,9 +104,12 @@ function manifestExclusionRoots(personalHome) {
 
 function continuityFor({ personalHome, dataRoot, env = process.env, platform = process.platform }) {
   const project = locatePersonalHome({ personalHome })
-  const pointer = ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }) })
-  const root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId)
-  assertOutsideRepositories({ managedRoot: root, repositoryRoots: [personalHome, ...project.repos.map((repo) => repo.path)] })
+  const repositoryRoots = [personalHome, ...project.repos.map((repo) => repo.path)]
+  const rootOf = (named) => workspaceStateRoot(resolveDataRoot({ dataRoot, pointer: named, project, env, platform }), named.workspaceId)
+  // The location is proven outside every declared root before a first use writes its pointer.
+  const pointer = ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }),
+    validate: (named) => assertOutsideRepositories({ managedRoot: rootOf(named), repositoryRoots }) })
+  const root = rootOf(pointer)
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const workspaceRoot = fs.realpathSync(root)
   const key = `${personalHome}\0${workspaceRoot}`

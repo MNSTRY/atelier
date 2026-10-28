@@ -46,6 +46,37 @@ test('the highest sequence survives a fresh store and shortening requires a fres
   assert.equal(fs.statSync(f.file).mode & 0o777, 0o600)
 })
 
+test('after an accepted shortening, a divergent head at or above the historical maximum needs a fresh confirmation', (t) => {
+  const f = fixture(t)
+  const original = head(['a', 'b', 'c', 'd'])
+  f.store().note(original)
+  f.store().note(head(['a', 'fresh']))
+  // The complete earlier history is restored, but it no longer contains the accepted head.
+  assert.throws(() => f.store().note(original), refused('selection-history-shortened'))
+  assert.throws(() => f.store().note(head(['a', 'b', 'c', 'other'], { legacy: true })), refused('selection-history-shortened'))
+  const reusedAbove = { ...head(['a', 'b', 'c', 'd', 'e']), confirmationId: original.confirmationId, confirmationIds: original.confirmationIds }
+  assert.throws(() => f.store().note(reusedAbove), refused('selection-history-shortened'))
+  assert.throws(() => f.store().note(head(['a', 'b', 'c', 'd', 'e'], { legacy: true })), refused('selection-history-shortened'))
+  let state = JSON.parse(fs.readFileSync(f.file))
+  assert.deepEqual(state.accepted, { sequence: 2, head: hash('fresh') })
+  // Continuing the accepted chain past the maximum remains an ordinary append, legacy records included.
+  f.store().note(head(['a', 'fresh', 'x', 'y', 'z'], { legacy: true }))
+  state = JSON.parse(fs.readFileSync(f.file))
+  assert.equal(state.accepted.sequence, 5)
+  assert.equal(state.highestSequence, 5)
+  // A genuinely fresh confirmation still authorizes a divergent replacement.
+  f.store().note(head(['a', 'b', 'c', 'd', 'e', 'confirmed']))
+})
+
+test('exact restoration of a temporarily shortened history is accepted without a new confirmation', (t) => {
+  const f = fixture(t)
+  const original = head(['a', 'b', 'c'])
+  f.store().note(original)
+  assert.throws(() => f.store().note(head(['a'], { legacy: true })), refused('selection-history-shortened'))
+  f.store().note(original)
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).accepted.sequence, 3)
+})
+
 test('equal sequence alone cannot authorize a replacement, while a genuine new confirmation can', (t) => {
   const f = fixture(t)
   const first = head(['a', 'b'])

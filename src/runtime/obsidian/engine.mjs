@@ -392,20 +392,35 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   const blankEntry = (scopeId, now) => ({ scopeId, state: 'stale', reason: 'not-yet-published', generationId: null, preparedGenerationId: null, verified: false, heldNotes: [], changeClasses: [], retainedEdits: 0, checkedAt: now })
   const demote = (entry, state, reason, now) => ({ ...entry, state, reason, verified: false, checkedAt: now })
 
-  // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state.
-  async function persistOutcome({ enablement, state, reason, now, scopeIds = [] }) {
+  // The private-state location guard's own refusals: under one, the state root itself is in question.
+  const MANAGED_ROOT_REFUSALS = new Set(['managed-root-inside-repository', 'managed-root-not-absolute', 'managed-root-realpath-failed',
+    'managed-root-realpath-overlap', 'managed-root-symlink-alias', 'repository-inside-managed-root'])
+
+  // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state. Nothing is
+  // written for a location refusal, or unless the state root is proven outside every root declared now: a manifest
+  // that newly declares a root holding this state is never written into, cached store or not.
+  async function persistOutcome({ enablement, state, reason, now, scopeIds = [], locationRefused = false }) {
+    if (locationRefused) return
+    let located = null
+    try { located = locateProject === null ? null : locateProject() } catch { located = null }
+    const declared = [located, project].filter((value) => value !== null && value !== undefined)
+    if (declared.length === 0) return
+    let repositoryRoots
+    try { repositoryRoots = declared.flatMap((value) => protectedRoots(value)) } catch { return }
+    const outside = (root) => { try { assertOutsideRepositories({ managedRoot: root, repositoryRoots }); return true } catch { return false } }
     if (!known) {
-      let located = project
-      try { located ??= locateProject === null ? null : locateProject() } catch { located = null }
+      const source = declared[0]
       let pointer = null
-      try { pointer = located ? readLocalPointer(located) : null } catch { pointer = null }
+      try { pointer = readLocalPointer(source) } catch { pointer = null }
       if (!pointer) return
       let root
-      try { root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project: located, env, platform }), pointer.workspaceId) } catch { return }
+      try { root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project: source, env, platform }), pointer.workspaceId) } catch { return }
+      if (!outside(root)) return
       const stateStore = createMaintenanceStateStore({ workspaceRoot: root, workspaceId: pointer.workspaceId })
       if (!stateStore.exists()) return
       known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual' }
     }
+    if (!outside(known.stateStore.workspaceRoot)) return
     // Another engine is ticking this workspace: its state is not ours to write.
     if (!(await takeLock(known.stateStore.workspaceRoot, known.stateStore.workspaceId)).acquired) return
     const previous = readPreviousFreshness(known.stateStore)
@@ -466,11 +481,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     }
 
     // 2. Identity and machine settings, outside every repository.
-    const pointer = ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}) })
-    const { workspaceId } = pointer
-    const requestedRoot = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), workspaceId)
     const repositoryRoots = protectedRoots(project)
-    assertOutsideRepositories({ managedRoot: requestedRoot, repositoryRoots })
+    const stateRootOf = (named) => workspaceStateRoot(resolveDataRoot({ dataRoot, pointer: named, project, env, platform }), named.workspaceId)
+    const pointer = ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}),
+      validate: (named) => assertOutsideRepositories({ managedRoot: stateRootOf(named), repositoryRoots }) })
+    const { workspaceId } = pointer
+    const requestedRoot = stateRootOf(pointer)
     fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 })
     const workspaceRoot = fs.realpathSync(requestedRoot)
     const lock = await takeLock(workspaceRoot, workspaceId)
@@ -1009,7 +1025,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           throw error
         }
         // Fail closed: nothing is published under a refusal, and every known view says why.
-        try { await persistOutcome({ enablement: 'refused', state: 'stale', reason: error.code, now: isoTime(clock) }) } catch { /* the refusal itself is still reported */ }
+        try { await persistOutcome({ enablement: 'refused', state: 'stale', reason: error.code, now: isoTime(clock), locationRefused: MANAGED_ROOT_REFUSALS.has(error.code) }) } catch { /* the refusal itself is still reported */ }
         project = null
         semantic = null
         firstTick = true

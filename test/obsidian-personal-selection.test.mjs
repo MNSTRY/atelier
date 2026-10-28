@@ -176,6 +176,54 @@ test('the selection loader resolves manifest exclusion roots and keeps its check
   assert.equal(personalSelectionOf(ari.load()).sequence, 1)
 })
 
+test('a first load whose data root lies inside a declared repository refuses before writing the pointer or any private state', (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const pointer = localPointerPath(ari.locate())
+  fs.rmSync(pointer)
+  const unsafe = path.join(ari.a, 'private-service-data')
+  assert.throws(() => loadSelectedProject({ personalHome: ari.home, dataRoot: unsafe }, { bind: inThread() }), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'managed-root-inside-repository')
+  assert.equal(fs.existsSync(pointer), false, 'no pointer naming the refused location was persisted')
+  assert.equal(fs.existsSync(unsafe), false, 'no private state was created in the repository')
+  // The next load with the safe root is a genuine first use.
+  assert.equal(personalSelectionOf(ari.load()).sequence, 1)
+  assert.equal(fs.existsSync(pointer), true)
+})
+
+test('a manifest that newly declares a root holding existing service state refuses, and refusal bookkeeping writes nothing there', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const inventory = () => {
+    const rows = []
+    const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) walk(file)
+      else { const stat = fs.lstatSync(file); rows.push([path.relative(ari.dataRoot, file), stat.size, stat.mtimeMs, stat.uid]) }
+    } }
+    walk(ari.dataRoot)
+    return rows.sort()
+  }
+  const engine = ari.engine({ locateProject: ari.locate })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  const before = inventory()
+  const original = JSON.parse(JSON.stringify(ari.manifest))
+  ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+  ari.save()
+  const cached = await engine.tick()
+  assert.deepEqual([cached.state, cached.refusal?.code], ['refused', 'managed-root-inside-repository'], JSON.stringify(cached.refusal))
+  assert.deepEqual(inventory(), before, 'the cached store wrote nothing under the newly declared root')
+  const fresh = ari.engine({ locateProject: ari.locate })
+  try {
+    const located = await fresh.tick()
+    assert.deepEqual([located.state, located.refusal?.code], ['refused', 'managed-root-inside-repository'])
+  } finally { fresh.stop() }
+  assert.deepEqual(inventory(), before, 'the locator path wrote nothing under the newly declared root')
+  ari.manifest = original
+  ari.save()
+  assert.ok(everyView(await engine.tick(), 'current'))
+})
+
 test('nothing is published until a generation is confirmed; then the confirmed generation is, composed off the event loop', async (t) => {
   const ari = makePerson(t)
   const engine = ari.engine({ loadProject: () => loadSelectedProjectOffThread({ personalHome: ari.home }) })

@@ -16,7 +16,7 @@ import {
   serviceNameFor, servicePaths, writeServiceSettings,
 } from './service-record.mjs'
 import { personalHomeOf } from './personal-selection.mjs'
-import { resolveServiceWorkspace } from './service.mjs'
+import { resolveServiceWorkspace, serviceLocationCheck } from './service.mjs'
 
 // start / status / stop of the maintenance service of one workspace, as
 // docs/reference/local-services.md describes them.
@@ -67,7 +67,7 @@ export const LIFECYCLE_PRIMITIVES = Object.freeze({
 function context({ loadProject, locateProject = null, dataRoot, env, platform, create = false, randomBytes }) {
   if (typeof loadProject !== 'function') throw new TypeError('the service lifecycle needs loadProject')
   const project = locateProject === null ? loadProject() : locateProject()
-  if (create) ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}) })
+  if (create) ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}), validate: serviceLocationCheck({ project, dataRoot, env, platform }) })
   const workspace = resolveServiceWorkspace({ project, dataRoot, env, platform, create })
   return { project, workspace }
 }

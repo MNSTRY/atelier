@@ -63,7 +63,10 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
     const seen = new Set(before?.seen ?? [])
     const confirmations = new Set(before?.confirmations ?? [])
     const same = before?.accepted.sequence === head.sequence && before?.accepted.head === head.head
-    const shorter = before !== null && (head.sequence < before.highestSequence || head.sequence <= before.accepted.sequence)
+    // Length alone never proves continuation: the verified chain must still hold the accepted head at its position.
+    const extendsAccepted = before === null || before.accepted.sequence === 0
+      || (head.sequence > before.accepted.sequence && head.recordDigests[before.accepted.sequence - 1] === before.accepted.head)
+    const shorter = before !== null && (head.sequence < before.highestSequence || head.sequence <= before.accepted.sequence || !extendsAccepted)
     const fresh = head.confirmationId !== null && !confirmations.has(head.confirmationId) && !seen.has(head.head)
     if (!same && shorter && !fresh) refuse('selection-history-shortened', 'the selection history no longer follows the private continuity state; restore the removed records or confirm the selection again', SOURCE)
     for (const digest of head.recordDigests) seen.add(digest)

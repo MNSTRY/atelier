@@ -76,6 +76,15 @@ export function serviceWorkspaceInputs(project) {
 }
 
 // Where a workspace keeps its private state, without creating an identity.
+// The same location check resolveServiceWorkspace applies, for an identity that is not yet persisted.
+export function serviceLocationCheck({ project: whole, dataRoot, env = process.env, platform = process.platform }) {
+  const project = serviceWorkspaceInputs(whole)
+  return (pointer) => assertOutsideRepositories({
+    managedRoot: workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId),
+    repositoryRoots: protectedRoots(project),
+  })
+}
+
 export function resolveServiceWorkspace({ project: whole, dataRoot, env = process.env, platform = process.platform, create = false }) {
   const project = serviceWorkspaceInputs(whole)
   const pointer = readLocalPointer(project)

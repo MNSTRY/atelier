@@ -147,12 +147,20 @@ export function writeLocalPointer(project, pointer) {
 }
 
 // Reads the persisted workspace identity, or issues a random one and persists
-// it. `randomBytes` is injectable so tests are deterministic.
-export function ensureWorkspaceIdentity({ project, dataRoot, randomBytes = cryptoRandomBytes } = {}) {
+// it. `randomBytes` is injectable so tests are deterministic. `validate`, when
+// given, checks the location an identity names: a new identity is checked
+// before its pointer is written, so a refused location leaves no pointer, and
+// the identity actually persisted is checked again before it is returned.
+export function ensureWorkspaceIdentity({ project, dataRoot, randomBytes = cryptoRandomBytes, validate = null } = {}) {
   const existing = readLocalPointer(project)
-  if (existing) return existing
-  const pointer = { schema: LOCAL_POINTER_SCHEMA, workspaceId: `ws-${randomBytes(12).toString('hex')}`, ...(dataRoot === undefined ? {} : { dataRoot: path.resolve(dataRoot) }) }
-  return writeLocalPointer(project, pointer)
+  if (existing) { validate?.(existing); return existing }
+  const pointer = validatePointer({ schema: LOCAL_POINTER_SCHEMA, workspaceId: `ws-${randomBytes(12).toString('hex')}`, ...(dataRoot === undefined ? {} : { dataRoot: path.resolve(dataRoot) }) })
+  validate?.(pointer)
+  writeLocalPointer(project, pointer)
+  const persisted = readLocalPointer(project)
+  if (persisted === null) refuse('invalid-local-pointer', 'the Obsidian pointer was not kept')
+  validate?.(persisted)
+  return persisted
 }
 
 // ---------------------------------------------------------------------------
