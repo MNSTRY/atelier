@@ -1389,16 +1389,27 @@ test reported as a pass.
   repository the workspace declares now is proven when a project loads, around
   each engine phase, inside the engine and selection locks, and after each wait
   the publisher makes for the app, its list of vaults or its quiet period. It
-  is not proven again at every write. These writes can still follow a wait
-  without a proof of their own: the built-in proposal store's writes for
-  pending edits to shared notes (kept bytes, arbitration records and its queue)
-  while it works through several of them, and the service's own log lines
-  while it runs. A service whose project loader fails at a login item's start
-  still logs that failure in the workspace the unit names, because the
-  project's repositories are then unknown. A manifest that comes to enclose the
-  data root, or that cannot be read, during such a wait can receive those
-  writes; the next proof then refuses the tick, and nothing is published or
-  reported current under it.
+  is not proven again at every write, and it is not proven at all for writes
+  made outside the engine's phases and the publisher. Those are:
+  - the built-in proposal store's writes for pending edits to shared notes
+    (kept bytes, arbitration records and its queue) while it works through
+    several of them;
+  - everything the service process itself keeps: its log, service settings,
+    runtime record (with its bearer), service-start lock, startup record,
+    error record and login-item record, including those written after it waits
+    for a free port, for its server to listen or for the service manager, and
+    those a login item's start writes in the workspace the unit names when the
+    project's loader fails;
+  - the plugin channel's bearer and the plugin choices it records, including a
+    first-use bearer minted while a view is prepared and the confirmation
+    written when a plugin session opens.
+
+  Each of these writers keeps its file inside the workspace's private state,
+  but none checks the roots declared now. A manifest that comes to enclose the
+  data root, or that cannot be read, while the service runs can therefore
+  receive these writes. The engine refuses each view at its next proof, and no
+  view is published or reported current after that. A single check of the declared
+  roots at every private-state write is planned as a separate change.
 - Replacing a vault during a publication: the allocated folder is checked
   before the vault lock is taken and again once its folder is made, after the
   app is asked about the vault, before each note and before the generation is
