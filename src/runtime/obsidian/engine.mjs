@@ -17,6 +17,7 @@ import {
 } from './machine-settings.mjs'
 import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, reconcileCooperatively, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
+import { personalExclusionRootsNow } from './personal-selection.mjs'
 import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP } from './plugin-presence.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
@@ -395,6 +396,22 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   // The private-state location guard's own refusals: under one, the state root itself is in question.
   const MANAGED_ROOT_REFUSALS = new Set(['managed-root-inside-repository', 'managed-root-not-absolute', 'managed-root-realpath-failed',
     'managed-root-realpath-overlap', 'managed-root-symlink-alias', 'repository-inside-managed-root'])
+  // The roots private state must stay outside, as declared now: each project's own, and a personal home's manifest
+  // read again rather than as it was when the project loaded. Throws when they cannot be read.
+  const currentExclusionRoots = (declared) => declared.flatMap((value) => {
+    const binding = personalWorkspaceBindingOf(value)
+    return [...protectedRoots(value), ...(binding === null ? [] : personalExclusionRootsNow(binding.personalHome))]
+  })
+  // Whether a state root is proven outside every root declared now. A locator that refuses, or roots that cannot be
+  // read, prove nothing.
+  const locationProvenNow = (root) => {
+    try {
+      const declared = [...(locateProject === null ? [] : [locateProject()]), ...(project === null ? [] : [project])]
+      if (declared.length === 0) return false
+      assertOutsideRepositories({ managedRoot: root, repositoryRoots: currentExclusionRoots(declared) })
+      return true
+    } catch { return false }
+  }
 
   // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state. Nothing is
   // written for a location refusal, or unless the state root is proven outside every root declared now: a manifest
@@ -403,11 +420,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   async function persistOutcome({ enablement, state, reason, now, scopeIds = [], locationRefused = false }) {
     if (locationRefused) return
     let located = null
-    try { located = locateProject === null ? null : locateProject() } catch { located = null }
+    // A configured locator that cannot answer now leaves current exclusions unknown: earlier roots never stand in.
+    if (locateProject !== null) { try { located = locateProject() } catch { return } }
     const declared = [located, project].filter((value) => value !== null && value !== undefined)
     let repositoryRoots
-    if (declared.length > 0) { try { repositoryRoots = declared.flatMap((value) => protectedRoots(value)) } catch { return } }
-    else if (Array.isArray(known?.repositoryRoots)) repositoryRoots = known.repositoryRoots
+    if (declared.length > 0) { try { repositoryRoots = currentExclusionRoots(declared) } catch { return } }
+    else if (locateProject === null && Array.isArray(known?.repositoryRoots)) repositoryRoots = known.repositoryRoots
     else return
     const outside = (root) => { try { assertOutsideRepositories({ managedRoot: root, repositoryRoots }); return true } catch { return false } }
     if (!known) {
@@ -729,7 +747,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       entries.set(scopeId, demote(previous?.scopes.find((entry) => entry.scopeId === scopeId && entry.state !== 'disabled') ?? blankEntry(scopeId, now), 'stale', code, now))
     }
     for (const entry of previous?.scopes ?? []) if (!entries.has(entry.scopeId)) entries.set(entry.scopeId, demote(entry, 'disabled', 'scope-not-configured', now))
-    const persist = () => stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries }))
+    // Freshness is written only while the state root is still proven outside the roots declared now: a manifest that
+    // changed during this tick to enclose it gets no write, refusal or not.
+    const persist = () => { if (locationProvenNow(workspaceRoot)) stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries })) }
     persist()
 
     // 8. Rebuild and publish.

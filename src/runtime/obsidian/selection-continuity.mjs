@@ -30,7 +30,7 @@ function validate(document, workspaceId, homeDigest) {
   return document
 }
 
-export function createSelectionContinuity({ workspaceRoot, workspaceId, personalHome }) {
+export function createSelectionContinuity({ workspaceRoot, workspaceId, personalHome, validateLocation = () => {} }) {
   const homeDigest = createHash('sha256').update(personalHome).digest('hex')
   const directory = () => ensureContainedPrivateDirectory({ workspaceRoot, directory: path.join(workspaceRoot, 'state', 'maintenance'), label: 'selection continuity state' })
   const file = path.join(workspaceRoot, 'state', 'maintenance', 'selection-continuity.json')
@@ -86,17 +86,21 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
   }
   function note(head) {
     try {
+      validateLocation()
       const disk = read()
       const before = withPending(disk)
       const planned = next(before, head)
       if (disk !== null && canonicalJson(disk) === canonicalJson(planned)) { pending = null; return head }
       pending = planned
+      // Proven again before the lock is taken and before the checkpoint is replaced.
+      validateLocation()
       withPrivateLock(lockPath, () => {
         const current = read({ initializing: disk === null })
         const document = next(withPending(current), head)
         pending = document
         const text = canonicalJson(document)
         if (Buffer.byteLength(text) > MAX_SELECTION_CONTINUITY_BYTES) invalid()
+        validateLocation()
         if (current === null || canonicalJson(current) !== text) atomicReplacePrivateText(file, text)
         // An uncertain write is never authority to return a project.
         if (canonicalJson(read()) !== text) invalid()

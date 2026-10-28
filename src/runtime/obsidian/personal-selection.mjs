@@ -113,8 +113,16 @@ function continuityFor({ personalHome, dataRoot, env = process.env, platform = p
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const workspaceRoot = fs.realpathSync(root)
   const key = `${personalHome}\0${workspaceRoot}`
-  if (!CONTINUITY.has(key)) CONTINUITY.set(key, createSelectionContinuity({ workspaceRoot, workspaceId: pointer.workspaceId, personalHome }))
+  // A retained store writes later, after the manifest may have changed: each write proves the location again from
+  // the manifest as it reads now, and a refusal there writes nothing.
+  if (!CONTINUITY.has(key)) CONTINUITY.set(key, createSelectionContinuity({ workspaceRoot, workspaceId: pointer.workspaceId, personalHome,
+    validateLocation: () => assertOutsideRepositories({ managedRoot: workspaceRoot, repositoryRoots: personalExclusionRootsNow(personalHome) }) }))
   return CONTINUITY.get(key)
+}
+
+// The roots a personal home's private state must stay outside, read from its manifest now. Read-only.
+export function personalExclusionRootsNow(personalHome) {
+  return [personalHome, ...manifestExclusionRoots(personalHome)]
 }
 
 function confirmedHead(options, rules) {

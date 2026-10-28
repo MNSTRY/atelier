@@ -224,6 +224,73 @@ test('a manifest that newly declares a root holding existing service state refus
   assert.ok(everyView(await engine.tick(), 'current'))
 })
 
+// Every private state file of the workspace except its vaults: checkpoints, ownership, freshness and current pointers.
+function stateInventory(ari) {
+  const root = path.join(ari.workspaceRoot(), 'state')
+  const rows = []
+  const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name)
+    if (entry.isDirectory()) walk(file)
+    else { const stat = fs.lstatSync(file); rows.push([path.relative(root, file), stat.size, stat.mtimeMs, stat.ino]) }
+  } }
+  walk(root)
+  return rows.sort()
+}
+
+test('a locator that refuses while a manifest newly encloses the state root writes no bookkeeping at any tick', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const engine = ari.engine({ locateProject: ari.locate })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  const before = stateInventory(ari)
+  const original = JSON.parse(JSON.stringify(ari.manifest))
+  ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+  ari.save()
+  // The home is no longer private, so the locator refuses before it reads the manifest's roots.
+  fs.chmodSync(ari.home, 0o770)
+  try {
+    for (let tick = 0; tick < 3; tick++) {
+      const refused = await engine.tick()
+      assert.equal(refused.state, 'refused', JSON.stringify(refused))
+      assert.deepEqual(stateInventory(ari), before, `tick ${tick} wrote nothing under the newly declared root`)
+    }
+  } finally { fs.chmodSync(ari.home, 0o700) }
+  ari.manifest = original
+  ari.save()
+  assert.ok(everyView(await engine.tick(), 'current'))
+})
+
+test('a confirmation appended during publication, then a manifest that encloses the state root, leaves checkpoint, ownership and freshness unwritten', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  let during = false
+  let before = null
+  const production = createProductionSeams()
+  const engine = ari.engine({ seams: { publishView: (input) => {
+    if (during) {
+      during = false
+      // Taken at the change: what the tick wrote before the manifest enclosed the root is not in question.
+      before = stateInventory(ari)
+      ari.select()
+      ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+      ari.save()
+    }
+    return production.publishView(input)
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  fs.writeFileSync(path.join(ari.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replace('Tide tables', 'Revised tide tables'))
+  during = true
+  const refused = await engine.tick()
+  assert.ok(refused.state === 'refused' || refused.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(refused))
+  // The one write allowed is the release of the engine-lock ticket this tick already held before the change.
+  const held = new Set(before.map(([file]) => file).filter((file) => /^maintenance\/engine-lock\/\d+\.json$/.test(file)))
+  const after = stateInventory(ari).filter(([file]) => !(file.endsWith('.released') && held.has(file.replace(/\.released$/, '.json'))))
+  assert.deepEqual(after, before, 'no checkpoint, ownership, freshness or current pointer was written')
+  assert.doesNotMatch(fs.readFileSync(ari.noteFile('everything', 'a:tide'), 'utf8'), /Revised tide tables/)
+})
+
 test('nothing is published until a generation is confirmed; then the confirmed generation is, composed off the event loop', async (t) => {
   const ari = makePerson(t)
   const engine = ari.engine({ loadProject: () => loadSelectedProjectOffThread({ personalHome: ari.home }) })
