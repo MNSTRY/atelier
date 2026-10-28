@@ -291,6 +291,49 @@ test('a confirmation appended during publication, then a manifest that encloses 
   assert.doesNotMatch(fs.readFileSync(ari.noteFile('everything', 'a:tide'), 'utf8'), /Revised tide tables/)
 })
 
+// The workspace's private state outside its vaults, recovery included.
+function workspaceInventory(ari) {
+  const root = ari.workspaceRoot()
+  const rows = []
+  const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name)
+    const relative = path.relative(root, file)
+    if (relative === 'vaults') continue
+    if (entry.isDirectory()) walk(file)
+    else { const stat = fs.lstatSync(file); rows.push([relative, stat.size, stat.mtimeMs, stat.ino]) }
+  } }
+  walk(root)
+  return rows.sort()
+}
+
+test('a manifest that encloses the state root during vault observation, with an edited note present, preserves and records nothing', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  let during = false
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, lstat: (file, options) => {
+    if (during && String(file).startsWith(path.join(ari.workspaceRoot(), 'vaults'))) {
+      during = false
+      before = workspaceInventory(ari)
+      ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+      ari.save()
+    }
+    return fs.lstatSync(file, options)
+  } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  const note = ari.noteFile('everything', 'personal-ari:annotation-harbor-thought')
+  fs.writeFileSync(note, fs.readFileSync(note, 'utf8') + '\nAn edit the person made.\n')
+  during = true
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the manifest changed during vault observation')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  const held = new Set(before.map(([file]) => file).filter((file) => /^state\/maintenance\/engine-lock\/\d+\.json$/.test(file)))
+  const after = workspaceInventory(ari).filter(([file]) => !(file.endsWith('.released') && held.has(file.replace(/\.released$/, '.json'))))
+  assert.deepEqual(after, before, 'no edited bytes were preserved and no pending edit, freshness or pointer was written')
+  assert.match(fs.readFileSync(note, 'utf8'), /An edit the person made\./, 'the edit stays where the person made it')
+})
+
 test('nothing is published until a generation is confirmed; then the confirmed generation is, composed off the event loop', async (t) => {
   const ari = makePerson(t)
   const engine = ari.engine({ loadProject: () => loadSelectedProjectOffThread({ personalHome: ari.home }) })

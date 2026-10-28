@@ -395,7 +395,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
   // The private-state location guard's own refusals: under one, the state root itself is in question.
   const MANAGED_ROOT_REFUSALS = new Set(['managed-root-inside-repository', 'managed-root-not-absolute', 'managed-root-realpath-failed',
-    'managed-root-realpath-overlap', 'managed-root-symlink-alias', 'repository-inside-managed-root'])
+    'managed-root-realpath-overlap', 'managed-root-symlink-alias', 'repository-inside-managed-root', 'managed-root-unproven'])
   // The roots private state must stay outside, as declared now: each project's own, and a personal home's manifest
   // read again rather than as it was when the project loaded. Throws when they cannot be read.
   const currentExclusionRoots = (declared) => declared.flatMap((value) => {
@@ -404,9 +404,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   })
   // Whether a state root is proven outside every root declared now. A locator that refuses, or roots that cannot be
   // read, prove nothing.
-  const locationProvenNow = (root) => {
+  const locationProvenNow = (root, loaded) => {
     try {
-      const declared = [...(locateProject === null ? [] : [locateProject()]), ...(project === null ? [] : [project])]
+      const declared = [...(locateProject === null ? [] : [locateProject()]), ...(loaded === null ? [] : [loaded])]
       if (declared.length === 0) return false
       assertOutsideRepositories({ managedRoot: root, repositoryRoots: currentExclusionRoots(declared) })
       return true
@@ -502,6 +502,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // 2. Identity and machine settings, outside every repository.
     const repositoryRoots = protectedRoots(project)
+    // The project this tick loaded. `project` itself may be cleared later in the tick to force a reload.
+    const loadedProject = project
+    // Each phase that writes after a cooperative wait proves the location again against the roots declared now; the
+    // refusal is a location refusal, so refusal bookkeeping writes nothing either. A held engine lock is still released.
+    const assertLocation = () => {
+      if (!locationProvenNow(workspaceRoot, loadedProject)) refuse('managed-root-unproven', 'the private state can no longer be proved outside every root declared now; this tick writes nothing more')
+    }
     const stateRootOf = (named) => workspaceStateRoot(resolveDataRoot({ dataRoot, pointer: named, project, env, platform }), named.workspaceId)
     const pointer = ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}),
       validate: (named) => assertOutsideRepositories({ managedRoot: stateRootOf(named), repositoryRoots }) })
@@ -610,6 +617,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         looked.push({ scope, store, manifest, bases, vault })
       }
     } finally { reportPhase('vault-observation', vaultStartedMs) }
+    assertLocation()
     const pending = stateStore.readPendingEdits()
     let edits = pending.edits
     for (const { scope, store, manifest, bases, vault } of looked) {
@@ -634,6 +642,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     let observed = null
     if (proposalAdapter !== null && rules.observeEdits(proposalAdapter)) {
       try { observed = await proposalAdapter.observe(adapterContext(), { retryRefused: full }) } catch { observed = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
+      assertLocation()
     }
 
     // 4. Automatic apply, through the registered operation only.
@@ -643,6 +652,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         edits, applyOperation: extensions.applyOperation(), now, nowMs, retryIntervalMs,
         authorize: () => rules.authorize({ workspaceRoot, workspaceId }),
       })
+      assertLocation()
       edits = outcome.edits
       dispatched = outcome.dispatched
       stateStore.writePendingEdits({ ...pending, edits })
@@ -654,6 +664,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     let proposals = null
     if (proposalAdapter !== null) {
       try { proposals = await proposalAdapter.propose(adapterContext()) } catch { proposals = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
+      assertLocation()
     }
 
     // 5. Late writers. The publisher looks twice per publication; a holder can write later still.
@@ -687,6 +698,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const sourcesStartedMs = phaseTime()
     let sources
     try { sources = await reconcileCooperatively({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat }, createCooperativeBudget()) } finally { reportPhase('source-observation', sourcesStartedMs) }
+    assertLocation()
     for (const change of sources.changes) changes.push({ changeClass: change.changeClass })
     const { scopes: _declared, ...settingsWithoutScopes } = enablement.settings
     // What the configuration says apart from this integration's own member: a change to the member alone is an
@@ -749,7 +761,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     for (const entry of previous?.scopes ?? []) if (!entries.has(entry.scopeId)) entries.set(entry.scopeId, demote(entry, 'disabled', 'scope-not-configured', now))
     // Freshness is written only while the state root is still proven outside the roots declared now: a manifest that
     // changed during this tick to enclose it gets no write, refusal or not.
-    const persist = () => { if (locationProvenNow(workspaceRoot)) stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries })) }
+    const persist = () => { if (locationProvenNow(workspaceRoot, loadedProject)) stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries })) }
     persist()
 
     // 8. Rebuild and publish.
@@ -766,6 +778,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       let selectionNoted = false
       const noteSelectionOnce = () => { if (!selectionNoted) { selectionNoted = true; rules.noteSelectionAtGuard(project) } }
       const assertBindings = () => {
+        // Every cooperative wait of preparation and publication resumes here before it writes again.
+        assertLocation()
         let changed
         try {
           changed = bindings.some(file => (readFileFacts(file.absolute)?.digest ?? null) !== file.digest)

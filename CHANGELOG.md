@@ -6,7 +6,7 @@
 
 - Check the private-state location before a first use writes the workspace pointer, and check the persisted identity again before any further write. A refused location now leaves no pointer and no local state behind.
 
-- Write no refusal bookkeeping for a private-state location refusal, and none unless the state root is still outside every root declared now, for a cached store as well as a newly located one. A configured locator that refuses leaves current roots unknown, so nothing is written. Retained selection-continuity writes and freshness writes prove the location again against the personal manifest as it reads now.
+- Write no refusal bookkeeping for a private-state location refusal, and none unless the state root is still outside every root declared now, for a cached store as well as a newly located one. A configured locator that refuses leaves current roots unknown, so nothing is written. Retained selection-continuity writes, freshness writes and every engine phase that writes after a cooperative wait (vault-edit preservation, pending edits, automatic apply, preparation and publication) prove the location again against the roots declared now.
 
 - Refuse `obsidian uninstall` when the workspace location or identity cannot be established, instead of reporting that nothing was installed. No login-item or service action is taken.
 
