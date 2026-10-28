@@ -3346,6 +3346,36 @@ test('a view the next tick names for the same reason is not written to the log a
   assert.ok(lines.some((line) => line.event === 'tick-failed' && line.code === 'ESYNTHETIC'))
 })
 
+test('a tick refused, or failed, for the location of private state leaves an unresolved error record as it was', async (t) => {
+  const world = makeWorld(t)
+  // Each tick answers the next of these: a failure nobody typed, then a location refusal returned and one thrown.
+  const location = { code: 'repository-inside-managed-root', message: 'the private-state root is inside a declared repository' }
+  const sequence = ['fails', 'refused', 'throws']
+  let ticks = 0
+  const createEngine = (options) => {
+    const engine = createMaintenanceEngine(options)
+    return { ...engine, tick: async () => {
+      const report = await engine.tick()
+      const step = sequence[ticks]
+      ticks += 1
+      if (step === 'fails') throw Object.assign(new Error('a synthetic failure'), { code: 'ESYNTHETIC' })
+      if (step === 'refused') return { ...report, state: 'refused', refusal: { ...location, detail: {} } }
+      if (step === 'throws') throw Object.assign(new Error(location.message), { code: location.code })
+      return report
+    } }
+  }
+  const { service } = await inProcessService(t, world, { engineOptions: { seams: { publishView: async () => REFUSED_PUBLICATION } }, createEngine })
+  while (ticks < 1) await service.tickNow()
+  const unresolved = readLastServiceError({ workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID })
+  assert.deepEqual([unresolved?.code, unresolved?.resolvedAt], ['ESYNTHETIC', null])
+  const file = servicePaths(world.workspaceRoot()).lastError
+  const bytes = fs.readFileSync(file)
+  while (ticks < sequence.length) {
+    await service.tickNow()
+    assert.deepEqual(fs.readFileSync(file), bytes, `after the ${sequence[ticks - 1]} tick the record is neither resolved nor rewritten`)
+  }
+})
+
 test('mutation control: an engine that a thrown error poisons fails the tick-error oracle', async (t) => {
   const poisonable = (options) => {
     const engine = createMaintenanceEngine(options)

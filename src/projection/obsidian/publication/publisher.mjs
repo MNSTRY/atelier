@@ -384,6 +384,9 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
 
   const budget = createCooperativeBudget(options.scheduling)
   budget.check()
+  // The caller's guard alone, not the cancellation signal: a cancelled publication still records its failure, and so
+  // does one the guard stops for another reason (a changed selection or settings). Only a location refusal suppresses it.
+  const locationStillProven = () => { try { options.scheduling?.guard?.(); return true } catch (error) { return !isLocationRefusal(error) } }
   const releases = []
   let journal = null
   try {
@@ -430,9 +433,11 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     // Path selection. An app with this vault open in several windows is refused as such: publishing through one of
     // them would leave the others uncoordinated.
     const probe = await adapter.probe({ vaultRoot: store.vaultRoot })
+    budget.check()
     store.checkAllocatedVault?.()
     const unheld = probe.state !== 'coordinated' && probe.state !== 'absent' && await unheldPathApplies({ probe, pointer, store, unheldEvidence, platform })
-    // The evidence took time to read: the folder is checked again.
+    // The evidence took time to read: the location and the folder are checked again.
+    budget.check()
     if (unheld) store.checkAllocatedVault?.()
     if (probe.state !== 'coordinated' && probe.state !== 'absent' && !unheld) refuse(probe.code === 'vault-open-in-several-windows' ? probe.code : 'editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
     const mode = probe.state === 'coordinated' ? 'in-app' : unheld ? 'direct-unheld' : 'direct'
@@ -548,7 +553,9 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       }
       if (mode === 'direct-unheld' && !context.uncoordinated && (lastProbe === null || Date.now() - lastProbe > 2000)) {
         lastProbe = Date.now()
-        if (!(await readsUnlisted(unheldEvidence, store))) context.uncoordinated = 'the vault list of the app no longer shows, positively, that no Obsidian lists this vault'
+        const listed = await readsUnlisted(unheldEvidence, store)
+        budget.check()
+        if (!listed) context.uncoordinated = 'the vault list of the app no longer shows, positively, that no Obsidian lists this vault'
       }
       store.checkAllocatedVault?.()
       if (unit.op === 'keep' && unchanged.has(unit.path)) {
@@ -603,8 +610,9 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     return { ...base, state: 'committed', lateWriters }
   } catch (error) {
     if (!(error instanceof PublicationRefusal)) {
-      // A private-state location refusal records nothing more there, a failure entry included. Locks are still released.
-      if (journal && !isLocationRefusal(error)) try { journal.append({ step: 'verify', outcome: 'failed', state: 'failed', detail: { code: rules.journalFailureCode(error), message: String(error.code ?? error.message).slice(0, 200) } }) } catch { /* the journal itself cannot be written */ }
+      // A private-state location refusal records nothing more there, a failure entry included, and neither does a
+      // failure that leaves the location unproven now (a rejected wait for the app). Locks are still released.
+      if (journal && !isLocationRefusal(error) && locationStillProven()) try { journal.append({ step: 'verify', outcome: 'failed', state: 'failed', detail: { code: rules.journalFailureCode(error), message: String(error.code ?? error.message).slice(0, 200) } }) } catch { /* the journal itself cannot be written */ }
       throw error
     }
     return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail }, notes: [], retainedEdits: [], lateWriters: [] }

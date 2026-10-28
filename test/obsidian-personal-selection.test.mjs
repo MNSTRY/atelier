@@ -1154,6 +1154,25 @@ test('started by a login item on a personal home with nothing confirmed, the ser
   assert.deepEqual([startup?.outcome, startup?.code], ['refused', 'service-settings-absent'])
 })
 
+test('started by a login item on a personal home whose manifest now encloses its existing state root, the service writes no log or startup record there', (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const entry = fileURLToPath(new URL('./support/obsidian-maintenance/service-entry.mjs', import.meta.url))
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  // A first start makes the workspace and records how it ended, as before.
+  const first = childProcess.spawnSync(process.execPath, [entry, `--personal-home=${ari.home}`, `--data-root=${ari.dataRoot}`, '--startup'], { env, encoding: 'utf8', timeout: 120_000 })
+  assert.equal(first.status, 0, `${first.stdout}${first.stderr}`)
+  assert.ok(readLastStartup({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId }) !== null)
+  const before = workspaceInventory(ari)
+  enclose(ari)
+  // The login item names the workspace by its data root and identity: those recorded coordinates are not used.
+  const child = childProcess.spawnSync(process.execPath, [entry, `--personal-home=${ari.home}`, `--data-root=${ari.dataRoot}`, `--workspace-id=${ari.workspaceId}`, '--startup'], { env, encoding: 'utf8', timeout: 120_000 })
+  assert.equal(child.status, 0, `${child.stdout}${child.stderr}`)
+  assert.deepEqual(workspaceInventory(ari), before, 'no log line and no startup record were written under the enclosed root')
+  const printed = child.stdout.split('\n').filter((line) => line.startsWith('{')).map((line) => JSON.parse(line))
+  assert.ok(printed.some((line) => line.event === 'refused' && /^managed-root-|^repository-inside-managed-root$/.test(line.code)), `the refusal is printed into the unit's output: ${child.stdout}`)
+})
+
 for (const [kind, expected] of [['thenable', { status: 0, code: 'service-loader-not-synchronous', thenCalls: 1 }], ['throws-undefined', { status: 1, code: 'untyped-error', thenCalls: 0 }]]) {
   test(`started by a login item on a personal home whose locator ${kind === 'thenable' ? 'answers a thenable' : 'throws `undefined`'}, the service asks it once and ends as for a loader that does the same`, (t) => {
     const ari = makePerson(t)

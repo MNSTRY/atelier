@@ -615,3 +615,24 @@ function filesUnder(directory) {
   if (fs.existsSync(directory)) walk(directory)
   return found
 }
+
+for (const reading of [1, 2]) {
+  test(`a location lost while the app's list is read ${reading === 1 ? 'at path selection' : 'before the first unit'} writes nothing more, in private state or the vault`, needsExchange, async (t) => {
+    const world = allocatedWorld(t)
+    let lost = false
+    let readings = 0
+    const writes = []
+    const WRITES = new Set(['exchangeProbeDir', 'stagingDir', 'journalDir', 'unitDir', 'retainObject', 'commitManifest'])
+    const store = new Proxy(world.store, { get: (target, key) => {
+      const value = target[key]
+      return typeof value === 'function' && WRITES.has(key) ? (...args) => { if (lost) writes.push(key); return value.apply(target, args) } : value
+    } })
+    const unheldEvidence = async (input) => { const answer = await world.evidence(input); if (++readings === reading) lost = true; return answer }
+    const guard = () => { if (lost) { const error = new Error('the private-state root is no longer proven outside the declared roots'); error.code = 'managed-root-unproven'; throw error } }
+    await assert.rejects(world.publish(FULL_VIEW(), runningApp(), { recoveryStore: store, unheldEvidence, scheduling: { guard } }), (error) => error.code === 'managed-root-unproven')
+    assert.ok(lost, 'the list was read that often')
+    assert.deepEqual(writes, [], 'no private publication state was asked for after the wait')
+    assert.deepEqual([world.read(NOTE), world.read(OTHER), world.read(POLICY)], [null, null, null], 'no file was created in the vault')
+    assert.equal(world.store.readCurrent(), null)
+  })
+}

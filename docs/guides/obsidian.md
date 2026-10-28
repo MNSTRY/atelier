@@ -1385,6 +1385,20 @@ test reported as a pass.
   first allocation or when a vault is made again. Every other check runs
   again at both, and a vault made again, or published into, through a link on
   the way is refused (`vault-allocation-moved`).
+- Private state after a wait: that the private state is outside every
+  repository the workspace declares now is proven when a project loads, around
+  each engine phase, inside the engine and selection locks, and after each wait
+  the publisher makes for the app, its list of vaults or its quiet period. It
+  is not proven again at every write. These writes can still follow a wait
+  without a proof of their own: the built-in proposal store's writes for
+  pending edits to shared notes (kept bytes, arbitration records and its queue)
+  while it works through several of them, and the service's own log lines
+  while it runs. A service whose project loader fails at a login item's start
+  still logs that failure in the workspace the unit names, because the
+  project's repositories are then unknown. A manifest that comes to enclose the
+  data root, or that cannot be read, during such a wait can receive those
+  writes; the next proof then refuses the tick, and nothing is published or
+  reported current under it.
 - Replacing a vault during a publication: the allocated folder is checked
   before the vault lock is taken and again once its folder is made, after the
   app is asked about the vault, before each note and before the generation is

@@ -2636,3 +2636,42 @@ test('the serialized script runs on its own, and a body that reaches for a modul
     fs.rmSync(vault, { recursive: true, force: true })
   }
 })
+
+// The caller's location guard (the engine's proof that private state is still outside every declared root) fails from
+// the moment `lost` is set.
+const locationLost = () => { const error = new Error('the private-state root is no longer proven outside the declared roots'); error.code = 'managed-root-unproven'; return error }
+
+test('a location lost during the initial app probe proves no exchange, stages nothing and opens no journal', needsExchange, async (t) => {
+  const world = await seeded(t)
+  let lost = false
+  // Every private-state write the store offers, asked after the location was lost. Cleanup can remove a directory
+  // again, so the calls are what is observed, not only what is left.
+  const writes = []
+  const WRITES = new Set(['exchangeProbeDir', 'stagingDir', 'journalDir', 'unitDir', 'retainObject'])
+  const store = new Proxy(world.store, { get: (target, key) => {
+    const value = target[key]
+    return typeof value === 'function' && WRITES.has(key) ? (...args) => { if (lost) writes.push(key); return value.apply(target, args) } : value
+  } })
+  const absent = absentAdapter()
+  const adapter = { ...absent, probe: async (input) => { const answer = await absent.probe(input); lost = true; return answer } }
+  const journals = listJournals(world.store).length
+  await assert.rejects(world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter, { recoveryStore: store, scheduling: { guard: () => { if (lost) throw locationLost() } } }),
+    (error) => error.code === 'managed-root-unproven')
+  assert.ok(lost, 'the probe was asked')
+  assert.deepEqual(writes, [], 'no exchange probe, staging directory or journal was asked for after the wait')
+  assert.equal(listJournals(world.store).length, journals)
+  assert.equal(world.read(NOTE), BASE)
+})
+
+test('a location lost while an app inspection fails appends no failure entry', needsExchange, async (t) => {
+  const world = await seeded(t)
+  let lost = false
+  const app = new ModelApp(world.vault)
+  // The unit's inspection never answers: the transport gives up and the wait rejects.
+  const adapter = modelAdapter(app, { plan: { before: (payload) => { if (payload.op === 'inspect' && payload.path === NOTE) lost = true }, loseReply: (payload) => payload.op === 'inspect' && payload.path === NOTE } })
+  await assert.rejects(world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter, { scheduling: { guard: () => { if (lost) throw locationLost() } } }))
+  assert.ok(lost, 'the unit was inspected')
+  const failed = assertJournalsValid(world).filter((document) => document.entries.some((entry) => entry.step === 'verify' && entry.outcome === 'failed'))
+  assert.deepEqual(failed, [], 'no failure entry was appended once the location was no longer proven')
+  assert.equal(world.read(NOTE), BASE)
+})

@@ -96,6 +96,8 @@ export function resolveServiceWorkspace({ project: whole, dataRoot, env = proces
   return { workspaceId: pointer.workspaceId, workspaceRoot: fs.realpathSync(requested) }
 }
 
+// A refusal that the private-state root is no longer proven outside every declared root: nothing more is written there.
+export const isLocationRefusalCode = (code) => /^managed-root-|^repository-inside-managed-root$/.test(String(code ?? ''))
 const isTyped = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal
 const errorCode = (error) => (typeof error?.code === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(error.code) ? error.code : 'untyped-error')
 const errorName = (error) => (typeof error?.name === 'string' ? error.name.slice(0, 64) : 'Error')
@@ -246,6 +248,8 @@ export async function runMaintenanceService(options = {}) {
         if (refusedLastTick.get(item.scopeId) !== reason) log({ at, event: 'view-refused', scopeId: item.scopeId, code: item.code, ...(item.cause ? { cause: item.cause } : {}), ...(item.cleanupCause ? { cleanupCause: item.cleanupCause } : {}) })
       }
       refusedLastTick = refused
+      // A tick the engine refused for the location of private state leaves the error record as it is.
+      if (isLocationRefusalCode(outcome.report.refusal?.code)) return
       const previous = readLastServiceError({ workspaceRoot, workspaceId })
       if (previous && previous.resolvedAt === null) writeLastServiceError({ workspaceRoot, workspaceId, document: { ...previous, consecutiveFailures: 0, resolvedAt: at } })
       return
@@ -254,6 +258,7 @@ export async function runMaintenanceService(options = {}) {
     refusedLastTick = new Map()
     // The message may carry a path or a title: it goes to the private log and nowhere else.
     log({ at, event: 'tick-failed', code: errorCode(outcome.error), name: errorName(outcome.error), message: String(outcome.error?.message ?? outcome.error), consecutiveFailures })
+    if (isLocationRefusalCode(outcome.error?.code)) return
     let previous = null
     try { previous = readLastServiceError({ workspaceRoot, workspaceId }) } catch { previous = null }
     writeLastServiceError({ workspaceRoot, workspaceId, document: { schema: SERVICE_ERROR_SCHEMA, workspaceId, runtimeId, code: errorCode(outcome.error), name: errorName(outcome.error), at, consecutiveFailures, totalFailures: (previous?.totalFailures ?? 0) + 1, resolvedAt: null } })
