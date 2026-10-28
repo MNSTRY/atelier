@@ -43,7 +43,8 @@ test('the highest sequence survives a fresh store and shortening requires a fres
   state = JSON.parse(fs.readFileSync(f.file))
   assert.equal(state.highestSequence, 4, 'normal appends never discard the historical maximum')
   assert.equal(state.accepted.sequence, 3)
-  assert.equal(fs.statSync(f.file).mode & 0o777, 0o600)
+  // Windows uses account ACLs; POSIX mode bits do not establish access control there.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(f.file).mode & 0o777, 0o600)
 })
 
 test('after an accepted shortening, a divergent head at or above the historical maximum needs a fresh confirmation', (t) => {

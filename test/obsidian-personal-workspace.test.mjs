@@ -578,11 +578,11 @@ function assertClearRetained({ returned, persisted, cleared }) {
   assert.deepEqual(persisted, cleared, 'initialization does not overwrite the committed clear')
 }
 
-nodeTest('a clear committed after the initial settings read wins personal owner-only initialization', (t) => {
+nodeTest('a clear committed after the initial settings read wins personal owner-only initialization', { skip: process.platform === 'win32' ? 'the interleaving replaces the machine file while it is open for reading, which Windows refuses' : false }, (t) => {
   assertClearRetained(clearAfterInitialSettingsRead(t, initializeMachineSettings))
 })
 
-nodeTest('mutation control: the clear interleaving oracle rejects initialization from a stale settings read', (t) => {
+nodeTest('mutation control: the clear interleaving oracle rejects initialization from a stale settings read', { skip: process.platform === 'win32' ? 'the interleaving replaces the machine file while it is open for reading, which Windows refuses' : false }, (t) => {
   const staleInitializer = (options) => {
     const initial = readMachineSettings(options) ?? defaultMachineSettings(options)
     return writeMachineSettings({ ...options, settings: ownerOnlyPersonalSettings(initial, { decidedAt: options.updatedAt }) })
