@@ -334,6 +334,88 @@ test('a manifest that encloses the state root during vault observation, with an 
   assert.match(fs.readFileSync(note, 'utf8'), /An edit the person made\./, 'the edit stays where the person made it')
 })
 
+const enclose = (ari) => { ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true }); ari.save() }
+const releasedOnly = (before, after) => {
+  const held = new Set(before.map(([file]) => file).filter((file) => /^state\/maintenance\/engine-lock\/\d+\.json$/.test(file)))
+  return after.filter(([file]) => !(file.endsWith('.released') && held.has(file.replace(/\.released$/, '.json'))))
+}
+
+test('a manifest that encloses the state root during engine-lock inspection publishes no ticket and initializes no settings', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const { acquirePrivateGenerationLock } = await import('../src/runtime/obsidian/private-lock.mjs')
+  let during = false
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, primitives: { acquireEngineLock: (args) => {
+    let calls = 0
+    const validate = args.validateLocation
+    return acquirePrivateGenerationLock({ ...args, validateLocation: () => {
+      // The second check follows the asynchronous inspection: the change lands between them.
+      if (++calls === 2 && during) { during = false; before = workspaceInventory(ari); enclose(ari) }
+      validate()
+    } })
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  during = true
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the manifest changed during lock inspection')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  assert.deepEqual(workspaceInventory(ari), before, 'no ownership ticket, settings or freshness was written')
+})
+
+test('a manifest that encloses the state root while the app vault list is read allocates no folder', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  // Vaults live where the person decided, so a first allocation reads the app's list.
+  const settingsAt = { workspaceRoot: workspaceStateRoot(ari.dataRoot, ari.workspaceId), workspaceId: ari.workspaceId }
+  const parent = path.join(ari.base, 'decided-vaults')
+  fs.mkdirSync(parent, { mode: 0o700 })
+  writeMachineSettings({ ...settingsAt, repositoryRoots: protectedRoots(ari.locate()), settings: withDecision(readMachineSettings(settingsAt), 'location', { parent }, { decidedAt: NOW, decidedBy: null, via: 'command' }) })
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, readAppVaultList: () => {
+    if (before === null) { before = workspaceInventory(ari); enclose(ari) }
+    return { ok: true, vaults: {} }
+  } })
+  t.after(() => engine.stop())
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the vault list was read for a first allocation')
+  assert.ok(refused.state === 'refused' || refused.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(refused))
+  assert.deepEqual(releasedOnly(before, workspaceInventory(ari)), before, 'no allocation record, folder or freshness was written')
+})
+
+test('a manifest that encloses the state root during the publisher quiet period records no late writer, journal entry or pointer', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  let before = null
+  let armed = false
+  const production = createProductionSeams()
+  const engine = ari.engine({ locateProject: ari.locate, quietPeriodMs: 400, seams: { publishView: (input) => {
+    if (armed) {
+      armed = false
+      // Lands inside the quiet period that follows the moves.
+      setTimeout(() => { before = workspaceInventory(ari); enclose(ari) }, 200)
+    }
+    return production.publishView(input)
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  fs.writeFileSync(path.join(ari.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replace('Tide tables', 'Revised tide tables'))
+  armed = true
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the manifest changed during publication')
+  assert.ok(refused.state === 'refused' || refused.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(refused))
+  // After the change only cleanup may happen: locks held before it are released and staged candidates removed.
+  // Nothing is added or rewritten.
+  const prior = new Map(before.map((row) => [row[0], JSON.stringify(row)]))
+  const heldBefore = new Set(before.map(([file]) => file).filter((file) => /\.owners\/\d+\.json$|engine-lock\/\d+\.json$/.test(file)))
+  const added = workspaceInventory(ari).filter((row) => prior.get(row[0]) !== JSON.stringify(row)
+    && !(row[0].endsWith('.released') && heldBefore.has(row[0].replace(/\.released$/, '.json'))))
+  assert.deepEqual(added, [], 'no object, receipt, journal entry or current pointer was written after the change')
+  const removed = before.filter(([file]) => !workspaceInventory(ari).some(([other]) => other === file))
+  assert.ok(removed.every(([file]) => file.startsWith('staging/') || heldBefore.has(file)), JSON.stringify(removed))
+})
+
 test('nothing is published until a generation is confirmed; then the confirmed generation is, composed off the event loop', async (t) => {
   const ari = makePerson(t)
   const engine = ari.engine({ loadProject: () => loadSelectedProjectOffThread({ personalHome: ari.home }) })

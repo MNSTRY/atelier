@@ -311,7 +311,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     try { return (await readUnheldEvidence({ vaultRoot: store.vaultRoot }))?.unlisted === true } catch { return false }
   }
 
-  async function takeLock(workspaceRoot, workspaceId) {
+  async function takeLock(workspaceRoot, workspaceId, validateLocation = undefined) {
     // A lock an earlier tick could not give back is still this process's, and its ticket on disk unreleased: a tick
     // that tried to take it anew would find its own ticket and answer `busy` until the process ends. It is given back
     // first. A release that fails again fails this tick, and is owed to the next.
@@ -323,6 +323,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (heldLock) return { acquired: true }
     const lock = await rules.acquireEngineLock({
       workspaceRoot, directory: path.join(workspaceRoot, ENGINE_LOCK_DIRECTORY), workspaceId, purpose: 'maintenance-engine', service: lockOwner, clock, proveAbandoned,
+      ...(validateLocation === undefined ? {} : { validateLocation }),
     })
     if (lock.acquired) heldLock = lock
     return lock
@@ -419,17 +420,25 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   // read now, a cached store is held to the roots it was last proven outside; without either, nothing is written.
   async function persistOutcome({ enablement, state, reason, now, scopeIds = [], locationRefused = false }) {
     if (locationRefused) return
-    let located = null
-    // A configured locator that cannot answer now leaves current exclusions unknown: earlier roots never stand in.
-    if (locateProject !== null) { try { located = locateProject() } catch { return } }
-    const declared = [located, project].filter((value) => value !== null && value !== undefined)
+    // The roots declared now. A configured locator that cannot answer leaves them unknown: earlier roots never stand
+    // in. Without a locator or a readable project, a cached store is held to the roots it was last proven outside.
+    const rootsNow = () => {
+      let located = null
+      if (locateProject !== null) located = locateProject()
+      const declared = [located, project].filter((value) => value !== null && value !== undefined)
+      if (declared.length > 0) return currentExclusionRoots(declared)
+      if (locateProject === null && Array.isArray(known?.repositoryRoots)) return known.repositoryRoots
+      return null
+    }
     let repositoryRoots
-    if (declared.length > 0) { try { repositoryRoots = currentExclusionRoots(declared) } catch { return } }
-    else if (locateProject === null && Array.isArray(known?.repositoryRoots)) repositoryRoots = known.repositoryRoots
-    else return
+    try { repositoryRoots = rootsNow() } catch { return }
+    if (repositoryRoots === null) return
     const outside = (root) => { try { assertOutsideRepositories({ managedRoot: root, repositoryRoots }); return true } catch { return false } }
+    const outsideNow = (root) => { try { const roots = rootsNow(); if (roots === null) return false; assertOutsideRepositories({ managedRoot: root, repositoryRoots: roots }); return true } catch { return false } }
     if (!known) {
-      const source = declared[0]
+      let source = project
+      if (locateProject !== null) { try { source = locateProject() } catch { return } }
+      if (source === null || source === undefined) return
       let pointer = null
       try { pointer = readLocalPointer(source) } catch { pointer = null }
       if (!pointer) return
@@ -441,8 +450,11 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual', repositoryRoots }
     }
     if (!outside(known.stateStore.workspaceRoot)) return
+    // Proven again inside the acquisition and once it returns, against the roots declared then.
+    const stillOutside = () => { if (!outsideNow(known.stateStore.workspaceRoot)) refuse('managed-root-unproven', 'the private state can no longer be proved outside every root declared now; nothing is written') }
     // Another engine is ticking this workspace: its state is not ours to write.
-    if (!(await takeLock(known.stateStore.workspaceRoot, known.stateStore.workspaceId)).acquired) return
+    try { if (!(await takeLock(known.stateStore.workspaceRoot, known.stateStore.workspaceId, stillOutside)).acquired) return } catch (error) { if (isTypedRefusal(error) && error.code === 'managed-root-unproven') return; throw error }
+    if (!outsideNow(known.stateStore.workspaceRoot)) return
     const previous = readPreviousFreshness(known.stateStore)
     const entries = new Map()
     for (const entry of previous?.scopes ?? []) entries.set(entry.scopeId, demote(entry, state, reason, now))
@@ -516,8 +528,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const requestedRoot = stateRootOf(pointer)
     fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 })
     const workspaceRoot = fs.realpathSync(requestedRoot)
-    const lock = await takeLock(workspaceRoot, workspaceId)
+    const lock = await takeLock(workspaceRoot, workspaceId, assertLocation)
     if (!lock.acquired) return { state: 'busy', reason: 'engine-lock-held', lock: { reason: lock.reason, holder: lock.holder ?? null }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
+    assertLocation()
     const machine = initializeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, updatedAt: now, personal: personalWorkspaceBindingOf(project) !== null })
     const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
@@ -570,6 +583,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const record = readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })
           if (record === null ? !hasCommittedGeneration({ workspaceRoot, scopeId: scope.scopeId }) : allocatedFolderState(record) === 'missing') {
             const known = await appList()
+            assertLocation()
             if (!known.ok) refuse('app-vault-list-unreadable', 'Obsidian\'s vault list could not be read, so no folder is allocated for this view yet; it is tried again at the next tick', { cause: known.code })
             vaults = known.vaults
           }

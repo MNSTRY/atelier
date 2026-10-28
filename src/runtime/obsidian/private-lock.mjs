@@ -128,7 +128,11 @@ export async function inspectPrivateGenerationLock({ directory, workspaceId, pro
 
 // { acquired: true, generation, release() } or { acquired: false, reason, holder }.
 // Never waits and never throws for a lock that is merely held.
-export async function acquirePrivateGenerationLock({ workspaceRoot, directory, workspaceId, purpose, service = null, clock, proveAbandoned, randomBytes = cryptoRandomBytes }) {
+// `validateLocation`, when given, proves the private state's location before the lock directory is made, again after
+// the asynchronous inspection, and before a ticket is published or predecessors are pruned; a refusal there writes
+// nothing.
+export async function acquirePrivateGenerationLock({ workspaceRoot, directory, workspaceId, purpose, service = null, clock, proveAbandoned, randomBytes = cryptoRandomBytes, validateLocation = () => {} }) {
+  validateLocation()
   const contained = ensureContainedPrivateDirectory({ workspaceRoot, directory, label: 'private lock' })
   const owed = UNWITHDRAWN.get(contained)
   if (owed !== undefined) {
@@ -140,6 +144,7 @@ export async function acquirePrivateGenerationLock({ workspaceRoot, directory, w
   const holder = status.ticket ? { pid: status.ticket.pid, purpose: status.ticket.purpose, runtimeId: status.ticket.service?.runtimeId ?? null } : null
   if (!status.available) return { acquired: false, reason: status.reason, holder }
   if (status.generation >= MAX_GENERATION) return { acquired: false, reason: 'lock-generations-exhausted', holder }
+  validateLocation()
   const generation = status.generation + 1
   const ticket = validateTicket({ schema: LOCK_TICKET_SCHEMA, workspaceId, purpose, pid: process.pid, machine: machineDigest(), nonce: randomBytes(16).toString('hex'), acquiredAt, service }, workspaceId)
   const body = JSON.stringify(ticket)
@@ -166,6 +171,10 @@ export async function acquirePrivateGenerationLock({ workspaceRoot, directory, w
   if (after.highest !== generation) {
     try { fs.unlinkSync(file) } catch { /* a lower generation is ignored and pruned by the next holder */ }
     return { acquired: false, reason: 'a-newer-holder-exists', holder: null }
+  }
+  try { validateLocation() } catch (error) {
+    withdraw()
+    throw error
   }
   for (const name of after.names) {
     if (Number(TICKET_NAME.exec(name)[1]) < generation) try { fs.unlinkSync(path.join(contained, name)) } catch { /* pruned by somebody else */ }

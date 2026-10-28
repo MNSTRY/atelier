@@ -195,6 +195,33 @@ test('a failed first replacement leaves ownership evidence that a fresh store ca
   assertMissingCheckpointRefuses(() => f.store().note(head(['a'])))
 })
 
+test('a retained unpersisted acceptance never replaces a newer durable one from another store', (t) => {
+  const f = fixture(t)
+  f.store().note(head(['a', 'b', 'c', 'd']))
+  const retained = f.store()
+  const b = head(['a', 'fresh-b'])
+  const original = fs.renameSync
+  fs.renameSync = function (from, to) {
+    if (to === f.file) throw Object.assign(new Error('synthetic write refusal'), { code: 'EIO' })
+    return original.call(this, from, to)
+  }
+  try { assert.throws(() => retained.note(b), refused('selection-continuity-unavailable')) }
+  finally { fs.renameSync = original }
+  // Another store durably accepts the same shortened head, then a fresh replacement.
+  const other = f.store()
+  other.note(b)
+  const c = head(['a', 'fresh-c'])
+  other.note(c)
+  const durable = fs.readFileSync(f.file)
+  assert.deepEqual(JSON.parse(durable).accepted, { sequence: 2, head: c.head })
+  // The restored earlier head reaches the retained store: its pending acceptance is not authority over C.
+  assert.throws(() => retained.note(b), refused('selection-history-shortened'))
+  assert.deepEqual(fs.readFileSync(f.file), durable)
+  // The current durable head still reads as itself through the retained store.
+  retained.note(c)
+  assert.deepEqual(fs.readFileSync(f.file), durable)
+})
+
 test('a failed durable write returns no authority and the same process keeps the observed maximum', (t) => {
   const f = fixture(t)
   const store = f.store()

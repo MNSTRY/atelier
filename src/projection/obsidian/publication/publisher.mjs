@@ -16,6 +16,10 @@ import { probeExchange } from './exchange.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from './test-seam.mjs'
 import { createDirectAdapter } from './transport.mjs'
 
+// The caller's private-state location refusals: once the state root may lie in a declared repository, no further
+// entry is written there.
+const isLocationRefusal = (error) => /^managed-root-|^repository-inside-managed-root$/.test(String(error?.code ?? ''))
+
 // publishView: conditional publication of one prepared view into an editable
 // vault. The order is the contract's:
 //
@@ -517,7 +521,9 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     store.checkAllocatedVault?.()
     crash('after-staging')
 
-    const context = { store, journal, journalId, channel, clock, crash, mode, rules }
+    // `check` runs the caller's guard: every wait for the app resumes through it before the next recovery, journal or
+    // vault write.
+    const context = { store, journal, journalId, channel, clock, crash, mode, rules, check: () => budget.check() }
     const results = []
     // Kept notes are compared first, several at a time; one that holds exactly its candidate bytes is unchanged.
     const unchanged = await unchangedKeepUnits(units, store)
@@ -537,6 +543,7 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
       if (mode === 'direct' && (lastProbe === null || Date.now() - lastProbe > 2000)) {
         lastProbe = Date.now()
         const again = await adapter.probe({ vaultRoot: store.vaultRoot })
+        budget.check()
         if (again.state !== 'absent') context.uncoordinated = again.reason
       }
       if (mode === 'direct-unheld' && !context.uncoordinated && (lastProbe === null || Date.now() - lastProbe > 2000)) {
@@ -569,6 +576,7 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
 
     // Quiet period, then look at the displaced files again.
     if (quietPeriodMs > 0 && results.some((result) => result.recoveryRef)) await sleep(quietPeriodMs)
+    budget.check()
     const lateWriters = recheckDisplacedFiles({ store, journalIds: [journalId], clock })
     for (const finding of lateWriters.filter((item) => item.code === 'late-writer-captured')) {
       journal.append({ step: 'verify', outcome: 'conflict', state: 'verifying', notePath: finding.notePath, beforeDigest: finding.digestAtMove, afterDigest: finding.observedDigest, recoveryRef: finding.displacedRef,
@@ -595,7 +603,8 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     return { ...base, state: 'committed', lateWriters }
   } catch (error) {
     if (!(error instanceof PublicationRefusal)) {
-      if (journal) try { journal.append({ step: 'verify', outcome: 'failed', state: 'failed', detail: { code: rules.journalFailureCode(error), message: String(error.code ?? error.message).slice(0, 200) } }) } catch { /* the journal itself cannot be written */ }
+      // A private-state location refusal records nothing more there, a failure entry included. Locks are still released.
+      if (journal && !isLocationRefusal(error)) try { journal.append({ step: 'verify', outcome: 'failed', state: 'failed', detail: { code: rules.journalFailureCode(error), message: String(error.code ?? error.message).slice(0, 200) } }) } catch { /* the journal itself cannot be written */ }
       throw error
     }
     return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail }, notes: [], retainedEdits: [], lateWriters: [] }
@@ -772,6 +781,7 @@ async function publishOneUnit(unit, context) {
   }
   const baseObject = observe(current)
   const inspected = await context.channel.inspect({ vaultRoot: store.vaultRoot, path: unit.path })
+  context.check?.()
   if (inspected.status !== 'inspected') {
     capture('failed', inspected.status, { beforeDigest: currentDigest })
     if (plan.stagedPath) retire(plan, context)
@@ -790,6 +800,7 @@ async function publishOneUnit(unit, context) {
     ? { op: 'publish', mode: 'remove', vaultRoot: store.vaultRoot, path: unit.path, operationId, baseSha256: hex(plan.baseDigest), recoveryPath: displaced }
     : { op: 'publish', mode: 'replace', vaultRoot: store.vaultRoot, path: unit.path, operationId, baseSha256: hex(plan.baseDigest), candidateSha256: hex(plan.candidateDigest), stagedPath: plan.stagedPath, recoveryPath: displaced })
   context.crash('after-publish')
+  context.check?.()
 
   if (reply.status === 'published' || reply.status === 'published-external-captured' || reply.status === 'removed' || reply.status === 'removed-external-captured') {
     syncPrivateDirectory(path.dirname(displaced))

@@ -37,6 +37,9 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
   const lockPath = path.join(workspaceRoot, 'state', 'maintenance', 'selection-continuity.lock')
   let observedState = false
   let pending = null // an observed head whose durable write has not yet been proved
+  // The durable accepted head that pending was planned over. Pending keeps its maxima and identities, but never its
+  // accepted head once another writer has durably accepted something else.
+  let pendingBase = null
   function read({ initializing = false } = {}) {
     directory()
     let fd
@@ -81,8 +84,9 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
     const seen = [...new Set([...current.seen, ...pending.seen])].sort()
     const confirmations = [...new Set([...current.confirmations, ...pending.confirmations])].sort()
     if (seen.length > MAX_SELECTION_IDENTITIES || confirmations.length > MAX_SELECTION_IDENTITIES) refuse('selection-continuity-capacity', 'the private selection continuity state has reached its identity limit; nothing is loaded', SOURCE)
+    const durableMoved = canonicalJson(current.accepted) !== pendingBase
     return { ...pending, highestSequence: Math.max(current.highestSequence, pending.highestSequence), seen, confirmations,
-      accepted: current.highestSequence > pending.highestSequence ? current.accepted : pending.accepted }
+      accepted: durableMoved || current.highestSequence > pending.highestSequence ? current.accepted : pending.accepted }
   }
   function note(head) {
     try {
@@ -90,13 +94,16 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
       const disk = read()
       const before = withPending(disk)
       const planned = next(before, head)
-      if (disk !== null && canonicalJson(disk) === canonicalJson(planned)) { pending = null; return head }
+      if (disk !== null && canonicalJson(disk) === canonicalJson(planned)) { pending = null; pendingBase = null; return head }
+      if (pending === null || (disk !== null && canonicalJson(disk.accepted) !== pendingBase)) pendingBase = disk === null ? null : canonicalJson(disk.accepted)
       pending = planned
       // Proven again before the lock is taken and before the checkpoint is replaced.
       validateLocation()
       withPrivateLock(lockPath, () => {
         const current = read({ initializing: disk === null })
+        // Decided again over the checkpoint as it reads under the lock.
         const document = next(withPending(current), head)
+        pendingBase = current === null ? null : canonicalJson(current.accepted)
         pending = document
         const text = canonicalJson(document)
         if (Buffer.byteLength(text) > MAX_SELECTION_CONTINUITY_BYTES) invalid()
@@ -106,6 +113,7 @@ export function createSelectionContinuity({ workspaceRoot, workspaceId, personal
         if (canonicalJson(read()) !== text) invalid()
       })
       pending = null
+      pendingBase = null
       return head
     } catch (error) {
       if (error instanceof ObsidianMaintenanceRefusal) throw error
