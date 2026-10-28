@@ -35,3 +35,12 @@ test('`atelier obsidian --help` and the command\'s own usage name every option t
   assert.match(help, /only with --restart-obsidian, which no other flag implies/)
   assert.match(USAGE, /open \[[^\n]*--restart-obsidian/)
 })
+
+test('both helps say a personal home\'s audience is owner only when undecided and an explicit clear stays empty', async () => {
+  const { USAGE } = await import('../src/commands/obsidian.mjs')
+  const help = buildCommandHelpText('obsidian')
+  for (const text of [help, USAGE.replace(/\s+/g, ' ')]) {
+    assert.match(text, /audience setting: owner only when undecided; an explicit clear stays empty\./)
+  }
+  assert.doesNotMatch(help, /audience setting, none by default/)
+})

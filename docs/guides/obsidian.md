@@ -1403,7 +1403,13 @@ test reported as a pass.
     project's loader fails;
   - the plugin channel's bearer and the plugin choices it records, including a
     first-use bearer minted while a view is prepared and the confirmation
-    written when a plugin session opens.
+    written when a plugin session opens;
+  - the release of a lock already held when the proof fails: the engine lock
+    and the publication locks still write their release records, including a
+    release retried before the next publication, so that ownership is never
+    left behind. Apart from removing staged candidates, these release records
+    are the only change the engine and the publisher make after one of their
+    proofs refuses.
 
   Each of these writers keeps its file inside the workspace's private state,
   but none checks the roots declared now. A manifest that comes to enclose the
