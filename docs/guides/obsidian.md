@@ -1388,8 +1388,9 @@ test reported as a pass.
 - Private state after a wait: that the private state is outside every
   repository the workspace declares now is proven when a project loads, around
   each engine phase, inside the engine and selection locks, and after each wait
-  the publisher makes for the app, its list of vaults or its quiet period. It
-  is not proven again at every write, and it is not proven at all for writes
+  the publisher makes for the app, its list of vaults, its comparison of kept
+  notes or its quiet period. It is not proven again at every write, and it is
+  not proven at all for writes
   made outside the engine's phases and the publisher. Those are:
   - the built-in proposal store's writes for pending edits to shared notes
     (kept bytes, arbitration records and its queue) while it works through

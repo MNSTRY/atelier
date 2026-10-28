@@ -2675,3 +2675,26 @@ test('a location lost while an app inspection fails appends no failure entry', n
   assert.deepEqual(failed, [], 'no failure entry was appended once the location was no longer proven')
   assert.equal(world.read(NOTE), BASE)
 })
+
+test('a location lost while kept notes are compared retains, journals and writes nothing more, with the scheduling budget unexhausted', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: CANDIDATE })
+  let armed = false
+  let lost = false
+  const writes = []
+  const WRITES = new Set(['retainObject', 'unitDir', 'journalDir', 'commitManifest'])
+  const store = new Proxy(world.store, { get: (target, key) => {
+    const value = target[key]
+    return typeof value === 'function' && WRITES.has(key) ? (...args) => { if (lost) writes.push(key); return value.apply(target, args) } : value
+  } })
+  // The kept note's comparison reads the vault through fs/promises; the location is lost during that read.
+  const original = fs.promises.lstat
+  fs.promises.lstat = (file, ...rest) => { if (armed && String(file).startsWith(world.vault)) { armed = false; lost = true } return original.call(fs.promises, file, ...rest) }
+  t.after(() => { fs.promises.lstat = original })
+  const app = new ModelApp(world.vault)
+  armed = true
+  await assert.rejects(world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), modelAdapter(app), { recoveryStore: store, scheduling: { budgetMs: 1e9, maxUnits: 1e6, guard: () => { if (lost) throw locationLost() } } }),
+    (error) => error.code === 'managed-root-unproven')
+  assert.ok(lost, 'the kept note was compared')
+  assert.deepEqual(writes, [], 'no recovery object, unit directory or journal was asked for after the comparison')
+  assert.equal(world.read(NOTE), BASE)
+})

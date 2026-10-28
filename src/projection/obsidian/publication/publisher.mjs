@@ -532,6 +532,8 @@ export async function publishViewForOracleTests(options = {}, primitives = PUBLI
     const results = []
     // Kept notes are compared first, several at a time; one that holds exactly its candidate bytes is unchanged.
     const unchanged = await unchangedKeepUnits(units, store)
+    // The comparison read the disk: the location is proven again before any unit's recovery, journal or vault write.
+    budget.check()
     // The direct path has no editor coordination, so it is only right while no
     // Obsidian runs. Staging takes time and an app may have started since path
     // selection: the process table is read again immediately before the first
