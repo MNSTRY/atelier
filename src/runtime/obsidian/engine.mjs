@@ -12,11 +12,12 @@ import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { createMaintenanceExtensions } from './extension-points.mjs'
 import {
-  assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
-  readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
+  assertOutsideRepositories, authorizeAutomaticApply, ensureWorkspaceIdentity, initializeMachineSettings, protectedRoots, readLocalPointer,
+  readMachineSettings, resolveDataRoot, workspaceStateRoot,
 } from './machine-settings.mjs'
 import { configKey, hasIndexedHint, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, reconcileCooperatively, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
+import { personalExclusionRootsNow } from './personal-selection.mjs'
 import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP } from './plugin-presence.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
@@ -107,7 +108,7 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // A change the guard sees in the middle of a tick is read, where it may be a confirmed selection, while it is there.
   noteSelectionAtGuard: notePersonalSelectionNow,
-  // A loaded project pinned to a selection record below the highest record this process has read the history ending at
+  // A loaded project pinned to a selection different from the most recently accepted head in this process
   // is loaded again at the next tick, whatever the files say: another reader in the process may have read a
   // confirmation that is gone again before this engine looked (personalSelectionBehind).
   reloadsBehindSelection: personalSelectionBehind,
@@ -167,6 +168,11 @@ export const ENGINE_PRIMITIVES = Object.freeze({
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
+// The private-state location proof refused (assertLocation's own code): the state root itself is no longer proven
+// outside every root declared now. That is never one view's refusal: it stops the whole tick, so no later view goes
+// on writing under roots it can no longer trust. A view's own vault in a bad place keeps its own codes and stops
+// only that view.
+const isLocationRefusal = (error) => isTypedRefusal(error) && error.code === 'managed-root-unproven'
 // The code a view is refused with when its own vault cannot be placed: a typed refusal's, or `vault-location-unusable`
 // for a file-system error there (a file in the way, no permission, a read-only volume). Null for anything else, which
 // is a fault of the engine and stops the tick.
@@ -287,7 +293,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   let firstTick = true
   let running = false
   let watching = { signature: null, handle: null }
-  let known = null // { stateStore, maintenanceMode } once a workspace has been resolved
+  let known = null // { stateStore, maintenanceMode, repositoryRoots } once a workspace has been resolved
   let heldLock = null
   let releaseOwed = false
   // Views somebody asked to have prepared and published once more, at the next tick.
@@ -310,7 +316,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     try { return (await readUnheldEvidence({ vaultRoot: store.vaultRoot }))?.unlisted === true } catch { return false }
   }
 
-  async function takeLock(workspaceRoot, workspaceId) {
+  async function takeLock(workspaceRoot, workspaceId, validateLocation = undefined) {
     // A lock an earlier tick could not give back is still this process's, and its ticket on disk unreleased: a tick
     // that tried to take it anew would find its own ticket and answer `busy` until the process ends. It is given back
     // first. A release that fails again fails this tick, and is owed to the next.
@@ -322,6 +328,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (heldLock) return { acquired: true }
     const lock = await rules.acquireEngineLock({
       workspaceRoot, directory: path.join(workspaceRoot, ENGINE_LOCK_DIRECTORY), workspaceId, purpose: 'maintenance-engine', service: lockOwner, clock, proveAbandoned,
+      ...(validateLocation === undefined ? {} : { validateLocation }),
     })
     if (lock.acquired) heldLock = lock
     return lock
@@ -369,7 +376,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // A vault root that is gone (a folder under the data root the person removed, say) is looked for again too, so the
     // store made in its place says why rather than failing on the folder that is not there.
     if (cached?.signature === signature && fs.lstatSync(cached.store.vaultRoot, { throwIfNoEntry: false }) !== undefined) {
-      try { cached.store.checkAllocatedVault?.(); return cached.store } catch (error) { if (!isTypedRefusal(error)) throw error }
+      try { cached.store.checkAllocatedVault?.(); return cached.store } catch (error) { if (!isTypedRefusal(error) || isLocationRefusal(error)) throw error }
     }
     stores.delete(scope.scopeId)
     const store = seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId: scope.scopeId, repositoryRoots })
@@ -392,22 +399,67 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   const blankEntry = (scopeId, now) => ({ scopeId, state: 'stale', reason: 'not-yet-published', generationId: null, preparedGenerationId: null, verified: false, heldNotes: [], changeClasses: [], retainedEdits: 0, checkedAt: now })
   const demote = (entry, state, reason, now) => ({ ...entry, state, reason, verified: false, checkedAt: now })
 
-  // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state.
-  async function persistOutcome({ enablement, state, reason, now, scopeIds = [] }) {
+  // The private-state location guard's own refusals: under one, the state root itself is in question.
+  const MANAGED_ROOT_REFUSALS = new Set(['managed-root-inside-repository', 'managed-root-not-absolute', 'managed-root-realpath-failed',
+    'managed-root-realpath-overlap', 'managed-root-symlink-alias', 'repository-inside-managed-root', 'managed-root-unproven'])
+  // The roots private state must stay outside, as declared now: each project's own, and a personal home's manifest
+  // read again rather than as it was when the project loaded. Throws when they cannot be read.
+  const currentExclusionRoots = (declared) => declared.flatMap((value) => {
+    const binding = personalWorkspaceBindingOf(value)
+    return [...protectedRoots(value), ...(binding === null ? [] : personalExclusionRootsNow(binding.personalHome))]
+  })
+  // Whether a state root is proven outside every root declared now. A locator that refuses, or roots that cannot be
+  // read, prove nothing.
+  const locationProvenNow = (root, loaded) => {
+    try {
+      const declared = [...(locateProject === null ? [] : [locateProject()]), ...(loaded === null ? [] : [loaded])]
+      if (declared.length === 0) return false
+      assertOutsideRepositories({ managedRoot: root, repositoryRoots: currentExclusionRoots(declared) })
+      return true
+    } catch { return false }
+  }
+
+  // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state. Nothing is
+  // written for a location refusal, or unless the state root is proven outside every root declared now: a manifest
+  // that newly declares a root holding this state is never written into, cached store or not. When no project can be
+  // read now, a cached store is held to the roots it was last proven outside; without either, nothing is written.
+  async function persistOutcome({ enablement, state, reason, now, scopeIds = [], locationRefused = false }) {
+    if (locationRefused) return
+    // The roots declared now. A configured locator that cannot answer leaves them unknown: earlier roots never stand
+    // in. Without a locator or a readable project, a cached store is held to the roots it was last proven outside.
+    const rootsNow = () => {
+      let located = null
+      if (locateProject !== null) located = locateProject()
+      const declared = [located, project].filter((value) => value !== null && value !== undefined)
+      if (declared.length > 0) return currentExclusionRoots(declared)
+      if (locateProject === null && Array.isArray(known?.repositoryRoots)) return known.repositoryRoots
+      return null
+    }
+    let repositoryRoots
+    try { repositoryRoots = rootsNow() } catch { return }
+    if (repositoryRoots === null) return
+    const outside = (root) => { try { assertOutsideRepositories({ managedRoot: root, repositoryRoots }); return true } catch { return false } }
+    const outsideNow = (root) => { try { const roots = rootsNow(); if (roots === null) return false; assertOutsideRepositories({ managedRoot: root, repositoryRoots: roots }); return true } catch { return false } }
     if (!known) {
-      let located = project
-      try { located ??= locateProject === null ? null : locateProject() } catch { located = null }
+      let source = project
+      if (locateProject !== null) { try { source = locateProject() } catch { return } }
+      if (source === null || source === undefined) return
       let pointer = null
-      try { pointer = located ? readLocalPointer(located) : null } catch { pointer = null }
+      try { pointer = readLocalPointer(source) } catch { pointer = null }
       if (!pointer) return
       let root
-      try { root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project: located, env, platform }), pointer.workspaceId) } catch { return }
+      try { root = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project: source, env, platform }), pointer.workspaceId) } catch { return }
+      if (!outside(root)) return
       const stateStore = createMaintenanceStateStore({ workspaceRoot: root, workspaceId: pointer.workspaceId })
       if (!stateStore.exists()) return
-      known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual' }
+      known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual', repositoryRoots }
     }
+    if (!outside(known.stateStore.workspaceRoot)) return
+    // Proven again inside the acquisition and once it returns, against the roots declared then.
+    const stillOutside = () => { if (!outsideNow(known.stateStore.workspaceRoot)) refuse('managed-root-unproven', 'the private state can no longer be proved outside every root declared now; nothing is written') }
     // Another engine is ticking this workspace: its state is not ours to write.
-    if (!(await takeLock(known.stateStore.workspaceRoot, known.stateStore.workspaceId)).acquired) return
+    try { if (!(await takeLock(known.stateStore.workspaceRoot, known.stateStore.workspaceId, stillOutside)).acquired) return } catch (error) { if (isTypedRefusal(error) && error.code === 'managed-root-unproven') return; throw error }
+    if (!outsideNow(known.stateStore.workspaceRoot)) return
     const previous = readPreviousFreshness(known.stateStore)
     const entries = new Map()
     for (const entry of previous?.scopes ?? []) entries.set(entry.scopeId, demote(entry, state, reason, now))
@@ -466,20 +518,28 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     }
 
     // 2. Identity and machine settings, outside every repository.
-    const pointer = ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}) })
-    const { workspaceId } = pointer
-    const requestedRoot = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), workspaceId)
     const repositoryRoots = protectedRoots(project)
-    assertOutsideRepositories({ managedRoot: requestedRoot, repositoryRoots })
+    // The project this tick loaded. `project` itself may be cleared later in the tick to force a reload.
+    const loadedProject = project
+    // Each phase that writes after a cooperative wait proves the location again against the roots declared now; the
+    // refusal is a location refusal, so refusal bookkeeping writes nothing either. A held engine lock is still released.
+    const assertLocation = () => {
+      if (!locationProvenNow(workspaceRoot, loadedProject)) refuse('managed-root-unproven', 'the private state can no longer be proved outside every root declared now; this tick writes nothing more')
+    }
+    const stateRootOf = (named) => workspaceStateRoot(resolveDataRoot({ dataRoot, pointer: named, project, env, platform }), named.workspaceId)
+    const pointer = ensureWorkspaceIdentity({ project, ...(randomBytes ? { randomBytes } : {}),
+      validate: (named) => assertOutsideRepositories({ managedRoot: stateRootOf(named), repositoryRoots }) })
+    const { workspaceId } = pointer
+    const requestedRoot = stateRootOf(pointer)
     fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 })
     const workspaceRoot = fs.realpathSync(requestedRoot)
-    const lock = await takeLock(workspaceRoot, workspaceId)
+    const lock = await takeLock(workspaceRoot, workspaceId, assertLocation)
     if (!lock.acquired) return { state: 'busy', reason: 'engine-lock-held', lock: { reason: lock.reason, holder: lock.holder ?? null }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
-    const machine = readMachineSettings({ workspaceRoot, workspaceId })
-      ?? writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: defaultMachineSettings({ workspaceId, updatedAt: now }) })
+    assertLocation()
+    const machine = initializeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, updatedAt: now, personal: personalWorkspaceBindingOf(project) !== null })
     const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
-    known = { stateStore, maintenanceMode: machine.maintenanceMode }
+    known = { stateStore, maintenanceMode: machine.maintenanceMode, repositoryRoots }
     // A view refused for a file-system error (a vault folder that could not be allocated or placed, a configuration
     // file that could not be read again, a source removed while it was read, candidates that could not be staged) is
     // settled under the refusal's code alone, and such a tick ends without a failure. The error's code (`EACCES`, `EIO`,
@@ -496,6 +556,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // A view whose own vault cannot be placed: a typed refusal's code and detail, or `vault-location-unusable` for a
     // file-system error there, whose code is its cause.
     const refuseViewAlone = (scopeId, error) => {
+      if (isLocationRefusal(error)) throw error
       const code = viewRefusalCode(error)
       if (code === null) throw error
       allocationRefusals.set(scopeId, code)
@@ -528,6 +589,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const record = readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })
           if (record === null ? !hasCommittedGeneration({ workspaceRoot, scopeId: scope.scopeId }) : allocatedFolderState(record) === 'missing') {
             const known = await appList()
+            assertLocation()
             if (!known.ok) refuse('app-vault-list-unreadable', 'Obsidian\'s vault list could not be read, so no folder is allocated for this view yet; it is tried again at the next tick', { cause: known.code })
             vaults = known.vaults
           }
@@ -575,6 +637,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         looked.push({ scope, store, manifest, bases, vault })
       }
     } finally { reportPhase('vault-observation', vaultStartedMs) }
+    assertLocation()
     const pending = stateStore.readPendingEdits()
     let edits = pending.edits
     for (const { scope, store, manifest, bases, vault } of looked) {
@@ -599,6 +662,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     let observed = null
     if (proposalAdapter !== null && rules.observeEdits(proposalAdapter)) {
       try { observed = await proposalAdapter.observe(adapterContext(), { retryRefused: full }) } catch { observed = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
+      assertLocation()
     }
 
     // 4. Automatic apply, through the registered operation only.
@@ -608,6 +672,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         edits, applyOperation: extensions.applyOperation(), now, nowMs, retryIntervalMs,
         authorize: () => rules.authorize({ workspaceRoot, workspaceId }),
       })
+      assertLocation()
       edits = outcome.edits
       dispatched = outcome.dispatched
       stateStore.writePendingEdits({ ...pending, edits })
@@ -619,6 +684,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     let proposals = null
     if (proposalAdapter !== null) {
       try { proposals = await proposalAdapter.propose(adapterContext()) } catch { proposals = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
+      assertLocation()
     }
 
     // 5. Late writers. The publisher looks twice per publication; a holder can write later still.
@@ -652,6 +718,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const sourcesStartedMs = phaseTime()
     let sources
     try { sources = await reconcileCooperatively({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat }, createCooperativeBudget()) } finally { reportPhase('source-observation', sourcesStartedMs) }
+    assertLocation()
     for (const change of sources.changes) changes.push({ changeClass: change.changeClass })
     const { scopes: _declared, ...settingsWithoutScopes } = enablement.settings
     // What the configuration says apart from this integration's own member: a change to the member alone is an
@@ -712,7 +779,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       entries.set(scopeId, demote(previous?.scopes.find((entry) => entry.scopeId === scopeId && entry.state !== 'disabled') ?? blankEntry(scopeId, now), 'stale', code, now))
     }
     for (const entry of previous?.scopes ?? []) if (!entries.has(entry.scopeId)) entries.set(entry.scopeId, demote(entry, 'disabled', 'scope-not-configured', now))
-    const persist = () => stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries }))
+    // Freshness is written only while the state root is still proven outside the roots declared now: a manifest that
+    // changed during this tick to enclose it gets no write, refusal or not.
+    const persist = () => { if (locationProvenNow(workspaceRoot, loadedProject)) stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries })) }
     persist()
 
     // 8. Rebuild and publish.
@@ -729,6 +798,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       let selectionNoted = false
       const noteSelectionOnce = () => { if (!selectionNoted) { selectionNoted = true; rules.noteSelectionAtGuard(project) } }
       const assertBindings = () => {
+        // Every cooperative wait of preparation and publication resumes here before it writes again.
+        assertLocation()
         let changed
         try {
           changed = bindings.some(file => (readFileFacts(file.absolute)?.digest ?? null) !== file.digest)
@@ -835,7 +906,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           profile: seams.profileFor({ project, workspaceId, audienceAllow: machine.audienceAllow }),
         }
       } catch (error) {
-        if (!isTypedRefusal(error)) throw error
+        if (!isTypedRefusal(error) || isLocationRefusal(error)) throw error
         for (const scopeId of attempt.keys()) { entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now)); noteRefusalCause(scopeId, error) }
         if (REREAD_CODES.has(error.code)) forceFull = true
         // The personal workspace refused the bound generation: the project is loaded again at the next tick, so a
@@ -951,6 +1022,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
         } catch (error) {
           if (!isTypedRefusal(error)) { settle('stale', 'publisher-error'); persist(); throw error }
+          // Nothing more is recorded for any view: the tick stops and refuses as a whole.
+          if (isLocationRefusal(error)) throw error
           // A redaction refusal names the note and the rule it concerns, never the value.
           const where = error.code === 'redaction-failure' ? error.detail ?? {} : {}
           diagnostics = typeof where.rule === 'string' ? [{ code: error.code, rule: where.rule, ...(typeof where.notePath === 'string' ? { notePath: where.notePath } : {}), ...(typeof where.filePath === 'string' ? { filePath: where.filePath } : {}) }] : []
@@ -1010,7 +1083,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           throw error
         }
         // Fail closed: nothing is published under a refusal, and every known view says why.
-        try { await persistOutcome({ enablement: 'refused', state: 'stale', reason: error.code, now: isoTime(clock) }) } catch { /* the refusal itself is still reported */ }
+        try { await persistOutcome({ enablement: 'refused', state: 'stale', reason: error.code, now: isoTime(clock), locationRefused: MANAGED_ROOT_REFUSALS.has(error.code) }) } catch { /* the refusal itself is still reported */ }
         project = null
         semantic = null
         firstTick = true

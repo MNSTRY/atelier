@@ -2,7 +2,7 @@
 
 A synthetic, source-checkout compatibility fixture, not a production website
 template or a replacement marketing framework. It consumes Atelier's public
-presentation token API at build time. Astro 7.3.2 is pinned only in this
+presentation token API at build time. Astro 7.3.8 is pinned only in this
 private example; no Astro or React runtime is added to the Atelier package.
 The example is excluded from the published package allowlist.
 

@@ -1377,6 +1377,83 @@ test('service unit --remove lowers the consent first, unloads and deletes the un
   assert.deepEqual([again.exit, again.json.loginItem.removed, again.json.service.started, world.record().runtimeId], [EXIT.ok, false, false, record.runtimeId], 'removing it twice changes nothing and starts nothing')
 })
 
+test('a personal-home unit removal refuses data inside an enrolled repository before removing or restarting anything', needsPosix, async (t) => {
+  const world = await makeWorld(t)
+  const { locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
+  const personalHome = path.join(world.dir, 'personal-home')
+  fs.mkdirSync(personalHome, { mode: 0o700 })
+  const repository = path.join(world.projectDir, REPOSITORIES[0])
+  fs.writeFileSync(path.join(personalHome, 'atelier.personal.json'), JSON.stringify({
+    schema: 'atelier-personal-workspace-manifest@v1', workspaceId: 'person-synthetic', revision: 1,
+    bindings: [repository], repos: [{ repoId: 'east-wing', root: repository, remote: null, enrolled: true }],
+  }))
+  const project = locatePersonalHome({ personalHome })
+  ensureWorkspaceIdentity({ project, dataRoot: world.dataRoot, randomBytes: fixedRandom })
+  const pointer = path.join(personalHome, '.atelier-local', 'obsidian.json')
+  const before = fs.readFileSync(pointer)
+  const dataRoot = path.join(repository, 'private-service-data')
+  const managerCalls = world.launchd.calls.length
+  let loads = 0, starts = 0
+  const out = []
+  const exit = await runObsidianCommand({
+    argv: ['service', 'unit', '--remove', `--personal-home=${personalHome}`, `--data-root=${dataRoot}`, '--json'],
+    seams: world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, spawn: () => { starts++; throw new Error('must not start') } } }),
+    loadProject: () => { loads++; throw new Error('a locator must not compose a selection') },
+    env: world.env, cwd: world.dir, platform: 'darwin', contributions: [],
+    stdout: (text) => out.push(text), stderr: (text) => out.push(text),
+  })
+  const reply = JSON.parse(out.join('\n'))
+  assert.deepEqual([exit, reply.error?.code], [EXIT.refused, 'managed-root-inside-repository'])
+  assert.equal(world.launchd.calls.length, managerCalls, 'no manager remove or restart')
+  assert.equal(loads, 0)
+  assert.equal(starts, 0)
+  assert.equal(fs.existsSync(dataRoot), false, 'no private-state directory was created in the repository')
+  assert.deepEqual(fs.readFileSync(pointer), before)
+  // The locator's roots feed the existing lifecycle guard before a direct
+  // start can create private state too. No selection or manager is needed.
+  await assert.rejects(startService({
+    loadProject: () => { throw new Error('must not compose') },
+    locateProject: () => project, dataRoot, env: world.env, platform: 'darwin',
+    entryPath: TEST_SERVICE_ENTRY,
+    spawn: () => { throw new Error('must not start') },
+  }), (error) => error.code === 'managed-root-inside-repository')
+  assert.equal(fs.existsSync(dataRoot), false)
+})
+
+test('uninstall refuses a personal-home data root inside an enrolled repository instead of reporting success', needsPosix, async (t) => {
+  const world = await makeWorld(t)
+  const { locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
+  const personalHome = path.join(world.dir, 'personal-home')
+  fs.mkdirSync(personalHome, { mode: 0o700 })
+  const repository = path.join(world.projectDir, REPOSITORIES[0])
+  fs.writeFileSync(path.join(personalHome, 'atelier.personal.json'), JSON.stringify({
+    schema: 'atelier-personal-workspace-manifest@v1', workspaceId: 'person-synthetic', revision: 1,
+    bindings: [repository], repos: [{ repoId: 'east-wing', root: repository, remote: null, enrolled: true }],
+  }))
+  ensureWorkspaceIdentity({ project: locatePersonalHome({ personalHome }), dataRoot: world.dataRoot, randomBytes: fixedRandom })
+  const pointer = path.join(personalHome, '.atelier-local', 'obsidian.json')
+  const before = fs.readFileSync(pointer)
+  const dataRoot = path.join(repository, 'private-service-data')
+  const managerCalls = world.launchd.calls.length
+  let starts = 0
+  const out = []
+  const exit = await runObsidianCommand({
+    argv: ['uninstall', `--personal-home=${personalHome}`, `--data-root=${dataRoot}`, '--json'],
+    seams: world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, spawn: () => { starts++; throw new Error('must not start') } } }),
+    loadProject: () => { throw new Error('a locator must not compose a selection') },
+    env: world.env, cwd: world.dir, platform: 'darwin', contributions: [],
+    stdout: (text) => out.push(text), stderr: (text) => out.push(text),
+  })
+  const reply = JSON.parse(out.join('\n'))
+  assert.deepEqual([exit, reply.error?.code], [EXIT.refused, 'managed-root-inside-repository'])
+  assert.equal(reply.loginItem, undefined, 'no removal is claimed')
+  assert.equal(reply.service, undefined, 'no stop is claimed')
+  assert.equal(world.launchd.calls.length, managerCalls, 'no manager action')
+  assert.equal(starts, 0)
+  assert.equal(fs.existsSync(dataRoot), false)
+  assert.deepEqual(fs.readFileSync(pointer), before)
+})
+
 test('when no entry may be started, --remove removes the item and leaves the service to the next open', await commandTest(), async (t) => {
   const world = await makeWorld(t)
   world.recordReservedPort()

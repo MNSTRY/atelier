@@ -28,12 +28,32 @@ function read(file) {
   } finally { fs.closeSync(fd) }
 }
 
+// Every directory is created by this copy and every file is created exclusively, so an entry that arrived meanwhile
+// refuses instead of being merged. Nothing is overwritten, and nothing unknown is cleaned up on failure.
+function copyExclusive(source, target) {
+  const stat = fs.lstatSync(source)
+  if (stat.isDirectory()) {
+    fs.mkdirSync(target, { recursive: false })
+    for (const name of fs.readdirSync(source)) copyExclusive(path.join(source, name), path.join(target, name))
+  } else if (stat.isFile()) fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL)
+  else throw Error('The workshop fixture holds an entry that is neither a file nor a directory')
+}
+
+// Entries created inside these new directories after they were made are not ours either; refuse before Git sees them.
+function assertExactCopy(source, target) {
+  const expected = fs.readdirSync(source).sort(), actual = fs.readdirSync(target).sort()
+  if (expected.length !== actual.length || expected.some((name, index) => name !== actual[index]))
+    throw Object.assign(Error('The new workshop holds entries this initialization did not create'), { code: 'EEXIST' })
+  for (const name of expected) if (fs.lstatSync(path.join(source, name)).isDirectory()) assertExactCopy(path.join(source, name), path.join(target, name))
+}
+
 /** Copy the actual shipped public fixture into a NEW disposable workspace. */
 export function initializeKnowledgeHealthWorkshop(destination) {
   const root = path.resolve(destination)
   fs.mkdirSync(root, { recursive: false })
-  fs.cpSync(fileURLToPath(new URL('../../fixtures/knowledge-health/workshop/', import.meta.url)), root,
-    { recursive: true, force: false, errorOnExist: true })
+  const fixture = fileURLToPath(new URL('../../fixtures/knowledge-health/workshop/', import.meta.url))
+  for (const name of fs.readdirSync(fixture)) copyExclusive(path.join(fixture, name), path.join(root, name))
+  assertExactCopy(fixture, root)
   fs.writeFileSync(path.join(root, '.gitignore'), '.atelier-local/\noutput/\n', { flag: 'wx' })
   const git = spawnSync('git', ['init', '--quiet'], { cwd: root, encoding: 'utf8', timeout: 15000,
     env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1',

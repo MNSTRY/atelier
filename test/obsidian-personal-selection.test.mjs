@@ -47,10 +47,10 @@ const {
 const { createEditorAdapter, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { ENGINE_PRIMITIVES, createMaintenanceEngine, createMaintenanceEngineForOracleTests } = await import('../src/runtime/obsidian/engine.mjs')
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
-const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, localPointerPath, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { createProductionSeams } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
-const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, notePersonalSelectionNow, personalSelectionOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
+const { bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, notePersonalSelectionNow, personalSelectionOf, validatePersonalWorkspace } = await import('../src/projection/obsidian/personal-workspace.mjs')
 const { SELECTION_PRIMITIVES, loadSelectedProject, loadSelectedProjectOffThread, locatePersonalHome } = await import('../src/runtime/obsidian/personal-selection.mjs')
 const { resolveServiceWorkspace, runMaintenanceService, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
 const { createLoadReport, createViewPermission } = await import('../src/runtime/obsidian/view-permission.mjs')
@@ -123,7 +123,7 @@ function makePerson(t) {
   // The person's explicit confirmation, as its command records it.
   person.select = (generationId = person.generationId) => selectPersonalGeneration({ personalHome: home, generationId, confirm: selectionConfirmDigest({ generationId, previous: readPersonalSelectionHead({ personalHome: home }).head }) })
   person.record = (sequence) => path.join(home, 'selections', `${String(sequence).padStart(6, '0')}.json`)
-  person.load = (options = {}) => loadSelectedProject({ personalHome: home }, { bind: inThread(), ...options })
+  person.load = (options = {}) => loadSelectedProject({ personalHome: home, dataRoot: person.dataRoot }, { bind: inThread(), ...options })
   person.locate = () => locatePersonalHome({ personalHome: home })
   person.workspaceRoot = () => fs.realpathSync(workspaceStateRoot(person.dataRoot, person.workspaceId))
   person.vault = (scopeId) => path.join(person.workspaceRoot(), 'vaults', scopeId)
@@ -134,9 +134,9 @@ function makePerson(t) {
   }
   person.noteFile = (scopeId, nodeId) => path.join(person.vault(scopeId), person.manifestOf(scopeId).notes.find((note) => note.nodeId === nodeId).path)
   // A command run with --personal-home and nothing else naming the project: the command's own loader and locator.
-  person.command = async (argv) => {
+  person.command = async (argv, options = {}) => {
     const out = []
-    const exit = await runObsidianCommandForOracleTests({ argv: [...argv, `--personal-home=${home}`, '--json'], seams: {}, dataRoot: person.dataRoot, env: process.env, cwd: base, clock, contributions: [], stdout: (text) => out.push(text), stderr: (text) => out.push(text), account: () => 'person-synthetic' })
+    const exit = await runObsidianCommandForOracleTests({ argv: [...argv, `--personal-home=${home}`, '--json'], seams: {}, dataRoot: person.dataRoot, env: process.env, cwd: base, clock, contributions: [], stdout: (text) => out.push(text), stderr: (text) => out.push(text), account: () => 'person-synthetic', ...options })
     return { exit, json: JSON.parse(out.join('\n')) }
   }
   // `primitives` replaces rules of the engine itself, for a mutation control.
@@ -145,7 +145,7 @@ function makePerson(t) {
   })
   person.materialize()
   const project = bindPersonalWorkspace({ personalHome: home, generationId: person.generationId }).project
-  person.workspaceId = ensureWorkspaceIdentity({ project, randomBytes: person.randomBytes }).workspaceId
+  person.workspaceId = ensureWorkspaceIdentity({ project, dataRoot: person.dataRoot, randomBytes: person.randomBytes }).workspaceId
   const settings = withDecision({ ...defaultMachineSettings({ workspaceId: person.workspaceId, updatedAt: NOW }), audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
   writeMachineSettings({ workspaceRoot: workspaceStateRoot(person.dataRoot, person.workspaceId), workspaceId: person.workspaceId, repositoryRoots: protectedRoots(project), settings })
   return person
@@ -153,6 +153,322 @@ function makePerson(t) {
 // An overlay change: the generation the person confirmed no longer holds, and the next one is not confirmed.
 const reviseOverlay = (person) => { person.overlay.annotations[0].note += ' Revised.'; person.save() }
 const everyView = (report, state, reason) => report.scopes.length === 3 && report.scopes.every((scope) => scope.state === state && (reason === undefined || scope.reason === reason))
+
+test('the selection loader resolves manifest exclusion roots and keeps its checkpoint in the explicit data root', (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  assert.equal(personalSelectionOf(ari.load()).sequence, 1)
+  const checkpoint = path.join(ari.workspaceRoot(), 'state', 'maintenance', 'selection-continuity.json')
+  const before = fs.readFileSync(checkpoint)
+  assert.equal(JSON.parse(before).highestSequence, 1)
+  const manifest = path.join(ari.home, 'atelier.personal.json')
+  const original = fs.readFileSync(manifest)
+  for (const replacement of ['{', JSON.stringify({ repos: [{ root: 'relative-root' }] }), ' '.repeat(1024 * 1024 + 1)]) {
+    fs.writeFileSync(manifest, replacement)
+    assert.throws(() => ari.load(), refusedWith('malformed-input'))
+    assert.deepEqual(fs.readFileSync(checkpoint), before, 'a refused exclusion-root read changes no checkpoint')
+  }
+  fs.unlinkSync(manifest)
+  fs.mkdirSync(manifest)
+  assert.throws(() => ari.load(), refusedWith('malformed-input'))
+  fs.rmdirSync(manifest)
+  fs.writeFileSync(manifest, original)
+  assert.equal(personalSelectionOf(ari.load()).sequence, 1)
+})
+
+test('a first load whose data root lies inside a declared repository refuses before writing the pointer or any private state', (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const pointer = localPointerPath(ari.locate())
+  fs.rmSync(pointer)
+  const unsafe = path.join(ari.a, 'private-service-data')
+  assert.throws(() => loadSelectedProject({ personalHome: ari.home, dataRoot: unsafe }, { bind: inThread() }), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'managed-root-inside-repository')
+  assert.equal(fs.existsSync(pointer), false, 'no pointer naming the refused location was persisted')
+  assert.equal(fs.existsSync(unsafe), false, 'no private state was created in the repository')
+  // The next load with the safe root is a genuine first use.
+  assert.equal(personalSelectionOf(ari.load()).sequence, 1)
+  assert.equal(fs.existsSync(pointer), true)
+})
+
+test('a manifest that newly declares a root holding existing service state refuses, and refusal bookkeeping writes nothing there', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const inventory = () => {
+    const rows = []
+    const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) walk(file)
+      else { const stat = fs.lstatSync(file); rows.push([path.relative(ari.dataRoot, file), stat.size, stat.mtimeMs, stat.uid]) }
+    } }
+    walk(ari.dataRoot)
+    return rows.sort()
+  }
+  const engine = ari.engine({ locateProject: ari.locate })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  const before = inventory()
+  const original = JSON.parse(JSON.stringify(ari.manifest))
+  ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+  ari.save()
+  const cached = await engine.tick()
+  assert.deepEqual([cached.state, cached.refusal?.code], ['refused', 'managed-root-inside-repository'], JSON.stringify(cached.refusal))
+  assert.deepEqual(inventory(), before, 'the cached store wrote nothing under the newly declared root')
+  const fresh = ari.engine({ locateProject: ari.locate })
+  try {
+    const located = await fresh.tick()
+    assert.deepEqual([located.state, located.refusal?.code], ['refused', 'managed-root-inside-repository'])
+  } finally { fresh.stop() }
+  assert.deepEqual(inventory(), before, 'the locator path wrote nothing under the newly declared root')
+  ari.manifest = original
+  ari.save()
+  assert.ok(everyView(await engine.tick(), 'current'))
+})
+
+// Every private state file of the workspace except its vaults: checkpoints, ownership, freshness and current pointers.
+function stateInventory(ari) {
+  const root = path.join(ari.workspaceRoot(), 'state')
+  const rows = []
+  const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name)
+    if (entry.isDirectory()) walk(file)
+    else { const stat = fs.lstatSync(file); rows.push([path.relative(root, file), stat.size, stat.mtimeMs, stat.ino]) }
+  } }
+  walk(root)
+  return rows.sort()
+}
+
+test('a locator that refuses while a manifest newly encloses the state root writes no bookkeeping at any tick', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const engine = ari.engine({ locateProject: ari.locate })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  const before = stateInventory(ari)
+  const original = JSON.parse(JSON.stringify(ari.manifest))
+  ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+  ari.save()
+  // The home is no longer private, so the locator refuses before it reads the manifest's roots.
+  fs.chmodSync(ari.home, 0o770)
+  try {
+    for (let tick = 0; tick < 3; tick++) {
+      const refused = await engine.tick()
+      assert.equal(refused.state, 'refused', JSON.stringify(refused))
+      assert.deepEqual(stateInventory(ari), before, `tick ${tick} wrote nothing under the newly declared root`)
+    }
+  } finally { fs.chmodSync(ari.home, 0o700) }
+  ari.manifest = original
+  ari.save()
+  assert.ok(everyView(await engine.tick(), 'current'))
+})
+
+test('a confirmation appended during publication, then a manifest that encloses the state root, leaves checkpoint, ownership and freshness unwritten', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  let during = false
+  let before = null
+  const production = createProductionSeams()
+  const engine = ari.engine({ seams: { publishView: (input) => {
+    if (during) {
+      during = false
+      // Taken at the change: what the tick wrote before the manifest enclosed the root is not in question.
+      before = stateInventory(ari)
+      ari.select()
+      ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+      ari.save()
+    }
+    return production.publishView(input)
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  fs.writeFileSync(path.join(ari.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replace('Tide tables', 'Revised tide tables'))
+  during = true
+  const refused = await engine.tick()
+  assert.ok(refused.state === 'refused' || refused.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(refused))
+  // The one write allowed is the release of the engine-lock ticket this tick already held before the change.
+  const held = new Set(before.map(([file]) => file).filter((file) => /^maintenance\/engine-lock\/\d+\.json$/.test(file)))
+  const after = stateInventory(ari).filter(([file]) => !(file.endsWith('.released') && held.has(file.replace(/\.released$/, '.json'))))
+  assert.deepEqual(after, before, 'no checkpoint, ownership, freshness or current pointer was written')
+  assert.doesNotMatch(fs.readFileSync(ari.noteFile('everything', 'a:tide'), 'utf8'), /Revised tide tables/)
+})
+
+// The workspace's private state outside its vaults, recovery included.
+function workspaceInventory(ari) {
+  const root = ari.workspaceRoot()
+  const rows = []
+  const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name)
+    const relative = path.relative(root, file)
+    if (relative === 'vaults') continue
+    if (entry.isDirectory()) walk(file)
+    else { const stat = fs.lstatSync(file); rows.push([relative, stat.size, stat.mtimeMs, stat.ino]) }
+  } }
+  walk(root)
+  return rows.sort()
+}
+
+test('a manifest that encloses the state root during vault observation, with an edited note present, preserves and records nothing', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  let during = false
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, lstat: (file, options) => {
+    if (during && String(file).startsWith(path.join(ari.workspaceRoot(), 'vaults'))) {
+      during = false
+      before = workspaceInventory(ari)
+      ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true })
+      ari.save()
+    }
+    return fs.lstatSync(file, options)
+  } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  const note = ari.noteFile('everything', 'personal-ari:annotation-harbor-thought')
+  fs.writeFileSync(note, fs.readFileSync(note, 'utf8') + '\nAn edit the person made.\n')
+  during = true
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the manifest changed during vault observation')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  const held = new Set(before.map(([file]) => file).filter((file) => /^state\/maintenance\/engine-lock\/\d+\.json$/.test(file)))
+  const after = workspaceInventory(ari).filter(([file]) => !(file.endsWith('.released') && held.has(file.replace(/\.released$/, '.json'))))
+  assert.deepEqual(after, before, 'no edited bytes were preserved and no pending edit, freshness or pointer was written')
+  assert.match(fs.readFileSync(note, 'utf8'), /An edit the person made\./, 'the edit stays where the person made it')
+})
+
+const enclose = (ari) => { ari.manifest.repos.push({ repoId: 'enclosing', root: ari.base, remote: null, enrolled: true }); ari.save() }
+const releasedOnly = (before, after) => {
+  const held = new Set(before.map(([file]) => file).filter((file) => /^state\/maintenance\/engine-lock\/\d+\.json$/.test(file)))
+  return after.filter(([file]) => !(file.endsWith('.released') && held.has(file.replace(/\.released$/, '.json'))))
+}
+
+test('a manifest that encloses the state root during engine-lock inspection publishes no ticket and initializes no settings', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const { acquirePrivateGenerationLock } = await import('../src/runtime/obsidian/private-lock.mjs')
+  let during = false
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, primitives: { acquireEngineLock: (args) => {
+    let calls = 0
+    const validate = args.validateLocation
+    return acquirePrivateGenerationLock({ ...args, validateLocation: () => {
+      // The second check follows the asynchronous inspection: the change lands between them.
+      if (++calls === 2 && during) { during = false; before = workspaceInventory(ari); enclose(ari) }
+      validate()
+    } })
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  during = true
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the manifest changed during lock inspection')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  assert.deepEqual(workspaceInventory(ari), before, 'no ownership ticket, settings or freshness was written')
+})
+
+test('a manifest that encloses the state root once the engine-lock ticket is published withdraws that ticket and prunes no predecessor', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const { acquirePrivateGenerationLock } = await import('../src/runtime/obsidian/private-lock.mjs')
+  let during = false
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, primitives: { acquireEngineLock: (args) => {
+    let calls = 0
+    const validate = args.validateLocation
+    return acquirePrivateGenerationLock({ ...args, validateLocation: () => {
+      // The third check follows the ticket's publication and comes before predecessors are pruned.
+      if (++calls === 3 && during) { during = false; enclose(ari) }
+      validate()
+    } })
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  before = workspaceInventory(ari)
+  during = true
+  const refused = await engine.tick()
+  assert.equal(during, false, 'the manifest changed after the ticket was published')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  // Lock cleanup is the one change permitted: the published ticket is withdrawn, so nothing is left or pruned.
+  assert.deepEqual(workspaceInventory(ari), before, 'the new ticket was withdrawn and no predecessor, settings or freshness changed')
+})
+
+test('a manifest that encloses the state root while the app vault list is read allocates no folder', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  // Vaults live where the person decided, so a first allocation reads the app's list.
+  const settingsAt = { workspaceRoot: workspaceStateRoot(ari.dataRoot, ari.workspaceId), workspaceId: ari.workspaceId }
+  const parent = path.join(ari.base, 'decided-vaults')
+  fs.mkdirSync(parent, { mode: 0o700 })
+  writeMachineSettings({ ...settingsAt, repositoryRoots: protectedRoots(ari.locate()), settings: withDecision(readMachineSettings(settingsAt), 'location', { parent }, { decidedAt: NOW, decidedBy: null, via: 'command' }) })
+  let before = null
+  const engine = ari.engine({ locateProject: ari.locate, readAppVaultList: () => {
+    if (before === null) { before = workspaceInventory(ari); enclose(ari) }
+    return { ok: true, vaults: {} }
+  } })
+  t.after(() => engine.stop())
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the vault list was read for a first allocation')
+  assert.ok(refused.state === 'refused' || refused.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(refused))
+  assert.deepEqual(releasedOnly(before, workspaceInventory(ari)), before, 'no allocation record, folder or freshness was written')
+})
+
+test('a location refusal while one view reads the app vault list stops the whole tick: no later view makes its recovery store', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const settingsAt = { workspaceRoot: workspaceStateRoot(ari.dataRoot, ari.workspaceId), workspaceId: ari.workspaceId }
+  const parent = path.join(ari.base, 'decided-vaults')
+  fs.mkdirSync(parent, { mode: 0o700 })
+  writeMachineSettings({ ...settingsAt, repositoryRoots: protectedRoots(ari.locate()), settings: withDecision(readMachineSettings(settingsAt), 'location', { parent }, { decidedAt: NOW, decidedBy: null, via: 'command' }) })
+  const first = ari.engine({ locateProject: ari.locate, readAppVaultList: () => ({ ok: true, vaults: {} }) })
+  assert.ok(everyView(await first.tick(), 'current'))
+  first.stop()
+  // One view's allocated folder is gone, so a new engine reads the app's list for it; the other views keep theirs.
+  const folders = fs.readdirSync(parent)
+  assert.ok(folders.length > 1, JSON.stringify(folders))
+  fs.rmSync(path.join(parent, folders.sort()[0]), { recursive: true })
+  let lost = false
+  const made = []
+  const production = createProductionSeams()
+  const engine = ari.engine({ locateProject: ari.locate,
+    readAppVaultList: () => { if (!lost) { lost = true; enclose(ari) } return { ok: true, vaults: {} } },
+    seams: { createRecoveryStore: (input) => { if (lost) made.push(input.scopeId); return production.createRecoveryStore(input) } } })
+  t.after(() => engine.stop())
+  const refused = await engine.tick()
+  assert.ok(lost, 'the vault list was read for the view whose folder is gone')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  assert.equal(refused.refusal.code, 'managed-root-unproven')
+  assert.deepEqual(made, [], 'no view made its recovery store after the location refusal')
+})
+
+test('a manifest that encloses the state root during the publisher quiet period records no late writer, journal entry or pointer', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  let before = null
+  let armed = false
+  const production = createProductionSeams()
+  const engine = ari.engine({ locateProject: ari.locate, quietPeriodMs: 400, seams: { publishView: (input) => {
+    if (armed) {
+      armed = false
+      // Lands inside the quiet period that follows the moves.
+      setTimeout(() => { before = workspaceInventory(ari); enclose(ari) }, 200)
+    }
+    return production.publishView(input)
+  } } })
+  t.after(() => engine.stop())
+  assert.ok(everyView(await engine.tick(), 'current'))
+  fs.writeFileSync(path.join(ari.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replace('Tide tables', 'Revised tide tables'))
+  armed = true
+  const refused = await engine.tick()
+  assert.ok(before !== null, 'the manifest changed during publication')
+  assert.ok(refused.state === 'refused' || refused.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(refused))
+  // After the change only cleanup may happen: locks held before it are released and staged candidates removed.
+  // Nothing is added or rewritten.
+  const prior = new Map(before.map((row) => [row[0], JSON.stringify(row)]))
+  const heldBefore = new Set(before.map(([file]) => file).filter((file) => /\.owners\/\d+\.json$|engine-lock\/\d+\.json$/.test(file)))
+  const added = workspaceInventory(ari).filter((row) => prior.get(row[0]) !== JSON.stringify(row)
+    && !(row[0].endsWith('.released') && heldBefore.has(row[0].replace(/\.released$/, '.json'))))
+  assert.deepEqual(added, [], 'no object, receipt, journal entry or current pointer was written after the change')
+  const removed = before.filter(([file]) => !workspaceInventory(ari).some(([other]) => other === file))
+  assert.ok(removed.every(([file]) => file.startsWith('staging/') || heldBefore.has(file)), JSON.stringify(removed))
+})
 
 test('nothing is published until a generation is confirmed; then the confirmed generation is, composed off the event loop', async (t) => {
   const ari = makePerson(t)
@@ -244,10 +560,11 @@ test('a history cut short does not publish a restore nobody confirmed; mutation 
   assert.match(annotation(), /Revised\./, 'the vault keeps the last confirmed content')
   const again = await engine.tick()
   assert.deepEqual([again.state, again.refusal?.code], ['refused', 'selection-history-shortened'], 'and at every tick while it is shorter')
-  // What a view held for this reason is told: both ways out, and that starting the service again accepts the history as it stands.
+  // What a held view is told: restore the removed records or make a fresh confirmation; a restart keeps the refusal.
   const next = nextStep('stale-readable', 'selection-history-shortened')
   assert.match(next, /Put the removed records back/)
-  assert.match(next, /a service started again .* reads the history as it is and follows the selection it then ends with, publishing it if its generation still holds/)
+  assert.match(next, /fresh confirmation accepts the shorter history/)
+  assert.match(next, /Restarting the service preserves this refusal/)
   // The record back in its place: composition decides again, and the restore still waits for its confirmation.
   fs.writeFileSync(ari.record(2), second)
   const back = await engine.tick()
@@ -271,8 +588,8 @@ test('the loaders refuse a history shorter than this process read it, whatever i
   assert.equal(personalSelectionOf(ari.load({ rules: { ...SELECTION_PRIMITIVES, refusesShortened: false } })).sequence, 1, 'the oracle can fail')
   // One confirmation after the cut: a record in the second place, and the history is still shorter than it was read.
   ari.select()
-  assert.throws(() => ari.load(), refusedWith('selection-history-shortened'))
-  // A second one: as long again, and read as the confirmation it is.
+  assert.equal(personalSelectionOf(ari.load()).sequence, 2, 'one fresh confirmation accepts a shorter history')
+  // A second one appends normally while the historical maximum remains three.
   ari.select()
   assert.equal(personalSelectionOf(ari.load()).sequence, 3)
   // The whole history removed says that it was cut, not that nothing was ever confirmed.
@@ -561,18 +878,21 @@ test('a confirmation that stops a view in the middle of a tick is read while it 
   assert.ok(after.state === 'refused' ? after.refusal?.code === 'selection-history-shortened' : everyView(after, 'stale', 'selection-history-shortened'), JSON.stringify(after))
 })
 
-test('the record number is kept in the process only: a process started after the cut reads the history as it then stands', (t) => {
+test('the private checkpoint preserves a shortened-history refusal across a process start and one fresh confirmation accepts it', (t) => {
   const ari = makePerson(t)
   ari.select()
   ari.select()
   assert.equal(personalSelectionOf(ari.load()).sequence, 2)
   fs.rmSync(ari.record(2))
   assert.throws(() => ari.load(), refusedWith('selection-history-shortened'))
-  // What a service started again, and a command run once, do: the documented limit of a number kept in memory.
+  // A fresh process reads the machine-private checkpoint before loading any generation.
   const module = new URL('../src/runtime/obsidian/personal-selection.mjs', import.meta.url).href
   const body = `const { loadSelectedProject, personalSelectionOf } = await import(${JSON.stringify(module)}); try { console.log(personalSelectionOf(loadSelectedProject({ personalHome: ${JSON.stringify(ari.home)} })).sequence) } catch (error) { console.log(error.code) }`
   const started = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', body], { encoding: 'utf8', timeout: 120_000, env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME } })
-  assert.equal(started.stdout.trim(), '1', started.stderr)
+  assert.equal(started.stdout.trim(), 'selection-history-shortened', started.stderr)
+  ari.select()
+  const confirmed = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', body], { encoding: 'utf8', timeout: 120_000, env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME } })
+  assert.equal(confirmed.stdout.trim(), '2', confirmed.stderr)
 })
 
 test('a confirmation during a tick refuses the view being published as mixed-read, and the next tick publishes under the new record', async (t) => {
@@ -789,6 +1109,95 @@ test('each refusal is typed and publishes nothing: status names it, a new engine
   assert.equal(again.exit, EXIT.ok, JSON.stringify(again.json))
 })
 
+test('uninstall and unit removal need no confirmed generation, keep the personal pointer bytes and remember only the login-item decision', async (t) => {
+  const ari = makePerson(t)
+  const pointer = localPointerPath(ari.locate())
+  const beforePointer = fs.readFileSync(pointer)
+  const authored = ['atelier.personal.json', 'atelier.overlay.json'].map((name) => [name, fs.readFileSync(path.join(ari.home, name))])
+  const workspace = { workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId }
+  const beforeMachine = readMachineSettings(workspace)
+  const uninstalled = await ari.command(['uninstall'])
+  assert.equal(uninstalled.exit, EXIT.ok, JSON.stringify(uninstalled.json))
+  assert.equal(uninstalled.json.kept.pointer, pointer)
+  assert.equal(uninstalled.json.kept.privateState, ari.workspaceRoot())
+  assert.equal(uninstalled.json.kept.projectFile, null)
+  assert.equal(uninstalled.json.rememberedNow.loginItem, 'off')
+  const calls = []
+  const manager = {
+    kind: 'launchd-user-agent', platform: 'darwin',
+    readUnit: () => { throw new Error('no unit read is needed') },
+    install: () => { throw new Error('no unit is installed') },
+    start: () => { throw new Error('no manager starts a service') },
+    inspect: () => { throw new Error('no unit is inspected') },
+    remove: async (input) => { calls.push(input); return { ok: true, removed: true } },
+    fileFor: (name) => path.join(ari.base, 'synthetic-units', name),
+  }
+  const removed = await ari.command(['service', 'unit', '--remove'], { platform: 'darwin', seams: { serviceManager: manager } })
+  assert.equal(removed.exit, EXIT.ok, JSON.stringify(removed.json))
+  assert.equal(removed.json.loginItem.removed, true)
+  assert.deepEqual([removed.json.service.started, removed.json.service.reason], [false, 'seams-required'])
+  assert.equal(calls.length, 1)
+  assert.deepEqual(fs.readFileSync(pointer), beforePointer)
+  for (const [name, bytes] of authored) assert.deepEqual(fs.readFileSync(path.join(ari.home, name)), bytes)
+  assert.equal(fs.existsSync(path.join(ari.home, 'selections')), false)
+  const afterMachine = readMachineSettings(workspace)
+  assert.deepEqual(afterMachine.audienceAllow, beforeMachine.audienceAllow)
+  assert.deepEqual(afterMachine.decisions.audience, beforeMachine.decisions.audience)
+  assert.equal(afterMachine.decisions.loginItem.choice, 'off')
+})
+
+test('a missing personal home at service start is not recreated and starts no loader or listener', async (t) => {
+  const ari = makePerson(t)
+  fs.renameSync(ari.home, `${ari.home}-moved`)
+  let loads = 0
+  await assert.rejects(runMaintenanceService({
+    loadProject: () => { loads++; throw new Error('the engine must not load here') },
+    locateProject: ari.locate,
+    dataRoot: ari.dataRoot,
+    env: process.env,
+    entryPath: path.join(ari.base, 'synthetic-entry.mjs'),
+    adapterFactory: absentAdapter,
+  }), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'service-workspace-not-prepared')
+  assert.equal(loads, 0)
+  assert.equal(fs.existsSync(ari.home), false)
+  fs.renameSync(`${ari.home}-moved`, ari.home)
+})
+
+test('a valid same-sequence record with changed bytes refuses the observed selection without calling it corrupt', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const project = ari.load()
+  const before = readPersonalSelectionHead({ personalHome: ari.home })
+  const file = ari.record(1)
+  const bytes = fs.readFileSync(file)
+  const changed = { ...JSON.parse(bytes), generationId: 'f'.repeat(64) }
+  const canonical = `${JSON.stringify(Object.fromEntries(Object.entries(changed).sort(([a], [b]) => a.localeCompare(b))))}\n`
+  fs.writeFileSync(file, canonical)
+  const after = readPersonalSelectionHead({ personalHome: ari.home })
+  assert.equal(after.sequence, before.sequence)
+  assert.notEqual(after.head, before.head, 'the record remains a valid chain with a different digest')
+  assert.equal(notePersonalSelectionNow(project), undefined, 'the guard notes the read without raising its refusal')
+  assert.deepEqual(await validatePersonalWorkspace(project), { ok: false, code: 'selection-history-shortened' })
+  const command = await ari.command(['status'])
+  assert.deepEqual([command.exit, command.json.error?.code], [EXIT.refused, 'selection-history-shortened'])
+  fs.writeFileSync(file, bytes)
+  assert.equal(personalSelectionOf(ari.load()).head, before.head)
+})
+
+test('a command naming a personal home through a link refuses before private state is written', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const link = path.join(ari.base, 'linked-home')
+  fs.symlinkSync(ari.home, link, 'dir')
+  const pointer = localPointerPath(ari.locate())
+  const before = fs.readFileSync(pointer)
+  for (const operation of [['status'], ['uninstall'], ['service', 'status']]) {
+    const result = await ari.command([], { argv: [...operation, `--personal-home=${link}`, '--json'] })
+    assert.deepEqual([result.exit, result.json.error?.code], [EXIT.refused, 'root-symlinked'], JSON.stringify(result.json))
+  }
+  assert.deepEqual(fs.readFileSync(pointer), before)
+})
+
 test('started by a login item on a personal home with nothing confirmed, the service finds its workspace from the home alone and records there how its start ended', (t) => {
   const ari = makePerson(t)
   const entry = fileURLToPath(new URL('./support/obsidian-maintenance/service-entry.mjs', import.meta.url))
@@ -797,6 +1206,25 @@ test('started by a login item on a personal home with nothing confirmed, the ser
   assert.equal(child.status, 0, `${child.stdout}${child.stderr}`)
   const startup = readLastStartup({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId })
   assert.deepEqual([startup?.outcome, startup?.code], ['refused', 'service-settings-absent'])
+})
+
+test('started by a login item on a personal home whose manifest now encloses its existing state root, the service writes no log or startup record there', (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const entry = fileURLToPath(new URL('./support/obsidian-maintenance/service-entry.mjs', import.meta.url))
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  // A first start makes the workspace and records how it ended, as before.
+  const first = childProcess.spawnSync(process.execPath, [entry, `--personal-home=${ari.home}`, `--data-root=${ari.dataRoot}`, '--startup'], { env, encoding: 'utf8', timeout: 120_000 })
+  assert.equal(first.status, 0, `${first.stdout}${first.stderr}`)
+  assert.ok(readLastStartup({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId }) !== null)
+  const before = workspaceInventory(ari)
+  enclose(ari)
+  // The login item names the workspace by its data root and identity: those recorded coordinates are not used.
+  const child = childProcess.spawnSync(process.execPath, [entry, `--personal-home=${ari.home}`, `--data-root=${ari.dataRoot}`, `--workspace-id=${ari.workspaceId}`, '--startup'], { env, encoding: 'utf8', timeout: 120_000 })
+  assert.equal(child.status, 0, `${child.stdout}${child.stderr}`)
+  assert.deepEqual(workspaceInventory(ari), before, 'no log line and no startup record were written under the enclosed root')
+  const printed = child.stdout.split('\n').filter((line) => line.startsWith('{')).map((line) => JSON.parse(line))
+  assert.ok(printed.some((line) => line.event === 'refused' && /^managed-root-|^repository-inside-managed-root$/.test(line.code)), `the refusal is printed into the unit's output: ${child.stdout}`)
 })
 
 for (const [kind, expected] of [['thenable', { status: 0, code: 'service-loader-not-synchronous', thenCalls: 1 }], ['throws-undefined', { status: 1, code: 'untyped-error', thenCalls: 0 }]]) {

@@ -78,6 +78,23 @@ test('selection records an explicit, confirmed choice of the eligible generation
   assert.equal(f.select(g1).sequence, 2)
 })
 
+test('a fresh confirmation of identical input has a distinct identity; historical v1 records without one remain readable', (t) => {
+  const f = fixture(t)
+  const generationId = f.materialize()
+  const first = f.select(generationId)
+  const file = path.join(f.personalHome, 'selections', '000001.json')
+  const bytes = fs.readFileSync(file)
+  fs.unlinkSync(file)
+  const confirmedAgain = f.select(generationId)
+  assert.notEqual(first.head, confirmedAgain.head, 'a new act is distinct even at the same number and predecessor')
+  const old = JSON.parse(bytes)
+  delete old.confirmationId
+  fs.writeFileSync(file, `${JSON.stringify(Object.fromEntries(Object.keys(old).sort().map((key) => [key, old[key]])))}\n`)
+  const historical = readPersonalSelectionHead({ personalHome: f.personalHome })
+  assert.deepEqual([historical.sequence, historical.selected], [1, generationId])
+  assert.equal(f.select(generationId).sequence, 2, 'new records append to a historical chain')
+})
+
 test('a generation whose inputs changed is not selectable, and a held selection reports it ineligible', (t) => {
   const f = fixture(t)
   const g1 = f.materialize()
@@ -292,8 +309,12 @@ test('two completed restores in sequence each keep what they replaced, each sele
   // The selection history: one record per confirmed choice, each naming its own generation, the second linked to the
   // first, and the first exactly as it was written.
   assert.deepEqual(selectionRecord(1), firstSelection)
-  assert.deepEqual(JSON.parse(firstSelection), { schema: 'atelier-personal-workspace-selection@v1', sequence: 1, previous: 'genesis', generationId: g1 })
-  assert.deepEqual(JSON.parse(selectionRecord(2)), { schema: 'atelier-personal-workspace-selection@v1', sequence: 2, previous: sha(firstSelection), generationId: g2 })
+  const firstSelectionRecord = JSON.parse(firstSelection)
+  const secondSelectionRecord = JSON.parse(selectionRecord(2))
+  assert.match(firstSelectionRecord.confirmationId, /^[0-9a-f-]{36}$/)
+  assert.notEqual(firstSelectionRecord.confirmationId, secondSelectionRecord.confirmationId)
+  assert.deepEqual(firstSelectionRecord, { confirmationId: firstSelectionRecord.confirmationId, schema: 'atelier-personal-workspace-selection@v1', sequence: 1, previous: 'genesis', generationId: g1 })
+  assert.deepEqual(secondSelectionRecord, { confirmationId: secondSelectionRecord.confirmationId, schema: 'atelier-personal-workspace-selection@v1', sequence: 2, previous: sha(firstSelection), generationId: g2 })
   assert.deepEqual([sha(firstSelection), sha(selectionRecord(2))], [chosenFirst.head, chosenSecond.head])
 
   // Two restore records, told apart by the generation each restored (their names do not order them). Each keeps the

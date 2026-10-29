@@ -1,5 +1,6 @@
 import { createCooperativeBudget, prepareViewCooperatively } from '../../projection/obsidian/materialize/prepare-view.mjs'
 import { createHash } from 'node:crypto'
+import fs from 'node:fs'
 import path from 'node:path'
 import { buildCanonicalGraph, buildCanonicalGraphSteps, createGraphFileCache } from '../../graph/graph.mjs'
 import { markdownMetadata } from '../../graph/knowledge-graph.mjs'
@@ -130,8 +131,14 @@ export function profileFor({ project, workspaceId, audienceAllow }) {
 // on this thread.
 export function buildGraph({ project, eligibility, cache = null, index = null, deferPersonalValidation = false }) {
   const observedDigest = observedDigestOf(cache, index)
-  const canonical = personalWorkspaceGraph(project, { fileCache: cache, observedDigest, defer: deferPersonalValidation }) ?? buildCanonicalGraph(project, { fileCache: cache, observedDigest })
-  return eligibleGraph(canonical, eligibility)
+  let canonical = personalWorkspaceGraph(project, { fileCache: cache, observedDigest, defer: deferPersonalValidation })
+  if (canonical === null) {
+    try { canonical = buildCanonicalGraph(project, { fileCache: cache, observedDigest }) } catch (error) {
+      refuseObservedDirectory(error, { project, index })
+      throw error
+    }
+  }
+  return eligibleGraph(canonical, eligibility, { project, index })
 }
 
 // The same graph, built with the event loop given a turn between the Markdown sources of the census, under the
@@ -143,7 +150,7 @@ export async function buildGraphCooperatively({ project, eligibility, cache = nu
   const observedDigest = observedDigestOf(cache, index)
   // The personal route answers for a bound project, and refuses a project that carries the reserved key unbound.
   const personal = personalWorkspaceGraph(project, { fileCache: cache, observedDigest, defer: deferPersonalValidation })
-  if (personal !== null) return eligibleGraph(personal, eligibility)
+  if (personal !== null) return eligibleGraph(personal, eligibility, { project, index })
   const budget = createCooperativeBudget(scheduling)
   budget.check()
   const steps = buildCanonicalGraphSteps(project, { fileCache: cache, observedDigest })
@@ -156,16 +163,66 @@ export async function buildGraphCooperatively({ project, eligibility, cache = nu
     }
   } catch (error) {
     steps.return?.()
+    refuseObservedDirectory(error, { project, index })
     throw error
   }
   budget.finish('graph-assembled')
-  return eligibleGraph(canonical, eligibility)
+  return eligibleGraph(canonical, eligibility, { project, index })
 }
 
 const observedDigestOf = (cache, index) => (cache && index ? (repoId, relative) => index.get(sourceKey(repoId, relative))?.digest ?? null : null)
 
-function eligibleGraph(canonical, eligibility) {
-  if (!canonical.ok) refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
+// Only a digest from this tick's observation establishes that the path was a readable source before the build.
+// These exceptional checks never enrol a path or admit an invalid graph; without prior observation its error stays.
+function* observedSources({ project, index }, changeClass = null) {
+  if (!(index instanceof Map)) return
+  for (const repo of project?.repos ?? []) {
+    if (repo?.external || typeof repo?.path !== 'string' || typeof repo?.name !== 'string') continue
+    const root = path.resolve(repo.path)
+    const prefix = sourceKey(repo.name, '')
+    for (const [key, entry] of index) {
+      if (typeof key !== 'string' || !key.startsWith(prefix) || typeof entry?.digest !== 'string' || (changeClass !== null && entry.changeClass !== changeClass)) continue
+      const relative = key.slice(prefix.length)
+      const file = path.resolve(root, ...relative.split('/'))
+      const inside = path.relative(root, file)
+      if (inside === '' || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) continue
+      yield file
+    }
+  }
+}
+
+function directoryNow(file) {
+  try { return fs.lstatSync(file).isDirectory() } catch { return false }
+}
+
+function refuseObservedDirectory(error, observed) {
+  if (error?.code !== 'EISDIR') return
+  // readFileSync's EISDIR need not name a path. In that case an observed file that is now a directory still proves
+  // this build spans two source states; the next full observation decides what the directory now contributes.
+  const named = typeof error.path === 'string' ? path.resolve(error.path) : null
+  for (const file of observedSources(observed)) {
+    if ((named === null || named === file) && directoryNow(file)) refuse('mixed-read', 'an observed source became a directory while the canonical graph was being built', { cause: 'EISDIR' })
+  }
+}
+
+function eligibleGraph(canonical, eligibility, observed) {
+  if (!canonical.ok) {
+    // The graph records a sidecar read failure as invalid metadata. A sidecar this tick already read and that is
+    // gone now is instead a mixed read, as a source removed during the census is. A never-observed sidecar stays invalid.
+    const roots = new Map((observed.project?.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => [repo.name, repo.path]))
+    const sidecars = new Set((canonical.nodes ?? []).flatMap((node) => typeof node.sidecar === 'string' && roots.has(node.repo)
+      ? [path.resolve(roots.get(node.repo), ...node.sidecar.split('/'))] : []))
+    for (const file of observedSources(observed, 'sidecar')) {
+      if (!sidecars.has(file)) continue
+      let stat
+      try { stat = fs.lstatSync(file) } catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') refuse('mixed-read', 'an observed sidecar was removed while the canonical graph was being built', { cause: error.code })
+        continue
+      }
+      if (stat.isDirectory()) refuse('mixed-read', 'an observed sidecar became a directory while the canonical graph was being built', { cause: 'EISDIR' })
+    }
+    refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
+  }
   return withEligibility(canonical, eligibility.isEligible, assetEligibilityFor({ graph: canonical, eligibility }))
 }
 
@@ -190,11 +247,13 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
     return path.join(root, ...relative.split('/'))
   }
   const byRepo = new Map([...roots.keys()].map((repoId) => [repoId, new Map()]))
+  const observedReads = new Set()
   // Every node, and every asset a view may copy. A withheld asset is never pinned: it is in no snapshot document.
   const pinned = [...graph.nodes, ...(Array.isArray(graph.assets) ? graph.assets.filter((asset) => asset.eligible === true) : [])]
   for (const item of pinned) {
     if (!byRepo.has(item.repo)) refuse('source-not-in-snapshot', 'the graph names a repository the project does not enrol')
     const observed = index.get(sourceKey(item.repo, item.path))
+    if (typeof observed?.digest === 'string') observedReads.add(sourceKey(item.repo, item.path))
     const facts = observed?.digest ? observed : readFileFacts(absolute(item.repo, item.path))
     if (!facts) refuse('mixed-read', 'a file the graph read is no longer there')
     byRepo.get(item.repo).set(item.path, { path: item.path, rawDigest: facts.digest, byteLength: facts.byteLength })
@@ -217,7 +276,16 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
       repositories,
     },
     graph,
-    readSource: (repoId, relative) => readFileBytes(absolute(repoId, relative)),
+    readSource: (repoId, relative) => {
+      const file = absolute(repoId, relative)
+      try { return readFileBytes(file) } catch (error) {
+        if (observedReads.has(sourceKey(repoId, relative))) {
+          if (error?.code === 'ELEAFCHANGED') refuse('mixed-read', 'a selected source was replaced while its view was being prepared or published', { cause: error.code })
+          if ((error?.code === 'EISDIR' || error?.message === 'state leaf is not a regular file') && directoryNow(file)) refuse('mixed-read', 'a selected source became a directory while its view was being prepared or published', { cause: 'EISDIR' })
+        }
+        throw error
+      }
+    },
   }
 }
 

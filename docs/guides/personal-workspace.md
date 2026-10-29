@@ -117,7 +117,9 @@ remove only their own temporary files. Every failure is a
   that `readPersonalSelection` returns, so a choice shown against an older history
   does not apply. Selections are append-only, numbered, hash-chained records under
   `selections/`, each written completely before it is published, so a crash leaves
-  only a temporary file. Concurrent selections refuse `selection-concurrent`. An
+  only a temporary file. New records include a unique confirmation identity: confirming the
+  same generation against the same predecessor again produces a distinct record. Existing
+  v1 records without this identity remain readable. Concurrent selections refuse `selection-concurrent`. An
   ineligible generation refuses with its composition code, such as
   `stale-generation`.
 - `readPersonalSelection({ personalHome })` returns the current selection and
@@ -128,9 +130,10 @@ remove only their own temporary files. Every failure is a
   rewriting, any trailing run of records (up to the whole history) yields another
   valid chain; it changes the returned `head`, so a host that needs to detect it
   keeps the head it last observed and compares it. The Obsidian maintenance
-  service keeps the highest record number it has read a history ending at, for
-  as long as it runs and no longer, and refuses a history that ends earlier
-  (see [obsidian.md](obsidian.md)).
+  service persists the highest observed record number, accepted head and observed
+  record identities in its machine-private continuity state. A restart keeps that
+  evidence. A shorter history refuses until the removed records return or the person
+  makes one fresh confirmation (see [obsidian.md](obsidian.md)).
 - `readPersonalSelectionHead({ personalHome })` returns `{ selected, sequence,
   head }` from the history alone, with `sequence` 0 while nothing is selected.
   It composes nothing, so it does not say whether the selection is still

@@ -18,6 +18,7 @@ import {
 } from '../src/knowledge-health/index.mjs'
 import { ruleIdentity } from '../src/knowledge-health/rule-identity.mjs'
 import { rehearseInstalledWorkshop } from '../src/knowledge/participatory/installed-workshop.mjs'
+import { initializeKnowledgeHealthWorkshop } from '../src/knowledge-health/workshop.mjs'
 
 const fixtures = fileURLToPath(new URL('../fixtures/knowledge-health/', import.meta.url))
 const expected = JSON.parse(fs.readFileSync(path.join(fixtures, 'expected-summary.json'), 'utf8'))
@@ -327,6 +328,100 @@ test('context, suggestions and repository evidence stay projections bound to the
     { name: 'TypeError', message: /At most 20 supplied suggestions/ })
 })
 
+
+test('workshop initialization copies the public fixture into a new destination without changing its bytes', t => {
+  const parent = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-workshop-init-'))
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }))
+  const destination = path.join(parent, 'workshop')
+  assert.equal(initializeKnowledgeHealthWorkshop(destination), destination)
+  const fixture = path.join(fixtures, 'workshop')
+  const verify = (relative = '') => {
+    const entries = fs.readdirSync(path.join(fixture, relative), { withFileTypes: true })
+    for (const entry of entries) {
+      const child = path.join(relative, entry.name)
+      if (entry.isDirectory()) verify(child)
+      else assert.deepEqual(fs.readFileSync(path.join(destination, child)), fs.readFileSync(path.join(fixture, child)), child)
+    }
+    if (relative !== '') assert.deepEqual(fs.readdirSync(path.join(destination, relative)).sort(), entries.map(entry => entry.name).sort(), relative)
+  }
+  verify()
+  assert.deepEqual(fs.readdirSync(destination).sort(), [...fs.readdirSync(fixture), '.git', '.gitignore'].sort())
+  assert.equal(fs.readFileSync(path.join(destination, '.gitignore'), 'utf8'), '.atelier-local/\noutput/\n')
+})
+
+test('workshop initialization refuses existing empty, nonempty and file destinations without mutation', t => {
+  const parent = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-workshop-existing-'))
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }))
+  for (const kind of ['empty', 'nonempty', 'file']) {
+    const destination = path.join(parent, kind)
+    if (kind === 'file') fs.writeFileSync(destination, 'Invented existing file.\n')
+    else {
+      fs.mkdirSync(destination)
+      if (kind === 'nonempty') fs.writeFileSync(path.join(destination, 'kept.md'), '# Invented existing note\n')
+    }
+    assert.throws(() => initializeKnowledgeHealthWorkshop(destination), error => error.code === 'EEXIST', kind)
+    if (kind === 'file') assert.equal(fs.readFileSync(destination, 'utf8'), 'Invented existing file.\n')
+    else {
+      assert.deepEqual(fs.readdirSync(destination), kind === 'empty' ? [] : ['kept.md'])
+      if (kind === 'nonempty') assert.equal(fs.readFileSync(path.join(destination, 'kept.md'), 'utf8'), '# Invented existing note\n')
+    }
+  }
+})
+
+function arrival(t, label) {
+  const parent = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `atelier-workshop-${label}-`))
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }))
+  return path.join(parent, 'workshop')
+}
+
+// Runs one initialization while a concurrent writer acts just before the named copy step reaches its target.
+function initializeDuring(destination, { call, target, act }) {
+  const original = fs[call]
+  let introduced = false
+  fs[call] = (...args) => {
+    if (args[call === 'mkdirSync' ? 0 : 1] === target && !introduced) { introduced = true; act() }
+    return original(...args)
+  }
+  try { return { error: (() => { try { initializeKnowledgeHealthWorkshop(destination) } catch (error) { return error } })(), introduced } } finally { fs[call] = original }
+}
+
+test('workshop initialization refuses a child file created after exclusive root creation and keeps its bytes', t => {
+  const destination = arrival(t, 'file-conflict')
+  const conflict = path.join(destination, 'README.md')
+  const kept = '# Invented concurrent note\n'
+  const { error, introduced } = initializeDuring(destination, { call: 'copyFileSync', target: conflict, act: () => fs.writeFileSync(conflict, kept, { flag: 'wx' }) })
+  assert.equal(introduced, true)
+  assert.equal(error?.code, 'EEXIST')
+  assert.equal(fs.readFileSync(conflict, 'utf8'), kept, 'the failed copy neither overwrites nor removes an unknown child')
+  assert.equal(fs.existsSync(path.join(destination, '.git')), false, 'Git initialization is not reached after a copy failure')
+})
+
+for (const kind of ['empty', 'nonempty']) {
+  test(`workshop initialization refuses an ${kind} directory that arrives before its copy and keeps its contents`, t => {
+    const destination = arrival(t, `dir-${kind}`)
+    const records = path.join(destination, 'records')
+    const { error, introduced } = initializeDuring(destination, { call: 'mkdirSync', target: records, act: () => {
+      fs.mkdirSync(records)
+      if (kind === 'nonempty') fs.writeFileSync(path.join(records, 'unknown.md'), '# Invented concurrent record\n')
+    } })
+    assert.equal(introduced, true)
+    assert.equal(error?.code, 'EEXIST')
+    assert.deepEqual(fs.readdirSync(records), kind === 'empty' ? [] : ['unknown.md'], 'nothing is merged into the arriving directory')
+    assert.equal(fs.existsSync(path.join(destination, '.git')), false)
+  })
+}
+
+test('workshop initialization refuses an unknown entry created inside a directory it just made', t => {
+  const destination = arrival(t, 'dir-inner')
+  const records = path.join(destination, 'records')
+  const fixtureRecords = fs.readdirSync(path.join(fixtures, 'workshop', 'records')).sort()
+  const first = path.join(records, fixtureRecords[0])
+  const { error, introduced } = initializeDuring(destination, { call: 'copyFileSync', target: first, act: () => fs.writeFileSync(path.join(records, 'zz-unknown.md'), '# Invented\n', { flag: 'wx' }) })
+  assert.equal(introduced, true)
+  assert.equal(error?.code, 'EEXIST')
+  assert.equal(fs.readFileSync(path.join(records, 'zz-unknown.md'), 'utf8'), '# Invented\n')
+  assert.equal(fs.existsSync(path.join(destination, '.git')), false)
+})
 
 test('installed workshop revision preserves containment under a linked ancestor', async t => {
   const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-knowledge-health-linked-'))

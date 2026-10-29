@@ -480,7 +480,7 @@ export function gitOutputResult(repoRoot, args, {
   if (result?.error?.code === 'ENOBUFS') {
     return { ok: false, code: 'git-output-limit-exceeded', error: `Git ${args[0] ?? 'command'} exceeded the ${maxBuffer}-byte evidence limit`, stdout: null }
   }
-  if (result?.status !== 0) {
+  if (result?.error || result?.status !== 0) {
     return { ok: false, code: 'git-command-failed', error: `Git ${args[0] ?? 'command'} failed with status ${result?.status ?? 'unknown'}`, stdout: null }
   }
   const stdout = result.stdout ?? (encoding === 'buffer' ? Buffer.alloc(0) : '')
@@ -505,7 +505,7 @@ export function pushRangeBase(repoRoot, remoteSha, { runner = spawnSync } = {}) 
   return result.ok ? remoteSha : emptyTreeFor(repoRoot, { runner })
 }
 
-export const canonicalDiffArgs = (revisions, extra = []) => ['diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
+export const canonicalDiffArgs = (revisions, extra = []) => ['-c', 'core.quotePath=true', 'diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
 // The content scan judges added lines only, so a deleted file's removed lines
 // would just spend the output limit. The semantic review reads removed lines
 // and keeps the plain form above.
@@ -846,6 +846,7 @@ export function scanPushUpdate({
   gitRunner = spawnSync,
   maxCommits = PUSH_COMMIT_SCAN_MAX,
   maxBytes = CHECK_AGGREGATE_MAX_BYTES,
+  aggregateLimitBytes = maxBytes,
 } = {}) {
   const base = pushRangeBase(repoRoot, update.remoteSha, { runner: gitRunner })
   const net = scanRevisionRange({ repoRoot, base, tip: update.localSha, rules, exceptions, repo, gitRunner })
@@ -910,8 +911,8 @@ export function scanPushUpdate({
     if (bytes > maxBytes) {
       diagnostics.push(incompleteDiagnostic({
         repo,
-        message: `push evidence exceeds the ${maxBytes}-byte aggregate limit; push it in smaller parts`,
-        details: { reason: 'push-evidence-too-large', limitBytes: maxBytes, commit },
+        message: `push evidence exceeds the ${aggregateLimitBytes}-byte aggregate limit; push it in smaller parts`,
+        details: { reason: 'push-evidence-too-large', limitBytes: aggregateLimitBytes, commit },
       }))
       break
     }

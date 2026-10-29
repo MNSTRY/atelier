@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { firstString, parseArgs, resolveProjectConfig } from '../../project/config.mjs'
 import { workspaceStateRoot } from './machine-settings.mjs'
 import { loadSelectedProjectOffThread, locatePersonalHome } from './personal-selection.mjs'
-import { RELEASE_CHANGED, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
+import { RELEASE_CHANGED, isLocationRefusalCode, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
 
 // The process of the maintenance service. `start` runs it as a child; a unit
 // installed at the operating-system level runs it with `--startup`.
@@ -108,6 +108,7 @@ function firstAnswerOf(loadProject) {
   return {
     // The project, when the loader answered one at once; null when it threw or answered a promise.
     project: () => (first.threw || first.promised ? null : first.project),
+    threw: () => first.threw === true,
     loadProject() {
       if (taken) return loadProject()
       taken = true
@@ -120,12 +121,15 @@ function firstAnswerOf(loadProject) {
 // The workspace of a service a login item started, when it can be found: where it keeps its log and records how its
 // start ended. When the project no longer leads to one (it moved, its pointer is gone, its loader answered no project
 // at once), the workspace the unit names by its data root and identity, if that exists; it is never created here. Null
-// otherwise; a refusal is then printed only, into the unit's own output file.
-function startupWorkspace({ project, dataRoot, workspaceId, env = process.env, platform = process.platform }) {
+// otherwise, and null when locating the workspace refused or a personal home's locator refused: the recorded
+// coordinates are not proven outside the roots declared now. A refusal is then printed only, into the unit's own
+// output file.
+function startupWorkspace({ project, located = false, locatorRefused = false, dataRoot, workspaceId, env = process.env, platform = process.platform }) {
+  if (located && locatorRefused) return null
   try {
     const workspace = project === null ? null : resolveServiceWorkspace({ project, dataRoot, env, platform })
     if (workspace?.workspaceRoot) return workspace
-  } catch { /* the workspace the unit names, below */ }
+  } catch { return null }
   if (typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot) || typeof workspaceId !== 'string') return null
   try {
     const root = workspaceStateRoot(path.resolve(dataRoot), workspaceId)
@@ -162,7 +166,7 @@ export async function runServiceProcess(options) {
   const located = typeof options.locateProject === 'function'
   const asked = located ? options.locateProject : options.loadProject
   const first = startup && typeof asked === 'function' ? firstAnswerOf(asked) : null
-  const workspace = startup ? startupWorkspace({ ...options, project: first === null ? null : first.project() }) : null
+  const workspace = startup ? startupWorkspace({ ...options, located, locatorRefused: first?.threw() === true, project: first === null ? null : first.project() }) : null
   const log = workspace === null ? printed : workspaceLog(workspace.workspaceRoot)
   try {
     const service = await runMaintenanceService({ log, invokedAs: process.argv[1], ...options, ...(first === null ? {} : { [located ? 'locateProject' : 'loadProject']: first.loadProject }) })
@@ -175,8 +179,10 @@ export async function runServiceProcess(options) {
     const at = new Date().toISOString()
     // What was thrown is read without trusting it: a value with no prototype, or a getter that throws, is still logged.
     const code = readOr(() => (typeof error?.code === 'string' ? error.code : null), null)
-    log({ at, event: 'refused', code: code ?? 'untyped-error', message: readOr(() => String(error?.message ?? error), 'unprintable') })
-    if (startup && code !== null) { recordStartup(workspace, { at, outcome: 'refused', code }); process.exitCode = 0; return }
+    // A location refusal is printed only: nothing more is written under that private-state root.
+    const location = isLocationRefusalCode(code)
+    ;(location ? printed : log)({ at, event: 'refused', code: code ?? 'untyped-error', message: readOr(() => String(error?.message ?? error), 'unprintable') })
+    if (startup && code !== null) { if (!location) recordStartup(workspace, { at, outcome: 'refused', code }); process.exitCode = 0; return }
     process.exitCode = code !== null ? EXIT_REFUSED : 1
   }
 }
@@ -200,7 +206,7 @@ export function serviceOptionsFromArgv(argv, { env = process.env } = {}) {
   const intervalMs = args['interval-ms'] === undefined ? undefined : Number(args['interval-ms'])
   if (intervalMs !== undefined && (!Number.isInteger(intervalMs) || intervalMs < 1)) throw Object.assign(new Error('--interval-ms must be a positive integer'), { code: 'service-arguments-invalid' })
   return {
-    loadProject: personalHome !== null ? () => loadSelectedProjectOffThread({ personalHome }) : () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: path.dirname(configPath), env, writeLocalState: false }),
+    loadProject: personalHome !== null ? () => loadSelectedProjectOffThread({ personalHome, dataRoot, env }) : () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: path.dirname(configPath), env, writeLocalState: false }),
     ...(personalHome === null ? {} : { locateProject: () => locatePersonalHome({ personalHome }) }),
     ...(dataRoot === undefined ? {} : { dataRoot }), ...(workspaceId === undefined ? {} : { workspaceId }), ...(intervalMs === undefined ? {} : { intervalMs }),
     ...(firstString(args['runtime-id']) ? { runtimeId: firstString(args['runtime-id']) } : {}),

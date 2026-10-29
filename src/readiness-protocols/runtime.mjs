@@ -1,6 +1,8 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import formats from 'ajv-formats'
+import { canonicalize } from '../attestation/jcs.mjs'
 import { createProposalStore } from '../collaboration/proposals.mjs'
 import { readJson, writeJson } from '../project/config.mjs'
 import { bundledReadinessPack, bundledReadinessProtocols, protocolById } from './bundled-pack.mjs'
@@ -126,7 +128,40 @@ export function claimsForProtocolRun({ protocol, answers, projectName, runId, cr
   })
 }
 
+// createdAt is the existing run contract's date-time, rather than a filename or filesystem timestamp. Use the same
+// full-format validator as the schema and refuse values the host cannot place on a timeline (including leap seconds).
+const validCreatedAt = formats.get('date-time').validate
+function runInstant(createdAt) {
+  if (typeof createdAt !== 'string' || !validCreatedAt(createdAt)) throw new Error('invalid-readiness-run-created-at')
+  // Compare the whole second separately so fractions finer than a millisecond do not collapse into a false tie.
+  const fraction = /\.(\d+)/.exec(createdAt)?.[1] ?? ''
+  const wholeSecond = Date.parse(createdAt.replace(/\.\d+/, ''))
+  if (!Number.isFinite(wholeSecond)) throw new Error('invalid-readiness-run-created-at')
+  return { wholeSecond, fraction }
+}
+const compareText = (left, right) => left < right ? -1 : left > right ? 1 : 0
+function orderedProtocolRuns(runs) {
+  const seen = new Map()
+  return runs.map((run) => {
+    const instant = runInstant(run?.createdAt)
+    if (typeof run?.runId !== 'string' || !/^readiness-run-[a-f0-9]{24}$/.test(run.runId)) throw new Error('invalid-readiness-run-id')
+    const content = canonicalize(run)
+    if (seen.has(run.runId) && seen.get(run.runId) !== content) throw new Error('conflicting-readiness-run-id')
+    seen.set(run.runId, content)
+    return { run, ...instant }
+  }).sort((left, right) => {
+    const precision = Math.max(left.fraction.length, right.fraction.length)
+    return left.wholeSecond - right.wholeSecond
+      || compareText(left.fraction.padEnd(precision, '0'), right.fraction.padEnd(precision, '0'))
+      || compareText(left.run.runId, right.run.runId)
+  }).map(({ run }) => run)
+}
+function latestRunsByProtocol(runs) {
+  return new Map(orderedProtocolRuns(runs).map((run) => [run.protocolId, run]))
+}
+
 export function buildReadinessRun({ project, protocol, answers = {}, createdAt = nowIso() }) {
+  runInstant(createdAt)
   const normalizedAnswers = normalizeAnswers(protocol, answers)
   const evaluation = evaluateProtocolAnswers(protocol, normalizedAnswers)
   const seed = JSON.stringify({ project: project.config.name || path.basename(project.workspaceRoot), protocol: protocol.id, answers: normalizedAnswers, createdAt })
@@ -155,6 +190,7 @@ export function buildReadinessRun({ project, protocol, answers = {}, createdAt =
 }
 
 export function writeReadinessRun(project, run) {
+  runInstant(run?.createdAt)
   const dir = readinessRunsDir(project)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const file = path.join(dir, `${run.runId}.json`)
@@ -188,7 +224,7 @@ export function createReadinessProposal(project, run) {
 export function listProtocolRuns(project) {
   const dir = readinessRunsDir(project)
   if (!fs.existsSync(dir)) return []
-  return fs.readdirSync(dir)
+  const runs = fs.readdirSync(dir)
     .filter((name) => name.endsWith('.json'))
     .sort()
     .map((name) => {
@@ -199,6 +235,7 @@ export function listProtocolRuns(project) {
       }
     })
     .filter(Boolean)
+  return orderedProtocolRuns(runs)
 }
 
 // Shared per-dimension facts derived from a stored run. Used by both the
@@ -222,8 +259,7 @@ function packProtocolRecords(registry) {
 }
 
 export function summarizeReadinessJourney(project, { runs = listProtocolRuns(project), registry = null } = {}) {
-  const runsByProtocol = new Map()
-  for (const run of runs) runsByProtocol.set(run.protocolId, run)
+  const runsByProtocol = latestRunsByProtocol(runs)
   const dimensions = DIMENSIONS.map(([key, label, protocolId]) => {
     const protocol = protocolById(protocolId)
     const facts = dimensionRunFacts(runsByProtocol.get(protocolId), protocolId)
@@ -281,8 +317,9 @@ function answersFor(run, key) {
 // the runtime and CLI tests instead; if it ever gets a schema, register it so
 // compat checking takes over.
 export function buildTenantPacket(project, { runs = listProtocolRuns(project), registry = null } = {}) {
-  const byId = new Map(runs.map((run) => [run.protocolId, run]))
-  const journey = summarizeReadinessJourney(project, { runs, registry })
+  const orderedRuns = orderedProtocolRuns(runs)
+  const byId = new Map(orderedRuns.map((run) => [run.protocolId, run]))
+  const journey = summarizeReadinessJourney(project, { runs: orderedRuns, registry })
   // Generic pack contribution: built entirely from run fields, no per-field
   // plucking (the literal byId.get(...) reads below stay bundled-only). Only
   // required-gate pack protocols can block export; advisory ones just report.
@@ -363,7 +400,7 @@ export function buildTenantPacket(project, { runs = listProtocolRuns(project), r
       ...packExportBlockers,
     ],
     openQuestions: answersFor(byId.get('mnstry.readiness:tenant-packet'), 'openQuestions') ?? [],
-    proposedClaims: runs.flatMap((run) => run.claims ?? []).map((claim) => claim.claimId),
+    proposedClaims: orderedRuns.flatMap((run) => run.claims ?? []).map((claim) => claim.claimId),
     ext: {
       'mnstry.atelier': {
         extensionPacks: packContribution,

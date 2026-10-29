@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
-import { PersonalWorkspaceRefusal, composePersonalWorkspace, readPersonalSelectionHead } from '@mnstry/atelier/personal-workspace'
+import { PersonalWorkspaceRefusal, composePersonalWorkspace } from '@mnstry/atelier/personal-workspace'
 import { ensureLocalState, resolveProjectConfig, validateProjectConfigDoc } from '@mnstry/atelier/project'
 import { buildCanonicalGraph } from '../../graph/graph.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from '../../runtime/obsidian/errors.mjs'
 import { OBSIDIAN_EXT_KEY } from './contracts.mjs'
+import { readPersonalSelectionSnapshot } from '../../personal-workspace/selection.mjs'
 
 // The one personal-workspace route of the Obsidian projection.
 //
@@ -411,22 +412,17 @@ export async function validatePersonalWorkspace(project) {
 
 const selectionRecord = ({ personalHome }, sequence) => path.join(personalHome, 'selections', `${String(sequence).padStart(6, '0')}.json`)
 
-// The highest record number this process has read each home's selection history ending at, at any read of it: a
-// loader's first read, its read-again, the recheck of a pinned project, and the read the engine's guard asks for when
-// it stops a view (notePersonalSelectionNow). Kept in the main thread: no composition worker reads the history's end,
-// and one that did would have a map of its own and escape the rule.
+// The most recently accepted head observed in this process. Durable continuity is checked by the loader's note
+// callback before this index changes. The index only tells an engine when another reader requires it to reload.
 const READ_UP_TO = new Map()
 
-// Notes where a home's selection history ends, as just read, and answers that head. Selections are only ever appended,
-// so a history that ends at an earlier record than this process has read it ending at was cut short by something other
-// than a confirmation. It refuses `selection-history-shortened` at every read, the read-again and the recheck of a
-// project already loaded included, while it is shorter. Only the number is kept, and only in this process: a record in
-// a place already read, with other content, is read as a confirmation, and a process started after the cut reads the
-// history as it then stands. `refusesShortened: false` is a test seam only, the rule's mutation control.
-export function notePersonalSelectionHead(personalHome, head, { refusesShortened = true } = {}) {
-  const before = READ_UP_TO.get(personalHome) ?? 0
-  if (head.sequence > before) READ_UP_TO.set(personalHome, head.sequence)
-  else if (refusesShortened && head.sequence < before) refuse('selection-history-shortened', 'the selection history of the personal workspace ends at an earlier record than this process has read it ending at; nothing is used from it while it is shorter', { source: 'personal-workspace' })
+export function notePersonalSelectionHead(personalHome, head, { refusesShortened = true, note = null } = {}) {
+  if (note !== null) note(head)
+  else {
+    const before = READ_UP_TO.get(personalHome)?.sequence ?? 0
+    if (refusesShortened && head.sequence < before) refuse('selection-history-shortened', 'the selection history of the personal workspace ends at an earlier record than this process has read; nothing is used from it', { source: 'personal-workspace' })
+  }
+  if (refusesShortened) READ_UP_TO.set(personalHome, { sequence: head.sequence, head: head.head })
   return head
 }
 
@@ -435,8 +431,8 @@ export function notePersonalSelectionHead(personalHome, head, { refusesShortened
 // appended to the history, or a history cut short, is a change. And every time the composition is asked again
 // (validatePersonalWorkspace) the history is read again and must still end with that record. `observe: false`,
 // `recheck: false` and `refusesShortened: false` are test seams only, the mutation controls of each.
-export function pinPersonalSelection(project, { sequence, head }, { observe = true, recheck = true, refusesShortened = true } = {}) {
-  SELECTED.set(personalWorkspaceBindingOf(project), Object.freeze({ sequence, head, observe, recheck, refusesShortened }))
+export function pinPersonalSelection(project, { sequence, head }, { observe = true, recheck = true, refusesShortened = true, note = null } = {}) {
+  SELECTED.set(personalWorkspaceBindingOf(project), Object.freeze({ sequence, head, observe, recheck, refusesShortened, note }))
   return project
 }
 
@@ -449,25 +445,23 @@ export function personalSelectionOf(project) {
 
 // Refuses `personal-selection-changed` unless the history still ends with the record this project is pinned to; a
 // history that cannot be read refuses with the module's own code. What is read is noted first
-// (notePersonalSelectionHead): a later record seen here counts from then on, and a history shorter than this process
-// has read refuses `selection-history-shortened`, also when it ends with the pinned record. Nothing for a project that
-// is not pinned.
+// (notePersonalSelectionHead): the same durable continuity rule applies to this read, before its head is compared
+// with the pin. Nothing for a project that is not pinned.
 export function assertPersonalSelection(project) {
   const pinned = personalSelectionOf(project)
   if (pinned === null) return
   let now
-  try { now = readPersonalSelectionHead({ personalHome: pinned.personalHome }) } catch (error) { asMaintenanceRefusal(error, 'the selection history of the personal workspace could not be read; nothing is used from it') }
+  try { now = readPersonalSelectionSnapshot({ personalHome: pinned.personalHome }) } catch (error) { asMaintenanceRefusal(error, 'the selection history of the personal workspace could not be read; nothing is used from it') }
   notePersonalSelectionHead(pinned.personalHome, now, SELECTED.get(personalWorkspaceBindingOf(project)))
   if (now.sequence !== pinned.sequence || now.head !== pinned.head) refuse('personal-selection-changed', 'the confirmed selection of the personal workspace is no longer the one this project was loaded under; nothing is used from it', { source: 'personal-workspace' })
 }
 
-// Whether this process has read a pinned project's selection history ending at a later record than the one the
-// project is pinned to: a confirmation since, or a history that was longer and is cut short now. Either way the project
-// is not the one to publish under any more, and is loaded again: the load follows the confirmation, or refuses the
-// shortened history. In memory, with no read. False for a project that is not pinned.
+// Whether another reader in this process accepted a head different from the pin: a later confirmation or a newly
+// confirmed shorter history. In memory, with no read. False for a project that is not pinned.
 export function personalSelectionBehind(project) {
   const pinned = personalSelectionOf(project)
-  return pinned !== null && (READ_UP_TO.get(pinned.personalHome) ?? 0) > pinned.sequence
+  const latest = pinned === null ? null : READ_UP_TO.get(pinned.personalHome)
+  return latest !== undefined && latest !== null && (latest.sequence !== pinned.sequence || latest.head !== pinned.head)
 }
 
 // Reads where the history of a pinned project's home ends now, for the note alone: what the read refuses is not this
@@ -498,10 +492,12 @@ export function personalOverlayRepoOf(project) {
 }
 
 // Settings that a personal binding takes from the overlay or does not have yet. A saved view is authored in the
-// overlay, so `view add` would write a module-owned generation file; who may see and where vaults live wait for a
-// stable per-person projection configuration. Refused before anything is resolved or written.
+// overlay, so `view add` would write a module-owned generation file. The machine records an owner-only audience or
+// an explicit clear. Custom audiences refuse; vault location remains unavailable for this binding.
 export function refuseOnPersonalBinding(project, operation) {
   if (personalWorkspaceBindingOf(project) === null) return
+  if (operation === 'audience set me' || operation === 'audience clear') return
+  if (operation.startsWith('audience ')) refuse('personal-binding-owner-only', 'a personal workspace vault is owner only; use `audience set me` or `audience clear`', { operation })
   if (operation === 'view add') refuse('views-from-personal-overlay', 'the views of a personal workspace come from its overlay; nothing was written', { operation })
   refuse('personal-binding-decision-unavailable', `${operation} is not available for a personal workspace yet; nothing was written`, { operation })
 }

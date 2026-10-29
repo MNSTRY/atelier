@@ -48,12 +48,13 @@ listed. An answer being present is not evidence that it is right.
 atelier readiness run PROTOCOL_ID --answers answers.json --project ./atelier.project.json
 ```
 
-That run is an input-completeness check and is not evidence-bound. For
-evidence, `atelier review run PROTOCOL_ID --answers answers.json` records a
-run bound to the declared sources, and accepting one of its claims in the
-review workspace checks that the claim is linked to a source
-(`docs/guides/local-review.md`). The responsible people review coverage; an issuer can record its admission
-decision in an attestation bound to the canonical form of the document it
+That run is an input-completeness check and is not evidence-bound. For a run
+bound to its sources, `atelier review run PROTOCOL_ID --answers answers.json`
+records that source-bound run. Accepting one of its claims in the review
+workspace checks source linkage. A linked source establishes which
+bytes were read, not whether they logically support the proposed claim
+(`docs/guides/local-review.md`). The responsible people review coverage; an
+issuer can record its admission decision in an attestation bound to the canonical form of the document it
 judged (`docs/reference/attestation.md`).
 
 The record also carries its own tests. A complete record gives every

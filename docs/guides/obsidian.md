@@ -971,9 +971,12 @@ confirmed there (see "A confirmed selection", below).
   (`personal-views-exceed-settings-limit`), within the Obsidian settings
   contract. The preferred view, when it names a saved one, is the default. No
   generation file is written. `view add` refuses `views-from-personal-overlay`;
-  `audience set`, `audience clear` and `location set` refuse
-  `personal-binding-decision-unavailable`. Each refuses before anything is
-  resolved or written.
+  `audience set me` records owner-only visibility in the machine settings, and
+  `audience clear` withholds every audience. Custom audience lists refuse
+  `personal-binding-owner-only`; `location set` still refuses
+  `personal-binding-decision-unavailable`. Refused operations do not change
+  audience, view or location settings. Following a selection may still keep
+  machine-private continuity evidence before the setting operation refuses.
 - **Preferences and coverage.** `preferences` are returned read only. A theme
   is reported and never written: `appearance.json` stays the person's.
   `coverage` is passed through untouched. No Obsidian code reads it: it states
@@ -1024,16 +1027,26 @@ unit and loader is what it was.
   a confirmed generation. `status`, `open` and `service start` load the
   selection and refuse with its code; the service's freshness shows every view
   `stale` with it, and its status document has it as the last tick's reason.
-  `selection-history-shortened` comes only from a process that read the
-  history longer, which is the running service: a command of the command line
-  reads the history in a process of its own, as it then stands, so `status`
-  reports the selection a cut history ends with while the service refuses it.
+  The command and service read the same machine-private continuity state, so a
+  restart or a separate command does not accept a shortened history. An invalid
+  checkpoint refuses `invalid-selection-continuity`; a checkpoint that cannot be
+  kept refuses `selection-continuity-unavailable`. No project is returned in either case.
   A confirmed selection is reported by `status` (`selection`: the generation
   and the number of its record).
-- **The service starts whatever the selection.** A bound project's folder is its
-  private home, so the home alone locates the workspace: the service resolves
-  its workspace from that at once and starts, and its engine awaits the loader
-  at each tick. `atelier obsidian --personal-home` does this for a bound home. A
+- **The service starts from an initialized home whatever the selection.** A bound
+  project's folder is its private home. The home must contain its caller-authored
+  `atelier.personal.json`, even when its enrollment is explicitly empty and no
+  generation is confirmed. A bare directory or a missing/unreadable manifest
+  refuses before startup; the locator cannot infer that no repositories were
+  enrolled from missing evidence. This tightens the former lower-level API
+  behavior that could start from a bare home. The locator reads the home and the
+  current manifest's repository roots for exclusion, without composing or
+  selecting a generation. A data root
+  inside a declared repository is refused before private state is created or a
+  login item is removed for a restart, including when nothing is confirmed.
+  The service resolves its workspace from that at once and starts, and its
+  engine awaits the loader at each tick. `atelier obsidian --personal-home`
+  does this for a bound home. A
   program that runs the service itself (`runMaintenanceService` from
   `@mnstry/atelier/obsidian`) gives it the same through `locateProject`, a
   synchronous function that answers, without loading anything, a project whose
@@ -1054,6 +1067,12 @@ unit and loader is what it was.
   `service-locator-invalid`. The workspace pointer is under the home, so a home
   that is gone when the service starts leaves it no workspace to find
   (`service-workspace-not-prepared`).
+- **Cleanup with nothing confirmed.** `service unit --remove` and `uninstall`
+  locate the existing protected workspace without a generation, and remember
+  the machine's login-item decision as `off` there. They do not change the
+  audience or confirm anything. Uninstall reports the actual kept workspace
+  pointer under the personal home, and leaves its bytes, private state,
+  generations and selection history in place.
 - **Following the history.** A loaded project is pinned to the record it was
   loaded under, and the engine observes that record and the place of the next
   one as configuration. A confirmation is therefore loaded at the next tick. A
@@ -1070,7 +1089,7 @@ unit and loader is what it was.
   another), whether or not the
   record's generation could be used, and whichever part of the service read
   it. A history that ends earlier refuses `selection-history-shortened` at a
-  load and at a recheck, and nothing is loaded from it while it is shorter; at
+  load and at a recheck until a fresh confirmation accepts it; at
   the read made when a tick stops a view, the view says `mixed-read` at that
   tick and the code at the next. A project already loaded is loaded again at
   the next tick once any part of the service has read the history ending at a
@@ -1086,18 +1105,26 @@ unit and loader is what it was.
   noted. The views say why (`open` and
   `status --json` name the ways out), and the vault keeps what it last
   published.
-- **What ends that refusal.** The removed records put back; a history as long
-  again, since a record in a place already read, with other content, is read
-  as a confirmation (after a cut of one record the person's next confirmation
-  is followed; after a cut of several, one confirmation is not enough); or a
-  start of the service. The number is kept in the process only, so a service
-  started after the cut cannot tell a cut history from one never longer: it
-  reads the history as it then stands and follows what it ends with,
-  publishing it if its generation still holds. Every start counts, the
-  person's own and one at login, after an upgrade or after a failure. Stopping
-  and starting the service is therefore how a person accepts a shorter
-  history, and a start nobody chose accepts it too. Nothing here keeps the
-  number across a start.
+- **What ends that refusal.** Put the removed records back, or explicitly confirm
+  the currently eligible generation through `selectPersonalGeneration` again.
+  That existing confirmation operation is the accepting act; no new command is
+  needed. One fresh confirmation accepts a shorter history even when its record
+  number remains below the highest ever observed. Its unique confirmation
+  identity distinguishes it from a previously observed record restored to the
+  same position. Replaying a previously observed prefix refuses, including after
+  a shorter history was accepted. Composition still decides whether the chosen
+  generation is eligible.
+- **Continuity across starts.** The highest observed number, accepted head and
+  previously observed record digests live in
+  `state/maintenance/selection-continuity.json` under the existing private
+  workspace. Reads validate its closed schema, workspace and personal-home
+  identities; changed writes are serialized through the existing private-state
+  lock, owner-only and atomic. State is bounded at 1 MiB and 8,192 observed record
+  identities; exhausting the identity budget refuses `selection-continuity-capacity`.
+  First use initializes from the current valid history, including historical v1
+  records without a confirmation identity. Retain this private state: deleting
+  all of it removes the evidence that distinguishes prior observation from a first
+  installation. Damaged existing state is never treated as a new installation.
 - **What the history is checked for besides.** At every full reconciliation the
   history is read again, so a record before the last that no longer links, or
   a confirmation that landed before the engine first looked at the record,
@@ -1106,7 +1133,8 @@ unit and loader is what it was.
   refuses `mixed-read` at its next wait, before its generation commits (one
   already committed stays), so do the views after it, and the next tick
   publishes under the new record. While the last load was refused, every tick
-  loads again: with nothing confirmed only the history is read, and with a
+  loads again: with nothing confirmed the manifest, history and private continuity
+  state are read without composition, and with a
   confirmed generation that no longer holds, one composition runs in a worker
   per tick.
 - **A narrowing.** When the newly confirmed generation drops a source (a
@@ -1118,10 +1146,14 @@ unit and loader is what it was.
   published (`held-for-your-edit`, `publication-withheld-for-your-edit`): the
   note is neither removed nor overwritten. A note edited during the
   publication itself stays in the vault (`retained-edit`).
-- **Who may see.** The binding never decides it. It stays this machine's
-  audience setting, none by default, and `audience set` still refuses for a
-  bound project: until an audience is allowed some other way, a bound vault
-  shows no note. Deciding who may see a bound vault is not built.
+- **Who may see.** The existing machine audience setting owns this decision.
+  For a personal binding, an undecided empty audience initializes to `only-you`
+  with notes without a classification shown, recorded with `defaults` provenance.
+  Existing explicit `only-you` lists and unclassified choices retain their exact
+  meaning. An explicit `audience clear` stays empty across ticks and restarts.
+  A nonempty custom setting refuses `personal-binding-owner-only` until
+  `audience set me` or `audience clear` is recorded. Nothing is written into a
+  generation or the personal overlay.
 - **Reading the history on the service's event loop.** The head is one
   directory listing and one bounded read per record. A record that is not a
   regular file (a FIFO, a device) refuses `selection-history-corrupt` without
@@ -1129,6 +1161,9 @@ unit and loader is what it was.
   project (its permissions changed, not removed) fails the tick when the
   engine observes its files, as an unreadable configuration file does: nothing
   is published, and the service reports the failed tick.
+  After a worker composes a generation, the caller still reads generation
+  files, resolves the generation's project configuration and assembles the
+  bound project on its own thread. Composition itself remains in the worker.
 
 Measured once on 2,156 notes in three repositories, with 50 annotations and five
 saved views (six views in all). The production contributions were loaded, as
@@ -1350,6 +1385,50 @@ test reported as a pass.
   first allocation or when a vault is made again. Every other check runs
   again at both, and a vault made again, or published into, through a link on
   the way is refused (`vault-allocation-moved`).
+- Private state after a wait: that the private state is outside every
+  repository the workspace declares now is proven when a project loads, around
+  each engine phase, inside the engine and selection locks, and after each wait
+  the publisher makes for the app, its list of vaults, its comparison of kept
+  notes or its quiet period. "Declares now" differs by binding. For a project
+  bound to a personal home, each proof reads the home's manifest again, so a
+  repository enrolled while a tick waits is seen at the next proof. For an
+  ordinary project, each proof uses the repositories of the project as it was
+  last loaded. A change to its configuration or overlay that declares a
+  repository enclosing the data root is not seen until the project is loaded
+  again, and the writes of the tick in flight (preserved edits, pending edits
+  and freshness, say) can land under it meanwhile. The proof is not made again
+  at every write, and it is not made at all for writes made outside the
+  engine's phases and the publisher. Those are:
+  - the built-in proposal store's writes for pending edits to shared notes
+    (kept bytes, arbitration records and its queue) while it works through
+    several of them;
+  - everything the service process itself keeps: its log, service settings,
+    runtime record (with its bearer), service-start lock, startup record,
+    error record and login-item record, including those written after it waits
+    for a free port, for its server to listen or for the service manager, and
+    those a login item's start writes in the workspace the unit names when the
+    project's loader fails;
+  - the plugin channel's bearer and the plugin choices it records, including a
+    first-use bearer minted while a view is prepared and the confirmation
+    written when a plugin session opens;
+  - lock cleanup when a proof fails: any private lock that is held, or whose
+    ticket was just published, when its proof refuses is still released or
+    withdrawn, so that ownership is never left behind. This covers the engine
+    lock (a release record, or the withdrawal of a ticket published before
+    the last check of its acquisition), the selection continuity lock and the
+    publication locks, including a release retried at the next acquisition.
+    Lock cleanup and removing staged candidates are the only changes the
+    engine and the publisher make after one of their proofs refuses.
+
+  Each of these writers keeps its file inside the workspace's private state,
+  but none checks the roots declared now. A manifest that comes to enclose the
+  data root, or that cannot be read, while the service runs can therefore
+  receive these writes. A refusal of the private state's own location
+  (`managed-root-unproven`) stops the whole tick, whichever view it is found
+  in: no later view is prepared, given a store or published, and no view is
+  reported current after it. A view whose own vault is in a bad place is still
+  refused alone. A single check of the declared
+  roots at every private-state write is planned as a separate change.
 - Replacing a vault during a publication: the allocated folder is checked
   before the vault lock is taken and again once its folder is made, after the
   app is asked about the vault, before each note and before the generation is

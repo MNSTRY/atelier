@@ -2292,9 +2292,31 @@ const code = process.argv.find((arg) => arg.startsWith('code='))
 const payload = JSON.parse(Buffer.from(/atob\\('([A-Za-z0-9+/=]+)'\\)/.exec(code)[1], 'base64').toString('utf8'))
 const log = process.env.STAND_IN_LOG
 const running = log + '.running'
-if (fs.existsSync(running)) fs.appendFileSync(log, 'OVERLAP\\n')
-fs.writeFileSync(running, '')
-fs.appendFileSync(log, JSON.stringify({ op: payload.op, operationId: payload.operationId, home: process.env.HOME }) + '\\n')
+let priorRunning = null
+if (fs.existsSync(running)) {
+  fs.appendFileSync(log, 'OVERLAP\\n')
+  priorRunning = { identity: null, liveness: 'unknown' }
+  try {
+    const bytes = Buffer.alloc(1025)
+    const fd = fs.openSync(running, 'r')
+    let size, count
+    try { size = fs.fstatSync(fd).size; count = fs.readSync(fd, bytes, 0, bytes.length, 0) } finally { fs.closeSync(fd) }
+    priorRunning.marker = bytes.subarray(0, Math.min(count, 1024)).toString('utf8')
+    priorRunning.truncated = size > 1024 || count > 1024
+    const previous = priorRunning.truncated || count !== size ? null : JSON.parse(priorRunning.marker)
+    if (!previous || !Number.isInteger(previous.pid) || previous.pid <= 0 || previous.pid > 2147483647 ||
+        !['inspect', 'publish', 'collect'].includes(previous.op) || typeof previous.path !== 'string' ||
+        !(previous.operationId === null || typeof previous.operationId === 'string')) throw new Error('invalid-marker')
+    priorRunning.identity = { pid: previous.pid, op: previous.op, operationId: previous.operationId, path: previous.path }
+    try { process.kill(previous.pid, 0); priorRunning.liveness = 'live-or-reused' } catch (error) {
+      priorRunning.error = String(error.code ?? error.message ?? error.name).slice(0, 64)
+      if (error.code === 'ESRCH') priorRunning.liveness = 'dead'
+    }
+  } catch (error) { priorRunning.error = String(error.code ?? error.message ?? error.name).slice(0, 64) }
+}
+const identity = { pid: process.pid, op: payload.op, operationId: payload.operationId ?? null, path: payload.path }
+fs.writeFileSync(running, JSON.stringify(identity))
+fs.appendFileSync(log, JSON.stringify({ ...identity, priorRunning, home: process.env.HOME }) + '\\n')
 const finish = (reply) => { fs.rmSync(running, { force: true }); console.log('=> ' + JSON.stringify(reply)) }
 if (payload.op === 'publish') { fs.rmSync(running, { force: true }); setInterval(() => {}, 1000) }
 else if (payload.op === 'collect') {
@@ -2310,8 +2332,14 @@ else if (payload.op === 'collect') {
   assert.equal(reply.status, 'published')
   assert.equal(reply.replyLost, true)
   assert.ok(Date.now() - started < 10000, 'the unanswered call was killed although it ignores SIGTERM')
-  const lines = fs.readFileSync(log, 'utf8').trim().split('\n')
-  assert.ok(!lines.includes('OVERLAP'), 'calls are serialized')
+  const callsLog = fs.readFileSync(log, 'utf8').trim()
+  const lines = callsLog.split('\n')
+  const serializationDiagnostic = JSON.stringify({
+    callsLogTail: callsLog.slice(-8192),
+    callsLogTruncated: callsLog.length > 8192,
+    transportRetries: adapter.transportRetries.slice(-16),
+  })
+  assert.ok(!lines.includes('OVERLAP'), `calls are serialized; ${serializationDiagnostic}`)
   const entries = lines.map((line) => JSON.parse(line))
   assert.deepEqual(entries.map((entry) => entry.op), ['inspect', 'publish', 'collect', 'inspect'])
   assert.ok(entries.every((entry) => entry.home === env.HOME), 'the transport uses the environment it was given, not the caller\'s HOME')
@@ -2607,4 +2635,66 @@ test('the serialized script runs on its own, and a body that reaches for a modul
   } finally {
     fs.rmSync(vault, { recursive: true, force: true })
   }
+})
+
+// The caller's location guard (the engine's proof that private state is still outside every declared root) fails from
+// the moment `lost` is set.
+const locationLost = () => { const error = new Error('the private-state root is no longer proven outside the declared roots'); error.code = 'managed-root-unproven'; return error }
+
+test('a location lost during the initial app probe proves no exchange, stages nothing and opens no journal', needsExchange, async (t) => {
+  const world = await seeded(t)
+  let lost = false
+  // Every private-state write the store offers, asked after the location was lost. Cleanup can remove a directory
+  // again, so the calls are what is observed, not only what is left.
+  const writes = []
+  const WRITES = new Set(['exchangeProbeDir', 'stagingDir', 'journalDir', 'unitDir', 'retainObject'])
+  const store = new Proxy(world.store, { get: (target, key) => {
+    const value = target[key]
+    return typeof value === 'function' && WRITES.has(key) ? (...args) => { if (lost) writes.push(key); return value.apply(target, args) } : value
+  } })
+  const absent = absentAdapter()
+  const adapter = { ...absent, probe: async (input) => { const answer = await absent.probe(input); lost = true; return answer } }
+  const journals = listJournals(world.store).length
+  await assert.rejects(world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter, { recoveryStore: store, scheduling: { guard: () => { if (lost) throw locationLost() } } }),
+    (error) => error.code === 'managed-root-unproven')
+  assert.ok(lost, 'the probe was asked')
+  assert.deepEqual(writes, [], 'no exchange probe, staging directory or journal was asked for after the wait')
+  assert.equal(listJournals(world.store).length, journals)
+  assert.equal(world.read(NOTE), BASE)
+})
+
+test('a location lost while an app inspection fails appends no failure entry', needsExchange, async (t) => {
+  const world = await seeded(t)
+  let lost = false
+  const app = new ModelApp(world.vault)
+  // The unit's inspection never answers: the transport gives up and the wait rejects.
+  const adapter = modelAdapter(app, { plan: { before: (payload) => { if (payload.op === 'inspect' && payload.path === NOTE) lost = true }, loseReply: (payload) => payload.op === 'inspect' && payload.path === NOTE } })
+  await assert.rejects(world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter, { scheduling: { guard: () => { if (lost) throw locationLost() } } }))
+  assert.ok(lost, 'the unit was inspected')
+  const failed = assertJournalsValid(world).filter((document) => document.entries.some((entry) => entry.step === 'verify' && entry.outcome === 'failed'))
+  assert.deepEqual(failed, [], 'no failure entry was appended once the location was no longer proven')
+  assert.equal(world.read(NOTE), BASE)
+})
+
+test('a location lost while kept notes are compared retains, journals and writes nothing more, with the scheduling budget unexhausted', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: CANDIDATE })
+  let armed = false
+  let lost = false
+  const writes = []
+  const WRITES = new Set(['retainObject', 'unitDir', 'journalDir', 'commitManifest'])
+  const store = new Proxy(world.store, { get: (target, key) => {
+    const value = target[key]
+    return typeof value === 'function' && WRITES.has(key) ? (...args) => { if (lost) writes.push(key); return value.apply(target, args) } : value
+  } })
+  // The kept note's comparison reads the vault through fs/promises; the location is lost during that read.
+  const original = fs.promises.lstat
+  fs.promises.lstat = (file, ...rest) => { if (armed && String(file).startsWith(world.vault)) { armed = false; lost = true } return original.call(fs.promises, file, ...rest) }
+  t.after(() => { fs.promises.lstat = original })
+  const app = new ModelApp(world.vault)
+  armed = true
+  await assert.rejects(world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), modelAdapter(app), { recoveryStore: store, scheduling: { budgetMs: 1e9, maxUnits: 1e6, guard: () => { if (lost) throw locationLost() } } }),
+    (error) => error.code === 'managed-root-unproven')
+  assert.ok(lost, 'the kept note was compared')
+  assert.deepEqual(writes, [], 'no recovery object, unit directory or journal was asked for after the comparison')
+  assert.equal(world.read(NOTE), BASE)
 })

@@ -10,7 +10,7 @@ import { ensureWorkspaceIdentity, readLocalPointer, resolveDataRoot } from './ma
 import { SERVICE_MANAGER_KINDS } from './service-managers.mjs'
 import { readLastStartup, readServiceSettings, serviceNameFor, servicePaths, writeServiceSettings } from './service-record.mjs'
 import { personalHomeOf } from './personal-selection.mjs'
-import { resolveServiceWorkspace } from './service.mjs'
+import { resolveServiceWorkspace, serviceLocationCheck } from './service.mjs'
 import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from './startup-adapters.mjs'
 
 // A login item: the operating system starts this workspace's maintenance
@@ -198,7 +198,7 @@ export async function installLoginItem(options = {}) {
   const { loadProject, dataRoot, env = process.env, platform = process.platform, manager, consent, ownEntry, entryArgs = [], nodePath = realNodePath(), pathValue = env.PATH, clock = () => new Date(), temporary = temporaryRoots(), beforeInstall = null } = options
   checkManager(manager, platform)
   const project = loadProject()
-  ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }) })
+  ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }), validate: serviceLocationCheck({ project, dataRoot, env, platform }) })
   const workspace = resolveServiceWorkspace({ project, dataRoot, env, platform, create: true })
   const { entryPath, source } = resolveLoginItemEntry({ project, ownEntry, temporary })
   const recorded = readLoginItemRecord(workspace)

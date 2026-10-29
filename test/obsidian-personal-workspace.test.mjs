@@ -65,7 +65,8 @@ const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createMaintenanceExtensions } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { readObsidianEnablement } = await import('../src/runtime/obsidian/enablement.mjs')
-const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, initializeMachineSettings, ownerOnlyPersonalSettings, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { inspectPrivateLock } = await import('../src/project/durable-state.mjs')
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { resolveServiceWorkspace, serviceWorkspaceInputs } = await import('../src/runtime/obsidian/service.mjs')
@@ -205,8 +206,7 @@ function makePerson(world, { name, repos, overlay, fill }) {
   person.bind()
   const pointer = ensureWorkspaceIdentity({ project: person.bound.project, randomBytes: person.randomBytes })
   person.workspaceId = pointer.workspaceId
-  // "Only you", notes without a classification withheld: what `audience set` would record, written as a fixture since a
-  // personal binding refuses that command (test 6).
+  // An explicit existing owner-only choice that withholds unclassified notes must retain that exact meaning.
   person.decideAudience = () => {
     const settings = withDecision({ ...defaultMachineSettings({ workspaceId: pointer.workspaceId, updatedAt: NOW }), audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
     writeMachineSettings({ workspaceRoot: workspaceStateRoot(person.dataRoot, pointer.workspaceId), workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(person.bound.project), settings })
@@ -526,7 +526,133 @@ test('5. projection fidelity for both people: each vault is that person\'s eligi
   assert.deepEqual([treeListing(world.a), treeListing(world.b)], world.sharedBefore)
 })
 
-test('6. views come from the overlay; view add, audience and location refuse typed and write nothing', async (t) => {
+nodeTest('personal owner-only defaults keep explicit settings and never widen a recorded audience list', () => {
+  const defaults = defaultMachineSettings({ workspaceId: 'synthetic-workspace', updatedAt: NOW })
+  const ownerOnly = ownerOnlyPersonalSettings(defaults, { decidedAt: NOW })
+  assert.deepEqual(ownerOnly.audienceAllow, [...ONLY_YOU_AUDIENCES])
+  assert.deepEqual(ownerOnly.decisions.audience, { choice: 'only-you', unclassified: 'shown', decidedAt: NOW, decidedBy: null, via: 'defaults' })
+  const existing = withDecision({ ...defaults, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  assert.equal(ownerOnlyPersonalSettings(existing, { decidedAt: NOW }), existing)
+  const clear = withDecision(defaults, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  assert.equal(ownerOnlyPersonalSettings(clear, { decidedAt: NOW }), clear)
+  const custom = withDecision({ ...defaults, audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  assert.throws(() => ownerOnlyPersonalSettings(custom, { decidedAt: NOW }), (error) => error.code === 'personal-binding-owner-only')
+})
+
+function settingsInitializationFixture(t) {
+  const workspaceRoot = fs.mkdtempSync(path.join(SCRATCH, 'machine-initialization-'))
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  const options = { workspaceRoot, workspaceId: 'synthetic-workspace', repositoryRoots: [], updatedAt: NOW, personal: true }
+  const defaults = defaultMachineSettings(options)
+  const cleared = withDecision(defaults, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  const file = path.join(workspaceRoot, 'state', 'settings', 'machine.json')
+  const lock = path.join(workspaceRoot, 'state', 'settings', 'machine-settings.lock')
+  writeMachineSettings({ ...options, settings: defaults })
+  return { options, cleared, file, lock }
+}
+
+function clearAfterInitialSettingsRead(t, initialize) {
+  const f = settingsInitializationFixture(t)
+  const identity = fs.statSync(f.file)
+  const original = fs.readFileSync
+  let interleaved = false
+  fs.readFileSync = function (file, ...rest) {
+    const bytes = original.call(this, file, ...rest)
+    if (!interleaved && typeof file === 'number') {
+      const opened = fs.fstatSync(file)
+      if (opened.dev === identity.dev && opened.ino === identity.ino) {
+        interleaved = true
+        writeMachineSettings({ ...f.options, settings: f.cleared })
+      }
+    }
+    return bytes
+  }
+  let returned
+  try { returned = initialize(f.options) } finally { fs.readFileSync = original }
+  assert.equal(interleaved, true, 'the clear committed after the actual initial machine-file read')
+  return { returned, persisted: readMachineSettings(f.options), cleared: f.cleared }
+}
+
+function assertClearRetained({ returned, persisted, cleared }) {
+  assert.deepEqual(returned, cleared, 'eligibility receives the committed clear')
+  assert.deepEqual(persisted, cleared, 'initialization does not overwrite the committed clear')
+}
+
+nodeTest('a clear committed after the initial settings read wins personal owner-only initialization', { skip: process.platform === 'win32' ? 'the interleaving replaces the machine file while it is open for reading, which Windows refuses' : false }, (t) => {
+  assertClearRetained(clearAfterInitialSettingsRead(t, initializeMachineSettings))
+})
+
+nodeTest('mutation control: the clear interleaving oracle rejects initialization from a stale settings read', { skip: process.platform === 'win32' ? 'the interleaving replaces the machine file while it is open for reading, which Windows refuses' : false }, (t) => {
+  const staleInitializer = (options) => {
+    const initial = readMachineSettings(options) ?? defaultMachineSettings(options)
+    return writeMachineSettings({ ...options, settings: ownerOnlyPersonalSettings(initial, { decidedAt: options.updatedAt }) })
+  }
+  const observed = clearAfterInitialSettingsRead(t, staleInitializer)
+  assert.equal(observed.persisted.decisions.audience.choice, 'only-you', 'the stale write actually replaced the clear')
+  assert.throws(() => assertClearRetained(observed), assert.AssertionError)
+})
+
+nodeTest('personal initialization holds the command write lock while rereading and decided reads acquire no new ticket', (t) => {
+  const f = settingsInitializationFixture(t)
+  const original = fs.readFileSync
+  let blocked = false
+  fs.readFileSync = function (file, ...rest) {
+    const bytes = original.call(this, file, ...rest)
+    // Avoid inspecting the lock recursively while its immutable ticket is itself being read.
+    if (!blocked && typeof file === 'number') {
+      const opened = fs.fstatSync(file)
+      const machine = fs.statSync(f.file)
+      if (opened.dev === machine.dev && opened.ino === machine.ino && inspectPrivateLock(f.lock).reason === 'process exists') {
+        blocked = true
+        assert.throws(() => writeMachineSettings({ ...f.options, settings: f.cleared }), (error) => error.code === 'EEXIST')
+      }
+    }
+    return bytes
+  }
+  try { initializeMachineSettings(f.options) } finally { fs.readFileSync = original }
+  assert.equal(blocked, true, 'the same command writer contends on the initialization lock')
+  const generation = inspectPrivateLock(f.lock).generation
+  assert.equal(initializeMachineSettings(f.options).decisions.audience.choice, 'only-you')
+  assert.equal(inspectPrivateLock(f.lock).generation, generation, 'unchanged initialization writes and locks nothing')
+})
+
+test('an undecided personal binding persists owner-only visibility; clear stays empty after another engine starts, and set me restores it', async (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  const settings = () => readMachineSettings({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId })
+  const write = (value) => writeMachineSettings({ workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId, repositoryRoots: protectedRoots(ari.bound.project), settings: value })
+  write(defaultMachineSettings({ workspaceId: ari.workspaceId, updatedAt: NOW }))
+  const generationBefore = treeListing(path.join(ari.home, 'generations'))
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  const first = await engine.tick()
+  assert.ok(first.scopes.every((scope) => scope.state === 'current'), JSON.stringify(first))
+  assert.deepEqual(settings().audienceAllow, [...ONLY_YOU_AUDIENCES])
+  assert.deepEqual([settings().decisions.audience.choice, settings().decisions.audience.via, settings().decisions.audience.decidedBy], ['only-you', 'defaults', null])
+  assert.ok(ari.manifestOf(EVERYTHING_SCOPE_ID).notes.length > 0)
+  assert.equal((await ari.command(['audience', 'clear'])).exit, EXIT.ok)
+  engine.stop()
+  const restarted = ari.engine()
+  t.after(() => restarted.stop())
+  const cleared = await restarted.tick()
+  assert.ok(cleared.scopes.every((scope) => scope.state === 'current'), JSON.stringify(cleared))
+  assert.deepEqual(settings().audienceAllow, [])
+  assert.equal(settings().decisions.audience.choice, 'custom')
+  assert.equal(ari.manifestOf(EVERYTHING_SCOPE_ID).notes.length, 0)
+  const restored = await ari.command(['audience', 'set', 'me'])
+  assert.equal(restored.exit, EXIT.ok, JSON.stringify(restored))
+  assert.equal(settings().decisions.audience.via, 'command')
+  const again = await restarted.tick()
+  assert.ok(again.scopes.every((scope) => scope.state === 'current'), JSON.stringify(again))
+  assert.ok(ari.manifestOf(EVERYTHING_SCOPE_ID).notes.length > 0)
+  const custom = withDecision({ ...settings(), audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, { decidedAt: NOW, via: 'command' })
+  write(custom)
+  const refused = await restarted.tick()
+  assert.equal(refused.refusal?.code, 'personal-binding-owner-only', JSON.stringify(refused))
+  assert.deepEqual(settings(), custom, 'the refused custom setting is never relabeled or widened')
+  assert.deepEqual(treeListing(path.join(ari.home, 'generations')), generationBefore, 'audience writes never change generation files')
+})
+
+test('6. views come from the overlay; view add, custom audience and location refuse typed and write nothing', async (t) => {
   const world = makeWorld(t, { people: ['ari'] })
   const { ari } = world
   const enablement = readObsidianEnablement(ari.bound.project)
@@ -553,8 +679,8 @@ test('6. views come from the overlay; view add, audience and location refuse typ
   for (const [argv, code] of [
     [['view', 'add', 'extra', '--all', '--yes'], 'views-from-personal-overlay'],
     [['view', 'add', 'extra', '--repo', 'a', '--folder', 'notes', '--default', '--allow-empty', '--yes'], 'views-from-personal-overlay'],
-    [['audience', 'set', 'me'], 'personal-binding-decision-unavailable'],
-    [['audience', 'clear'], 'personal-binding-decision-unavailable'],
+    [['audience', 'set', 'team'], 'personal-binding-owner-only'],
+    [['audience', 'set', 'me,sensitive'], 'personal-binding-owner-only'],
     [['location', 'set', path.join(world.base, 'elsewhere')], 'personal-binding-decision-unavailable'],
   ]) {
     const result = await ari.command(argv)
