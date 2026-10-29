@@ -168,6 +168,11 @@ export const ENGINE_PRIMITIVES = Object.freeze({
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
+// The private-state location proof refused (assertLocation's own code): the state root itself is no longer proven
+// outside every root declared now. That is never one view's refusal: it stops the whole tick, so no later view goes
+// on writing under roots it can no longer trust. A view's own vault in a bad place keeps its own codes and stops
+// only that view.
+const isLocationRefusal = (error) => isTypedRefusal(error) && error.code === 'managed-root-unproven'
 // The code a view is refused with when its own vault cannot be placed: a typed refusal's, or `vault-location-unusable`
 // for a file-system error there (a file in the way, no permission, a read-only volume). Null for anything else, which
 // is a fault of the engine and stops the tick.
@@ -371,7 +376,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // A vault root that is gone (a folder under the data root the person removed, say) is looked for again too, so the
     // store made in its place says why rather than failing on the folder that is not there.
     if (cached?.signature === signature && fs.lstatSync(cached.store.vaultRoot, { throwIfNoEntry: false }) !== undefined) {
-      try { cached.store.checkAllocatedVault?.(); return cached.store } catch (error) { if (!isTypedRefusal(error)) throw error }
+      try { cached.store.checkAllocatedVault?.(); return cached.store } catch (error) { if (!isTypedRefusal(error) || isLocationRefusal(error)) throw error }
     }
     stores.delete(scope.scopeId)
     const store = seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId: scope.scopeId, repositoryRoots })
@@ -551,6 +556,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // A view whose own vault cannot be placed: a typed refusal's code and detail, or `vault-location-unusable` for a
     // file-system error there, whose code is its cause.
     const refuseViewAlone = (scopeId, error) => {
+      if (isLocationRefusal(error)) throw error
       const code = viewRefusalCode(error)
       if (code === null) throw error
       allocationRefusals.set(scopeId, code)
@@ -900,7 +906,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           profile: seams.profileFor({ project, workspaceId, audienceAllow: machine.audienceAllow }),
         }
       } catch (error) {
-        if (!isTypedRefusal(error)) throw error
+        if (!isTypedRefusal(error) || isLocationRefusal(error)) throw error
         for (const scopeId of attempt.keys()) { entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now)); noteRefusalCause(scopeId, error) }
         if (REREAD_CODES.has(error.code)) forceFull = true
         // The personal workspace refused the bound generation: the project is loaded again at the next tick, so a
@@ -1016,6 +1022,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
         } catch (error) {
           if (!isTypedRefusal(error)) { settle('stale', 'publisher-error'); persist(); throw error }
+          // Nothing more is recorded for any view: the tick stops and refuses as a whole.
+          if (isLocationRefusal(error)) throw error
           // A redaction refusal names the note and the rule it concerns, never the value.
           const where = error.code === 'redaction-failure' ? error.detail ?? {} : {}
           diagnostics = typeof where.rule === 'string' ? [{ code: error.code, rule: where.rule, ...(typeof where.notePath === 'string' ? { notePath: where.notePath } : {}), ...(typeof where.filePath === 'string' ? { filePath: where.filePath } : {}) }] : []

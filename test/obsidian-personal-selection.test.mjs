@@ -410,6 +410,34 @@ test('a manifest that encloses the state root while the app vault list is read a
   assert.deepEqual(releasedOnly(before, workspaceInventory(ari)), before, 'no allocation record, folder or freshness was written')
 })
 
+test('a location refusal while one view reads the app vault list stops the whole tick: no later view makes its recovery store', async (t) => {
+  const ari = makePerson(t)
+  ari.select()
+  const settingsAt = { workspaceRoot: workspaceStateRoot(ari.dataRoot, ari.workspaceId), workspaceId: ari.workspaceId }
+  const parent = path.join(ari.base, 'decided-vaults')
+  fs.mkdirSync(parent, { mode: 0o700 })
+  writeMachineSettings({ ...settingsAt, repositoryRoots: protectedRoots(ari.locate()), settings: withDecision(readMachineSettings(settingsAt), 'location', { parent }, { decidedAt: NOW, decidedBy: null, via: 'command' }) })
+  const first = ari.engine({ locateProject: ari.locate, readAppVaultList: () => ({ ok: true, vaults: {} }) })
+  assert.ok(everyView(await first.tick(), 'current'))
+  first.stop()
+  // One view's allocated folder is gone, so a new engine reads the app's list for it; the other views keep theirs.
+  const folders = fs.readdirSync(parent)
+  assert.ok(folders.length > 1, JSON.stringify(folders))
+  fs.rmSync(path.join(parent, folders.sort()[0]), { recursive: true })
+  let lost = false
+  const made = []
+  const production = createProductionSeams()
+  const engine = ari.engine({ locateProject: ari.locate,
+    readAppVaultList: () => { if (!lost) { lost = true; enclose(ari) } return { ok: true, vaults: {} } },
+    seams: { createRecoveryStore: (input) => { if (lost) made.push(input.scopeId); return production.createRecoveryStore(input) } } })
+  t.after(() => engine.stop())
+  const refused = await engine.tick()
+  assert.ok(lost, 'the vault list was read for the view whose folder is gone')
+  assert.equal(refused.state, 'refused', JSON.stringify(refused))
+  assert.equal(refused.refusal.code, 'managed-root-unproven')
+  assert.deepEqual(made, [], 'no view made its recovery store after the location refusal')
+})
+
 test('a manifest that encloses the state root during the publisher quiet period records no late writer, journal entry or pointer', async (t) => {
   const ari = makePerson(t)
   ari.select()

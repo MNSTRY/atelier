@@ -1416,8 +1416,11 @@ test reported as a pass.
   Each of these writers keeps its file inside the workspace's private state,
   but none checks the roots declared now. A manifest that comes to enclose the
   data root, or that cannot be read, while the service runs can therefore
-  receive these writes. The engine refuses each view at its next proof, and no
-  view is published or reported current after that. A single check of the declared
+  receive these writes. A refusal of the private state's own location
+  (`managed-root-unproven`) stops the whole tick, whichever view it is found
+  in: no later view is prepared, given a store or published, and no view is
+  reported current after it. A view whose own vault is in a bad place is still
+  refused alone. A single check of the declared
   roots at every private-state write is planned as a separate change.
 - Replacing a vault during a publication: the allocated folder is checked
   before the vault lock is taken and again once its folder is made, after the
