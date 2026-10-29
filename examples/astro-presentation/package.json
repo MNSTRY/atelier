@@ -9,7 +9,7 @@
     "@mnstry/atelier": "file:../.."
   },
   "devDependencies": {
-    "astro": "7.3.8"
+    "astro": "7.4.2"
   },
   "engines": {
     "node": ">=22.19.0 <23"
