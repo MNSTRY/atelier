@@ -1389,9 +1389,16 @@ test reported as a pass.
   repository the workspace declares now is proven when a project loads, around
   each engine phase, inside the engine and selection locks, and after each wait
   the publisher makes for the app, its list of vaults, its comparison of kept
-  notes or its quiet period. It is not proven again at every write, and it is
-  not proven at all for writes
-  made outside the engine's phases and the publisher. Those are:
+  notes or its quiet period. "Declares now" differs by binding. For a project
+  bound to a personal home, each proof reads the home's manifest again, so a
+  repository enrolled while a tick waits is seen at the next proof. For an
+  ordinary project, each proof uses the repositories of the project as it was
+  last loaded. A change to its configuration or overlay that declares a
+  repository enclosing the data root is not seen until the project is loaded
+  again, and the writes of the tick in flight (preserved edits, pending edits
+  and freshness, say) can land under it meanwhile. The proof is not made again
+  at every write, and it is not made at all for writes made outside the
+  engine's phases and the publisher. Those are:
   - the built-in proposal store's writes for pending edits to shared notes
     (kept bytes, arbitration records and its queue) while it works through
     several of them;
