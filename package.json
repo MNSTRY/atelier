@@ -195,7 +195,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "0.28.2",
-    "playwright": "1.55.1",
+    "playwright": "1.64.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "typescript": "5.8.3"
