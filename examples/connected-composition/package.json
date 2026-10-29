@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": { "build": "astro build" },
-  "devDependencies": { "astro": "7.3.2" },
+  "devDependencies": { "astro": "7.3.3" },
   "engines": { "node": ">=22.19.0 <23" }
 }
