@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createGraphViewReader, parseGraphView, serializeGraphView, assertGraphViewIntent, runGraphViewCommand } from '../src/graph-view/index.mjs'
-import { digestJson } from '../src/graph-view/contracts.mjs'
+import { canonicalJson, digestJson } from '../src/graph-view/contracts.mjs'
 
 const fixture = new URL('../fixtures/graph-view/synthetic-authorized-input.v1.json', import.meta.url)
 const input = () => JSON.parse(fs.readFileSync(fixture, 'utf8'))
@@ -25,7 +25,13 @@ test('same inputs and reversed table/set ordering produce identical canonical by
   for (const node of graph.nodes) node.tags.reverse()
   const b = await reader(graph).exportGraphView({ limit: 100 })
   assert.equal(a, b)
-  assert.equal(a, fs.readFileSync(new URL('../fixtures/graph-view/synthetic-view.v1.json', import.meta.url), 'utf8'))
+  const fixtureBytes = fs.readFileSync(new URL('../fixtures/graph-view/synthetic-view.v1.json', import.meta.url), 'utf8')
+  // Git may convert the transport fixture to CRLF on Windows. Its parsed
+  // payload/digest stay fixed; the normative serializer still emits JCS + LF.
+  const expected = `${canonicalJson(parseGraphView(fixtureBytes))}\n`
+  assert.equal(a, expected)
+  assert.equal(a, `${canonicalJson(parseGraphView(fixtureBytes.replace(/\r?\n/g, '\r\n')))}\n`)
+  assert.equal(a.includes('\r'), false)
   const view = parseGraphView(a)
   const { projectionDigest, ...payload } = view
   assert.equal(projectionDigest, digestJson(payload))
