@@ -99,6 +99,9 @@ test('structured graph task, semantics and lifecycle from the shared producer fi
     fs.writeFileSync(path.join(output, 'ax-tree.yml'), snapshot)
     await page.screenshot({ path: path.join(output, 'forced-colors.png'), fullPage: true })
     check('forced colors, reduced motion, accessibility tree structure')
+    await page.evaluate(view => window.binding.update({ view, refreshStatus: { stale: true, failure: 'synthetic-host-failure' } }), fixture)
+    assert((await page.locator('#root').innerText()).includes('displayed source view is stale'))
+    assert(!(await page.locator('#root').innerText()).includes('synthetic-host-failure'))
     const stale = { projectionDigest: 'sha256:' + '0'.repeat(64), ref: fixture.nodes[0].ref }
     await page.evaluate(({ view, selection }) => window.binding.update({ view, selection }), { view: fixture, selection: stale })
     assert((await inspector.innerText()).includes('Choose a question'))
