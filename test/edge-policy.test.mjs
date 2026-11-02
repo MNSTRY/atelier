@@ -180,3 +180,20 @@ test('port failures expose no hidden diagnostic text and never activate an edge'
   assert.deepEqual(result, { state: 'suspended', eligible: false, reason: 'verification-unavailable' })
   assert.equal(JSON.stringify(result).includes('sensitive'), false)
 })
+
+test('repository-scoped roles refuse conflicting endpoint stewards and undelegated shared stewards', async () => {
+  const sameRepo = fixture({ crossRepo: false }); sameRepo.accept()
+  sameRepo.host.resolveEndpoint = async (ref) => ({ ref, current: true, stewardId: ref.localId === 'record:a' ? 'steward-one' : 'steward-two' })
+  assert.equal((await sameRepo.evaluate()).reason, 'endpoint-steward-conflict')
+  const shared = fixture(); shared.accept()
+  shared.host.resolveEndpoint = async (ref) => ({ ref, current: true, stewardId: 'steward-one' })
+  assert.equal((await shared.evaluate()).reason, 'shared-steward-not-delegated')
+})
+
+test('grouping refuses decisions bound to different reader/source snapshots', async () => {
+  const a = fixture(), b = fixture({ supportId: 'support:two' }); a.accept(); b.accept()
+  b.host.bindingId = 'snapshot:synthetic:other-reader'
+  const first = await a.evaluate(), second = await b.evaluate()
+  assert.equal(first.eligible, true); assert.equal(second.eligible, true)
+  assert.throws(() => groupEligibleEdges([first, second]), /mixed edge decision bindings/)
+})

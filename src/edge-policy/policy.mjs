@@ -61,6 +61,9 @@ export async function evaluateEdge(input, host) {
     if (!semantic) return result(events.length ? fail('suspended', 'navigation-has-decisions') : { state: 'active', eligible: true, assurance: 'navigation' })
     if (!governed) return result({ state: 'active', eligible: true, assurance: 'source-declaration' })
     if (!record.proposalRef || !record.sourceChange || record.sourceChange.repoId !== record.home.repoId || record.sourceChange.path !== record.home.path) return result(fail('suspended', 'source-owner-handoff-missing'))
+    // Review roles in this adapter are repository-scoped. Conflicting resource
+    // stewards inside one repository cannot be collapsed into one approval.
+    if (!crossRepo && endpoints[0].stewardId !== endpoints[1].stewardId) return result(fail('suspended', 'endpoint-steward-conflict'))
     const required = [{ repoId: record.home.repoId, role: 'home-owner', actorId: home.actorId },
       ...[...new Map(endpoints.map((e) => [e.ref.repoId, { repoId: e.ref.repoId, role: 'endpoint-steward', actorId: e.stewardId }])).values()]]
     if (crossRepo && endpoints[0].stewardId === endpoints[1].stewardId && !policy.allowSharedSteward) return result(fail('suspended', 'shared-steward-not-delegated'))
@@ -105,9 +108,13 @@ export async function evaluateEdge(input, host) {
 // the same host snapshot. Preserve each complete assertion and its supports.
 export function groupEligibleEdges(results) {
   const groups = new Map()
+  let binding = null
   for (const result of results) {
     if (!decisions.has(result)) throw new Error('unverified edge decision')
     if (!result.eligible || result.state !== 'active') continue
+    const current = edgeDigest({ bindingId: result.verification.bindingId, policyDigest: result.policyDigest })
+    if (binding !== null && binding !== current) throw new Error('mixed edge decision bindings')
+    binding = current
     const key = edgeDigest({ family: result.family, triple: result.triple, qualifications: result.qualifications })
     const group = groups.get(key) ?? { groupId: `edge-group:${key.slice(7)}`, family: result.family, triple: result.triple, assertions: [] }
     if (group.assertions.some((a) => a.edgeId === result.edgeId && edgeDigest(a) !== edgeDigest(result))) throw new Error('conflicting edge decisions')

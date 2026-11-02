@@ -68,6 +68,9 @@ Decisions use `atelier-edge-decision@experimental-v1` with `recordDigest`,
 Approval roles are `{repoId,role:'home-owner'|'endpoint-steward'}`. The host
 binds each role to its current actor. One verified actor may approve several
 explicitly delegated roles, but a signature alone never creates that delegation.
+This adapter's roles are repository-scoped. Conflicting endpoint steward IDs
+inside one repository refuse instead of dropping one required review. A host
+with finer resource stewardship needs an explicitly admitted mapping before use.
 
 The chain begins with `propose`, followed by required `approve` decisions and
 `accept`. The adapter derives `draft`, `awaiting-endpoint-review`, `active`,
@@ -134,6 +137,7 @@ orders deterministically, refuses conflicting results and never merges families
 or qualifications. It only accepts evaluated results already authorized for one
 reader in one host snapshot. Group output is also owner/audit data; renderers
 consume bounded display edges, retaining distinct edge IDs for the same triple.
+The helper explicitly refuses mixed binding IDs or policy digests.
 
 ## Verification and integration limits
 
