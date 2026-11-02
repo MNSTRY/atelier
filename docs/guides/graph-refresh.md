@@ -22,8 +22,9 @@ proposal. The existing graph file cache supplies incremental source reuse.
 | `revalidate(binding,projection)` | Return exactly `true` only while this host-issued binding and every requested historical or current projection are still readable. `projection` is null before the build. Errors and other values refuse. It may be asynchronous. |
 | `stage({projection,generation,signal})` | Optional preparation of a complete host output, isolated from readers. Return `{commit,discard}`. It may be asynchronous. The default uses only the controller's in-memory pointer. |
 | `commit()` | Synchronously and atomically replace the host's current output. Never queue an asynchronous current write. A promise result is unsupported and refuses controller publication. |
-| `discard()` | Remove only this uncommitted staging output. It may be asynchronous. A cleanup failure remains visible. |
+| `discard()` | Idempotently remove only this uncommitted staging output. It may be asynchronous. Failure retains cleanup custody even after supersession, access loss or stop. |
 | `clear()` | Synchronously clear host reader caches, inspectors, selections, search results and renderer resources. A failure or promise result blocks accepting a replacement binding. |
+| `onCleanup(outcome)` | Optional trusted host notification `{cleanupId,state,code}` for resolved or failed staging cleanup. It carries no source, path, binding or raw exception and is never a reader event. |
 
 `setAccess({key,expiresAtMs,...privateHostState})` accepts a trusted host binding.
 The key binds principal, exact authorized repositories, grant revision and
@@ -44,6 +45,23 @@ generation fence. A final current access check and fence precede synchronous
 commit and pointer replacement without an intervening await. Partial builds,
 failed saves and obsolete generations never become the controller's current
 view. A conforming staging adapter is required for equivalent disk behavior.
+
+Cleanup custody is separate from publication and reader eligibility.
+`cleanupStatus()` returns sanitized host-only records with a `cleanupId` and
+`cleaning` or `failed` state. A failed discard retains its transaction handle;
+new builds and staging stop until the host resolves it with
+`await retryCleanup(cleanupId)`. Concurrent retries share the same operation.
+Success releases the handle and requests a fresh build if the host is running
+with current access. Rejection remains retained and notifies the host again.
+This bounds unresolved custody to one transaction without a retry daemon.
+
+The host must consume these operational outcomes and keep the controller until
+cleanup is resolved. Never serialize cleanup records into a reader response.
+Grant loss still purges private reader state immediately; resource custody does
+not authorize any old view delivery. `stop()` retains unresolved cleanup, and
+`await flush()` settles an already in-flight operation even after stop. Process
+restart recovery belongs to the staging adapter's existing resource journal;
+this controller does not add a persistent store or trust a saved projection.
 
 `read(digest?)` revalidates before returning a detached copy. A previous view is
 returned with `stale:true` after a source edit or failure, and `historical:true`

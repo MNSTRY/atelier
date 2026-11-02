@@ -12,9 +12,9 @@ const qualifiedKey = ref => ref && typeof ref.repoId === 'string' && ref.repoId 
 // the synchronous commit below may replace the published projection.
 export function createGraphRefresh({
   build, validate, revalidate, stage = () => ({ commit() {}, discard() {} }),
-  clear = () => {}, debounceMs = 40, historyLimit = 3, now = Date.now,
+  clear = () => {}, onCleanup = () => {}, debounceMs = 40, historyLimit = 3, now = Date.now,
 } = {}) {
-  for (const port of [build, validate, revalidate, stage, clear]) {
+  for (const port of [build, validate, revalidate, stage, clear, onCleanup]) {
     if (typeof port !== 'function') throw new TypeError('Graph refresh requires host ports')
   }
   if (!Number.isSafeInteger(debounceMs) || debounceMs < 0 || debounceMs > 60_000 ||
@@ -35,6 +35,32 @@ export function createGraphRefresh({
   let job = null
   let active = null
   const listeners = new Set()
+  // Host resource custody, separate from reader state. At most one unresolved
+  // transaction exists: a failure blocks further builds/staging until resolved.
+  const cleanupTasks = new Map()
+  let cleanupSequence = 0
+
+  function cleanupOutcome(entry, state) {
+    const outcome = Object.freeze({ cleanupId: entry.cleanupId, state, code: state === 'failed' ? 'stage-cleanup-failed' : null })
+    try { onCleanup(outcome)?.catch?.(() => {}) } catch { /* retained status remains available to the host */ }
+  }
+
+  function discard(entry) {
+    if (entry.inFlight) return entry.inFlight
+    entry.state = 'cleaning'
+    // Defer invocation so even a synchronous rejection settles after custody
+    // and the shared in-flight promise have been installed.
+    entry.inFlight = Promise.resolve().then(() => entry.transaction.discard()).then(() => {
+      cleanupTasks.delete(entry.cleanupId)
+      cleanupOutcome(entry, 'resolved')
+      return true
+    }, () => {
+      entry.state = 'failed'
+      cleanupOutcome(entry, 'failed')
+      return false
+    }).finally(() => { entry.inFlight = null })
+    return entry.inFlight
+  }
 
   function status() {
     expire()
@@ -101,6 +127,12 @@ export function createGraphRefresh({
     let committed = false
     try {
       if (!eligible(expectedGeneration, expectedBinding)) return
+      if (cleanupTasks.size) {
+        phase = 'failed'
+        failure = 'stage-cleanup-pending'
+        emit('state')
+        return
+      }
       phase = 'building'
       failure = null
       emit('state')
@@ -156,8 +188,10 @@ export function createGraphRefresh({
       }
     } finally {
       if (!committed && transaction && typeof transaction.discard === 'function') {
-        try { await transaction.discard() } catch {
-          if (eligible(expectedGeneration, expectedBinding)) { phase = 'failed'; failure = 'stage-cleanup-failed'; emit('state') }
+        const entry = { cleanupId: `cleanup-${++cleanupSequence}`, transaction, state: 'cleaning', inFlight: null }
+        cleanupTasks.set(entry.cleanupId, entry)
+        if (!(await discard(entry)) && eligible(expectedGeneration, expectedBinding)) {
+          phase = 'failed'; failure = 'stage-cleanup-failed'; emit('state')
         }
       }
       if (active === controller) active = null
@@ -238,6 +272,18 @@ export function createGraphRefresh({
     invalidate,
     read,
     status,
+    // Trusted host-only resource APIs. Never serialize these into a reader
+    // response; they carry no projection, binding, path, or raw exception.
+    cleanupStatus() { return [...cleanupTasks.values()].map(entry => ({ cleanupId: entry.cleanupId, state: entry.state })) },
+    async retryCleanup(cleanupId) {
+      const entry = cleanupTasks.get(cleanupId)
+      if (!entry) return false
+      if (entry.inFlight) await entry.inFlight
+      if (!cleanupTasks.has(cleanupId)) return true
+      const resolved = await discard(entry)
+      if (resolved && running && binding && cleanupTasks.size === 0) invalidate()
+      return resolved
+    },
     async select(ref, digest) {
       const result = await read()
       if (!result.projection || result.generation !== generation || result.stale || digest !== current?.projection.projectionDigest ||
@@ -262,7 +308,7 @@ export function createGraphRefresh({
     async flush() {
       clearTimeout(timer)
       timer = null
-      while (running && (job || pending)) {
+      while (job || (running && pending)) {
         if (!job) launch()
         if (job) await job
         else break
