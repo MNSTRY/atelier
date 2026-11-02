@@ -22,8 +22,8 @@ test('structured graph task, semantics and lifecycle from the shared producer fi
   const output = path.resolve(process.env.ATELIER_STRUCTURED_PROOF_OUTPUT ?? path.join(root, 'output/playwright/graph-structured'))
   fs.mkdirSync(output, { recursive: true })
   const bundle = await build({ stdin: { contents: `import {mountStructuredGraphView} from './src/graph-view/structured/browser.mjs';
-    window.start=(view)=>{window.binding?.destroy();window.view=structuredClone(view);window.intents=[];
-      window.binding=mountStructuredGraphView(document.querySelector('#root'),{view,onIntent:async intent=>{
+    window.start=(view)=>{window.binding?.destroy();window.view=structuredClone(view);window.intents=[];window.pages=[];
+      window.binding=mountStructuredGraphView(document.querySelector('#root'),{view,onPage:request=>window.pages.push(request),onIntent:async intent=>{
         window.intents.push(intent);if(window.reject)throw new Error('fixture delivery refused');
         if(window.delay){await new Promise(resolve=>window.release=resolve);return;}
         if(intent.type!=='expand'){const {type,...selection}=intent;window.binding.update({view:window.view,selection});}
@@ -114,7 +114,14 @@ test('structured graph task, semantics and lifecycle from the shared producer fi
     await page.evaluate(({ view, selection }) => window.binding.update({ view, selection }), { view: fixture, selection: unavailable })
     assert(!(await page.locator('#root').innerText()).includes('unavailable-synthetic-ref'))
     check('stale and unavailable selections reveal no placeholder')
-    await page.evaluate(() => window.binding.clear())
+    const pagedView = structuredClone(fixture); pagedView.page.nextCursor = 'synthetic-next-cursor'; pagedView.page.truncated = true
+    await page.evaluate(f => window.start(f), pagedView)
+    await page.getByRole('button', { name: 'Load next page', exact: true }).click()
+    assert.equal(await page.evaluate(() => window.pages.length), 1)
+    await page.evaluate(() => window.oldNext = document.querySelector('[data-agv-key=next-page]'))
+    await page.evaluate(() => { window.binding.clear(); window.oldNext.click() })
+    assert.equal(await page.evaluate(() => window.pages.length), 1)
+    check('page requests stop after delivery withdrawal')
     assert.equal(await page.getByRole('button').count(), 0)
     assert(!(await page.locator('#root').innerText()).includes('synthetic:garden'))
     await page.evaluate(f => window.start(f), fixture)
