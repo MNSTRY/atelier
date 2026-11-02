@@ -34,7 +34,7 @@ any bytes, counts, diagnostics, source references or cursors reach the browser.
 one qualified `ref` or `edgeId`; `openEvidence` with an `evidenceId`;
 `setQuestion` with a `questionId`; and `expand` with a qualified `ref` and
 `direction` of `in`, `out` or `both`. Qualified refs use `{repoId, localId}`.
-The host revalidates current grants and source before handling an intent.
+The component uses the producer's browser-safe intent validator. The host revalidates current grants and source before handling an intent.
 Selection is controlled by `update`; a request never optimistically accepts an
 assertion or changes source. Focus and selection are separate. Keyboard arrows,
 Home and End move list focus; Enter or Space requests selection.
