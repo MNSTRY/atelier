@@ -83,6 +83,7 @@ test('trusted loader controls universe; caller readerScope and arbitrary metadat
   const host = reader(graph)
   const bytes = await host.exportGraphView()
   assert.doesNotMatch(bytes, /SHOULD-NOT-LEAVE/)
+  await fails(host.readGraphView({ ext: { readerScope: ['synthetic:workshop'] } }), 'contract_mismatch')
   await fails(host.readGraphView({ readerScope: ['synthetic:workshop'] }), 'contract_mismatch')
   await fails(host.readGraphView({ focusRef: { repoId: 'not-present', localId: 'guessed' } }), 'unavailable')
   await fails(host.readGraphView({ focusRef: { repoId: 'synthetic:garden', localId: 'missing' } }), 'unavailable')

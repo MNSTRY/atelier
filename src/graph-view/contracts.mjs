@@ -34,7 +34,7 @@ export function projectShape(name, value) {
     if (shape.$ref) return visit(schema.$defs[shape.$ref.split('/').at(-1)], input)
     if (shape.type === 'object' && input && typeof input === 'object' && !Array.isArray(input)) {
       const result = {}
-      for (const [key, child] of Object.entries(shape.properties)) {
+      for (const [key, child] of Object.entries(shape.properties ?? {})) {
         if (Object.hasOwn(input, key)) result[key] = visit(child, input[key])
       }
       return result
