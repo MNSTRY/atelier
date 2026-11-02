@@ -186,3 +186,12 @@ test('transport parser refuses altered digests, dangling endpoints and false ret
     assert.throws(() => parseGraphView(JSON.stringify(view)), { code: 'contract_mismatch' })
   }
 })
+
+test('exact cited-byte digest survives the source occurrence projection', async () => {
+  const graph = input(), rangeDigest = `sha256:${'a'.repeat(64)}`
+  graph.evidence[0].sourceRef.locator.rangeDigest = rangeDigest
+  const view = await reader(graph).readGraphView()
+  assert.equal(view.evidence.find(item => item.evidenceId === graph.evidence[0].evidenceId).sourceRef.locator.rangeDigest, rangeDigest)
+  delete graph.evidence[0].sourceRef.locator.range
+  await fails(reader(graph).readGraphView(), 'contract_mismatch')
+})

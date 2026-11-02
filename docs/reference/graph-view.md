@@ -49,7 +49,8 @@ with the same local identifier remain distinct. A source pointer is
 digest, including dirty bytes; `digest` is the file's raw-byte digest. Both are
 `sha256:` followed by 64 lowercase hex digits. A locator retains the source owner's
 `pointer`, half-open `range`, and/or `targetRange`; ranges preserve text offsets and
-optional raw-byte offsets. No passage or full body is included.
+optional raw-byte offsets. Optional `rangeDigest` preserves the source producer's
+digest of the exact raw byte slice in `locator.range`. No passage or full body is included.
 
 `sourceSnapshot.repositories` preserves each delivered source snapshot's repo id,
 HEAD, tree, dirty observation, scope and full snapshot digest. Its file list contains
