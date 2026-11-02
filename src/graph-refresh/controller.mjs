@@ -210,7 +210,7 @@ export function createGraphRefresh({
     }
     // A source-only edit may happen while access is checked: label that view
     // stale. Access changes and stop purge the captured entry altogether.
-    return { ...status(), stale: entry.generation !== generation, projection: clone(entry.projection), selectedRef: clone(selectedRef), historical: entry !== current }
+    return { ...status(), stale: entry.generation !== generation, projection: clone(entry.projection), selectedRef: entry === current ? clone(selectedRef) : null, historical: entry !== current }
   }
 
   return {

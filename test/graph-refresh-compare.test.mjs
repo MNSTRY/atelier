@@ -41,6 +41,25 @@ test('changed question alone is reported even without source or topology change'
   assert.deepEqual(compareGraphSnapshots(before, seal(after)).possibleImpact.questionIds, ['question-1'])
 })
 
+test('changed contradictory evidence affects its question without a navigation path', () => {
+  const before = view(1), after = view(2)
+  for (const snapshot of [before, after]) {
+    snapshot.questions[0].nodeRefs = []
+    snapshot.questions[0].evidenceRefs = []
+    snapshot.questions[0].contradictingRefs = ['evidence-a']
+  }
+  assert.deepEqual(compareGraphSnapshots(seal(before), seal(after)).possibleImpact.questionIds, ['question-1'])
+})
+
+test('source manifests compare qualified file pins even beyond the displayed neighborhood', () => {
+  const before = view(), after = view()
+  before.sourceSnapshot.repositories = [{ repoId: 'repo-a', digest: 'repo-snapshot', files: [{ path: 'notes/other.md', rawDigest: 'old-bytes', byteLength: 3 }] }]
+  after.sourceSnapshot.repositories = [{ repoId: 'repo-a', digest: 'repo-snapshot', files: [{ path: 'notes/other.md', rawDigest: 'new-bytes', byteLength: 3 }] }]
+  const result = compareGraphSnapshots(seal(before), seal(after))
+  assert.deepEqual(result.sources.changed, [{ repoId: 'repo-a', path: 'notes/other.md' }])
+  assert.deepEqual(result.possibleImpact.questionIds, [])
+})
+
 test('different principals, grants, expiry, repo sets, policy or query filters refuse comparison', () => {
   for (const [field, value] of Object.entries({ proofRef: 'other-reader', grantRevision: 'grant-2', expiresAt: '2100-01-01T00:00:00Z', authorizedRepoIds: ['repo-a'], policyRevision: 'policy-2', filter: { depth: 2 } })) {
     const after = view()
