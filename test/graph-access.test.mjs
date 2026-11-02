@@ -314,3 +314,22 @@ test('synchronous revocation while delivery revalidation is awaiting cannot retu
   await assert.rejects(delivering, GraphAccessRefusal)
   assert.equal(await f.access.revalidate(result.binding), false)
 })
+
+test('source occurrence range digests survive the authorized evidence projection', async () => {
+  const f = fixture([A])
+  f.data.get(A).evidence[0].sourceRef.locator.rangeDigest = digest('synthetic verified raw range')
+  f.repin()
+  const { graph } = await f.access.loadAuthorizedGraph({})
+  assert.equal(graph.completeness, 'complete')
+  assert.equal(graph.evidence[0].sourceRef.locator.rangeDigest, digest('synthetic verified raw range'))
+})
+
+test('invalid, orphaned or out-of-bounds range digests make the approved source incomplete', async () => {
+  for (const locator of [{ rangeDigest: digest('range') }, { range: { start: 0, end: 4, byteStart: 0, byteEnd: 4 }, rangeDigest: 'not-a-digest' }, { range: { start: 0, end: 4, byteStart: 0, byteEnd: 100 }, rangeDigest: digest('range') }]) {
+    const f = fixture([A]); f.data.get(A).evidence[0].sourceRef.locator = locator; f.repin()
+    const { graph } = await f.access.loadAuthorizedGraph({})
+    assert.equal(graph.completeness, 'incomplete')
+    assert.equal(graph.evidence.length, 0)
+    assert.equal(graph.edges.length, 0)
+  }
+})
