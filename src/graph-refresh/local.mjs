@@ -18,7 +18,6 @@ export function createLocalGraphRefresh({ roots, watcherFactory, reconcileMs = 3
   let watchState = 'stopped'
   let started = false
   let resourceEpoch = 0
-  const watch = watcherFactory ?? createFsWatcherFactory({ onUnavailable() { watchState = 'unavailable' } })
 
   function stopResources() {
     resourceEpoch += 1
@@ -33,8 +32,10 @@ export function createLocalGraphRefresh({ roots, watcherFactory, reconcileMs = 3
     if (!started || watcher || interval || ['denied', 'stopped'].includes(controller.status().phase)) return
     watchState = 'watching'
     const epoch = resourceEpoch
+    const onUnavailable = () => { if (started && epoch === resourceEpoch) watchState = 'unavailable' }
+    const watch = watcherFactory ?? createFsWatcherFactory({ onUnavailable })
     try {
-      watcher = watch({ roots: authorizedRoots, onEvent() { if (started && epoch === resourceEpoch) controller.invalidate() } })
+      watcher = watch({ roots: authorizedRoots, onEvent() { if (started && epoch === resourceEpoch) controller.invalidate() }, onUnavailable })
       if (!watcher || typeof watcher.close !== 'function') throw new Error('watcher unavailable')
     } catch { watchState = 'unavailable' }
     interval = setInterval(() => {
