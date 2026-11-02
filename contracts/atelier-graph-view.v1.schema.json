@@ -164,6 +164,9 @@
         },
         "targetRange": {
           "$ref": "#/$defs/range"
+        },
+        "rangeDigest": {
+          "$ref": "#/$defs/digest"
         }
       }
     },

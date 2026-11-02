@@ -66,6 +66,7 @@ function normalize(raw) {
   const evidence = new Map(graph.evidence.map(item => [item.evidenceId, item]))
   const checkSource = (source, verified = true) => {
     assertRelativePath(source.path)
+    if (source.locator?.rangeDigest && !source.locator.range) refuse('contract_mismatch')
     for (const range of [source.locator?.range, source.locator?.targetRange].filter(Boolean)) {
       if (range.end < range.start || (range.byteStart === undefined) !== (range.byteEnd === undefined) || (range.byteStart !== undefined && range.byteEnd < range.byteStart)) refuse('contract_mismatch')
     }
