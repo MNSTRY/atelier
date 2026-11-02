@@ -1,7 +1,8 @@
 import { structuredStyles } from './styles.mjs'
+import { refKey } from '../refs.mjs'
+import { assertGraphViewIntent } from '../intents.mjs'
 
 const sameRef = (a, b) => Boolean(a && b && a.repoId === b.repoId && a.localId === b.localId)
-const refKey = ref => JSON.stringify([ref.repoId, ref.localId])
 const refText = ref => `${ref.repoId} / ${ref.localId}`
 const locatorText = locator => Object.entries(locator).map(([key, value]) => `${key}: ${typeof value === 'object' ? Object.entries(value).map(([name, number]) => `${name}=${number}`).join(', ') : value}`).join('; ')
 const mounts = new WeakSet()
@@ -47,7 +48,7 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
     const digest = current.projectionDigest, revision = epoch, id = ++request
     ui.status.textContent = 'Selection request sent. Awaiting host.'
     try {
-      await onIntent(Object.freeze({ ...intent, ...(intent.ref ? { ref: Object.freeze({ ...intent.ref }) } : {}), projectionDigest: digest }))
+      await onIntent(assertGraphViewIntent(current, { ...intent, projectionDigest: digest }))
       if (!disposed && epoch === revision && id === request) ui.status.textContent = 'Request delivered.'
     } catch {
       if (!disposed && epoch === revision && id === request) ui.status.textContent = 'Request failed. Try again.'
