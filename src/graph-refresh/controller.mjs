@@ -188,7 +188,7 @@ export function createGraphRefresh({
       }
     } finally {
       if (!committed && transaction && typeof transaction.discard === 'function') {
-        const entry = { cleanupId: `cleanup-${++cleanupSequence}`, transaction, state: 'cleaning', inFlight: null }
+        const entry = { cleanupId: `cleanup-${++cleanupSequence}`, transaction, state: 'cleaning', inFlight: null, retryInFlight: null }
         cleanupTasks.set(entry.cleanupId, entry)
         if (!(await discard(entry)) && eligible(expectedGeneration, expectedBinding)) {
           phase = 'failed'; failure = 'stage-cleanup-failed'; emit('state')
@@ -278,11 +278,16 @@ export function createGraphRefresh({
     async retryCleanup(cleanupId) {
       const entry = cleanupTasks.get(cleanupId)
       if (!entry) return false
-      if (entry.inFlight) await entry.inFlight
-      if (!cleanupTasks.has(cleanupId)) return true
-      const resolved = await discard(entry)
-      if (resolved && running && binding && cleanupTasks.size === 0) invalidate()
-      return resolved
+      // Share the complete host retry, including its failure result and the
+      // single rebuild request. A failed shared attempt needs a new host call.
+      if (!entry.retryInFlight) {
+        entry.retryInFlight = (async () => {
+          const resolved = await discard(entry)
+          if (resolved && running && binding && cleanupTasks.size === 0) invalidate()
+          return resolved
+        })().finally(() => { entry.retryInFlight = null })
+      }
+      return entry.retryInFlight
     },
     async select(ref, digest) {
       const result = await read()
