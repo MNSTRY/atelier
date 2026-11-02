@@ -253,3 +253,45 @@ for (const retirement of ['source supersession', 'access replacement', 'stop']) 
     assert.equal(outcomes.at(-1).state, 'resolved')
   })
 }
+
+for (const laterAttemptWouldSucceed of [false, true]) {
+  test(`overlapping rejected cleanup retries share one result even when another attempt would ${laterAttemptWouldSucceed ? 'succeed' : 'fail'}`, async t => {
+    const entered = deferred(), release = deferred(), outcomes = []
+    let builds = 0, discardCalls = 0, recover = false
+    const refresh = host(t, {
+      build() { builds += 1; return view(builds) },
+      onCleanup: outcome => outcomes.push(outcome),
+      stage() {
+        return {
+          commit() { if (builds === 1) throw new Error('save refused') },
+          async discard() {
+            discardCalls += 1
+            if (discardCalls === 1) throw new Error('initial cleanup refused')
+            if (discardCalls === 2) { entered.resolve(); await release.promise; throw new Error('retry refused') }
+            if (!recover && !laterAttemptWouldSucceed) throw new Error('cleanup still refused')
+          },
+        }
+      },
+    })
+    await refresh.flush()
+    const [cleanup] = refresh.cleanupStatus()
+    const first = refresh.retryCleanup(cleanup.cleanupId)
+    await entered.promise
+    const second = refresh.retryCleanup(cleanup.cleanupId)
+    release.resolve()
+    assert.deepEqual(await Promise.all([first, second]), [false, false])
+    assert.equal(discardCalls, 2, 'overlapping callers must not start a successor attempt after shared failure')
+    assert.equal(outcomes.filter(outcome => outcome.state === 'failed').length, 2)
+    assert.deepEqual(refresh.cleanupStatus(), [{ cleanupId: cleanup.cleanupId, state: 'failed' }])
+    await refresh.flush()
+    assert.equal(builds, 1, 'a rejected retry cannot release the staging barrier or request rebuilding')
+    recover = true
+    assert.equal(await refresh.retryCleanup(cleanup.cleanupId), true)
+    await refresh.flush()
+    assert.equal(discardCalls, 3)
+    assert.deepEqual(refresh.cleanupStatus(), [])
+    assert.equal(builds, 2)
+    assert.equal(refresh.status().phase, 'current')
+    assert.equal(outcomes.at(-1).state, 'resolved')
+  })
+}

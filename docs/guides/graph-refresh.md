@@ -50,7 +50,9 @@ Cleanup custody is separate from publication and reader eligibility.
 `cleanupStatus()` returns sanitized host-only records with a `cleanupId` and
 `cleaning` or `failed` state. A failed discard retains its transaction handle;
 new builds and staging stop until the host resolves it with
-`await retryCleanup(cleanupId)`. Concurrent retries share the same operation.
+`await retryCleanup(cleanupId)`. Concurrent retries share the complete operation
+and its result, including a rejection. A failed attempt requires a separate host
+call to retry; a waiting caller never starts another attempt automatically.
 Success releases the handle and requests a fresh build if the host is running
 with current access. Rejection remains retained and notifies the host again.
 This bounds unresolved custody to one transaction without a retry daemon.
