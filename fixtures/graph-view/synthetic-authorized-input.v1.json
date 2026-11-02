@@ -1,0 +1,437 @@
+{
+  "producerVersion": "0.2.0-alpha.15+synthetic-graph-view",
+  "completeness": "complete",
+  "sourceSnapshot": {
+    "repositories": [
+      {
+        "repoId": "synthetic:garden",
+        "head": "1111111111111111111111111111111111111111",
+        "tree": "3333333333333333333333333333333333333333",
+        "dirty": false,
+        "scope": {
+          "base": "",
+          "include": null,
+          "exclude": null
+        },
+        "files": [
+          {
+            "path": "content/counterexample.md",
+            "rawDigest": "sha256:e7662a31a5f67ed5043b3e82bddab867e8e6e0d91bfbc1ad7fe29ea4af1d29e3",
+            "byteLength": 64
+          },
+          {
+            "path": "content/observation.md",
+            "rawDigest": "sha256:06ed304c28bd2698268cfa48628caa5db7db83256909c4f6d0cd73fd8579e423",
+            "byteLength": 70
+          },
+          {
+            "path": "content/trial.md",
+            "rawDigest": "sha256:d28e14da89ff1d5bc422c3402e8ceb0ce3853f39452a2e424769c7f5a5c77a7f",
+            "byteLength": 54
+          }
+        ],
+        "digest": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "inputs": {
+          "config": null,
+          "plan": null
+        }
+      },
+      {
+        "repoId": "synthetic:workshop",
+        "head": "2222222222222222222222222222222222222222",
+        "tree": "4444444444444444444444444444444444444444",
+        "dirty": false,
+        "scope": {
+          "base": "",
+          "include": null,
+          "exclude": null
+        },
+        "files": [
+          {
+            "path": "content/observation.md",
+            "rawDigest": "sha256:384baef02239aa85715b0946ea2beb1664428771fb261d50e0d1cb7fc7ac440a",
+            "byteLength": 68
+          }
+        ],
+        "digest": "sha256:4440838eba940cd70177eba5078a368596e67af183d7745f9f012b2ef2b623fe",
+        "inputs": {
+          "config": null,
+          "plan": null
+        }
+      }
+    ]
+  },
+  "accessContext": {
+    "proofRef": "synthetic-only-not-an-access-grant",
+    "authorizedRepoIds": [
+      "synthetic:garden",
+      "synthetic:workshop"
+    ],
+    "grantRevision": "synthetic-grant-r1",
+    "policyRevision": "synthetic-policy-r1",
+    "expiresAt": "2031-01-01T00:00:00Z",
+    "filter": "synthetic-fixture"
+  },
+  "nodes": [
+    {
+      "ref": {
+        "repoId": "synthetic:garden",
+        "localId": "trial"
+      },
+      "sourceKind": "document",
+      "title": "Trial outline",
+      "summary": "One small trial needs two observations.",
+      "classification": "classified",
+      "lifecycle": "active",
+      "tags": [
+        "synthetic",
+        "concept:trial"
+      ],
+      "sourceRef": {
+        "repoId": "synthetic:garden",
+        "path": "content/trial.md",
+        "revision": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "digest": "sha256:d28e14da89ff1d5bc422c3402e8ceb0ce3853f39452a2e424769c7f5a5c77a7f"
+      },
+      "displayEligible": true
+    },
+    {
+      "ref": {
+        "repoId": "synthetic:garden",
+        "localId": "observation"
+      },
+      "sourceKind": "evidence",
+      "title": "First observation",
+      "summary": "A single observation supports continuing carefully.",
+      "classification": "classified",
+      "lifecycle": "active",
+      "tags": [
+        "synthetic",
+        "concept:trial"
+      ],
+      "sourceRef": {
+        "repoId": "synthetic:garden",
+        "path": "content/observation.md",
+        "revision": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "digest": "sha256:06ed304c28bd2698268cfa48628caa5db7db83256909c4f6d0cd73fd8579e423"
+      },
+      "displayEligible": true
+    },
+    {
+      "ref": {
+        "repoId": "synthetic:garden",
+        "localId": "counterexample"
+      },
+      "sourceKind": "evidence",
+      "title": "Counterexample",
+      "summary": "The alternate setting did not repeat the result.",
+      "classification": "classified",
+      "lifecycle": "active",
+      "tags": [
+        "synthetic",
+        "concept:trial"
+      ],
+      "sourceRef": {
+        "repoId": "synthetic:garden",
+        "path": "content/counterexample.md",
+        "revision": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "digest": "sha256:e7662a31a5f67ed5043b3e82bddab867e8e6e0d91bfbc1ad7fe29ea4af1d29e3"
+      },
+      "displayEligible": true
+    },
+    {
+      "ref": {
+        "repoId": "synthetic:workshop",
+        "localId": "observation"
+      },
+      "sourceKind": "evidence",
+      "title": "Second observation",
+      "summary": "A separate source has the same local identifier.",
+      "classification": "classified",
+      "lifecycle": "active",
+      "tags": [
+        "synthetic",
+        "concept:trial"
+      ],
+      "sourceRef": {
+        "repoId": "synthetic:workshop",
+        "path": "content/observation.md",
+        "revision": "sha256:4440838eba940cd70177eba5078a368596e67af183d7745f9f012b2ef2b623fe",
+        "digest": "sha256:384baef02239aa85715b0946ea2beb1664428771fb261d50e0d1cb7fc7ac440a"
+      },
+      "displayEligible": true
+    }
+  ],
+  "edges": [
+    {
+      "edgeId": "synthetic-edge-0",
+      "source": {
+        "repoId": "synthetic:garden",
+        "localId": "trial"
+      },
+      "target": {
+        "repoId": "synthetic:garden",
+        "localId": "observation"
+      },
+      "predicate": "supports",
+      "family": "source-declaration",
+      "acceptanceState": "active",
+      "assurance": "source-declaration",
+      "supportRefs": [
+        "synthetic-evidence-0"
+      ],
+      "reviewRefs": [],
+      "sourceRef": "synthetic-evidence-0",
+      "recordDigest": "sha256:bfb01fc86aa35a784161a485c28afa3dec85a716e731ee144926be44a22eaf77",
+      "policyDigest": "sha256:020d7bf97d02339fdbea3b0dd783d600dbe12ff3bcf27a4ddca7728299944ae4",
+      "verification": {
+        "checkedAt": "2030-01-01T00:00:00Z"
+      },
+      "qualifications": []
+    },
+    {
+      "edgeId": "synthetic-edge-1",
+      "source": {
+        "repoId": "synthetic:garden",
+        "localId": "trial"
+      },
+      "target": {
+        "repoId": "synthetic:garden",
+        "localId": "observation"
+      },
+      "predicate": "supports",
+      "family": "source-declaration",
+      "acceptanceState": "active",
+      "assurance": "source-declaration",
+      "supportRefs": [
+        "synthetic-evidence-repeat"
+      ],
+      "reviewRefs": [],
+      "sourceRef": "synthetic-evidence-repeat",
+      "recordDigest": "sha256:df594d71a145abdc3d2b8d6c6fa910dd4bb21f63de731ecd11fe97b6ff6ce691",
+      "policyDigest": "sha256:020d7bf97d02339fdbea3b0dd783d600dbe12ff3bcf27a4ddca7728299944ae4",
+      "verification": {
+        "checkedAt": "2030-01-01T00:00:00Z"
+      },
+      "qualifications": []
+    },
+    {
+      "edgeId": "synthetic-edge-2",
+      "source": {
+        "repoId": "synthetic:garden",
+        "localId": "counterexample"
+      },
+      "target": {
+        "repoId": "synthetic:garden",
+        "localId": "trial"
+      },
+      "predicate": "contradicts",
+      "family": "source-declaration",
+      "acceptanceState": "active",
+      "assurance": "source-declaration",
+      "supportRefs": [
+        "synthetic-evidence-2"
+      ],
+      "reviewRefs": [],
+      "sourceRef": "synthetic-evidence-2",
+      "recordDigest": "sha256:a5daf75309e66ad7df3c4d53c016403fc60f72e0d9f92900ba008306a818de64",
+      "policyDigest": "sha256:020d7bf97d02339fdbea3b0dd783d600dbe12ff3bcf27a4ddca7728299944ae4",
+      "verification": {
+        "checkedAt": "2030-01-01T00:00:00Z"
+      },
+      "qualifications": []
+    },
+    {
+      "edgeId": "synthetic-edge-3",
+      "source": {
+        "repoId": "synthetic:garden",
+        "localId": "observation"
+      },
+      "target": {
+        "repoId": "synthetic:garden",
+        "localId": "counterexample"
+      },
+      "predicate": "links_to",
+      "family": "hyperlink",
+      "acceptanceState": "active",
+      "assurance": "navigation",
+      "supportRefs": [
+        "synthetic-evidence-1"
+      ],
+      "reviewRefs": [],
+      "sourceRef": "synthetic-evidence-1",
+      "recordDigest": "sha256:ec85738f376e8fcc961365327c5a7524d802aadc4ac349cb0c1f6055a73d0943",
+      "policyDigest": "sha256:020d7bf97d02339fdbea3b0dd783d600dbe12ff3bcf27a4ddca7728299944ae4",
+      "verification": {
+        "checkedAt": "2030-01-01T00:00:00Z"
+      },
+      "qualifications": []
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "synthetic-evidence-0",
+      "sourceRef": {
+        "repoId": "synthetic:garden",
+        "path": "content/trial.md",
+        "revision": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "digest": "sha256:d28e14da89ff1d5bc422c3402e8ceb0ce3853f39452a2e424769c7f5a5c77a7f",
+        "locator": {
+          "range": {
+            "start": 0,
+            "end": 4,
+            "byteStart": 0,
+            "byteEnd": 4
+          }
+        }
+      },
+      "verification": "verified-source"
+    },
+    {
+      "evidenceId": "synthetic-evidence-1",
+      "sourceRef": {
+        "repoId": "synthetic:garden",
+        "path": "content/observation.md",
+        "revision": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "digest": "sha256:06ed304c28bd2698268cfa48628caa5db7db83256909c4f6d0cd73fd8579e423",
+        "locator": {
+          "range": {
+            "start": 0,
+            "end": 4,
+            "byteStart": 0,
+            "byteEnd": 4
+          }
+        }
+      },
+      "verification": "verified-source"
+    },
+    {
+      "evidenceId": "synthetic-evidence-2",
+      "sourceRef": {
+        "repoId": "synthetic:garden",
+        "path": "content/counterexample.md",
+        "revision": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "digest": "sha256:e7662a31a5f67ed5043b3e82bddab867e8e6e0d91bfbc1ad7fe29ea4af1d29e3",
+        "locator": {
+          "range": {
+            "start": 0,
+            "end": 4,
+            "byteStart": 0,
+            "byteEnd": 4
+          }
+        }
+      },
+      "verification": "verified-source"
+    },
+    {
+      "evidenceId": "synthetic-evidence-3",
+      "sourceRef": {
+        "repoId": "synthetic:workshop",
+        "path": "content/observation.md",
+        "revision": "sha256:4440838eba940cd70177eba5078a368596e67af183d7745f9f012b2ef2b623fe",
+        "digest": "sha256:384baef02239aa85715b0946ea2beb1664428771fb261d50e0d1cb7fc7ac440a",
+        "locator": {
+          "range": {
+            "start": 0,
+            "end": 4,
+            "byteStart": 0,
+            "byteEnd": 4
+          }
+        }
+      },
+      "verification": "verified-source"
+    },
+    {
+      "evidenceId": "synthetic-evidence-repeat",
+      "sourceRef": {
+        "repoId": "synthetic:garden",
+        "path": "content/trial.md",
+        "revision": "sha256:f3c72ec37d8d8fe01ef00e218c2dfcd46ffbf9cdb35dd568b335c3561ea04c98",
+        "digest": "sha256:d28e14da89ff1d5bc422c3402e8ceb0ce3853f39452a2e424769c7f5a5c77a7f",
+        "locator": {
+          "pointer": "/kg/relations/supports/1"
+        }
+      },
+      "verification": "verified-source"
+    }
+  ],
+  "questions": [
+    {
+      "questionId": "synthetic-question-1",
+      "title": "Which trial needs more evidence?",
+      "decision": "Choose the next observation before continuing the trial.",
+      "nodeRefs": [
+        {
+          "repoId": "synthetic:garden",
+          "localId": "trial"
+        },
+        {
+          "repoId": "synthetic:garden",
+          "localId": "observation"
+        },
+        {
+          "repoId": "synthetic:garden",
+          "localId": "counterexample"
+        }
+      ],
+      "evidenceRefs": [
+        "synthetic-evidence-0",
+        "synthetic-evidence-1"
+      ],
+      "contradictingRefs": [
+        "synthetic-evidence-2"
+      ],
+      "coverage": "partial",
+      "omissionState": "none",
+      "gaps": [
+        "The sources do not establish repeatability."
+      ]
+    },
+    {
+      "questionId": "synthetic-question-unknown",
+      "title": "Will the trial work next year?",
+      "decision": "Abstain until later observations exist.",
+      "nodeRefs": [],
+      "evidenceRefs": [],
+      "contradictingRefs": [],
+      "coverage": "abstain",
+      "omissionState": "none",
+      "gaps": [
+        "No later observation is available."
+      ]
+    }
+  ],
+  "diagnostics": [
+    {
+      "diagnosticId": "synthetic-diagnostic-1",
+      "code": "more-evidence-needed",
+      "severity": "info",
+      "action": "Record a second observation.",
+      "nodeRefs": [
+        {
+          "repoId": "synthetic:garden",
+          "localId": "trial"
+        }
+      ],
+      "evidenceRefs": [
+        "synthetic-evidence-0"
+      ]
+    }
+  ],
+  "capabilities": {
+    "maxSlice": 500,
+    "maxDepth": 2,
+    "sourceReads": false,
+    "proposalIntents": [
+      "proposeModelChange"
+    ],
+    "queries": [
+      "metadata-search",
+      "neighborhood",
+      "question",
+      "source-impact"
+    ],
+    "read": true,
+    "export": true
+  }
+}
