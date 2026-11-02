@@ -65,12 +65,12 @@ test('unavailable watcher is visible and periodic reconciliation still updates s
 })
 
 test('grant loss closes old watches and delayed denied-root events cannot affect replacement reader', async t => {
-  const callbacks = [], watched = []
+  const callbacks = [], unavailable = [], watched = []
   let closed = 0
   const rootA = { id: 'repo-a', path: os.tmpdir() }, rootB = { id: 'repo-b', path: os.tmpdir() }
   const refresh = createLocalGraphRefresh({
     roots: [rootA],
-    watcherFactory({ roots, onEvent }) { callbacks.push(onEvent); watched.push(roots.map(root => root.id)); return { close() { closed += 1 } } },
+    watcherFactory({ roots, onEvent, onUnavailable }) { callbacks.push(onEvent); unavailable.push(onUnavailable); watched.push(roots.map(root => root.id)); return { close() { closed += 1 } } },
     build: () => view(), validate, revalidate: () => true, debounceMs: 0,
   })
   t.after(() => refresh.stop())
@@ -84,6 +84,8 @@ test('grant loss closes old watches and delayed denied-root events cannot affect
   await refresh.flush()
   const generation = refresh.status().generation
   callbacks[0]({ rootId: 'repo-a', relative: 'private-edit.md' })
+  unavailable[0]()
   assert.equal(refresh.status().generation, generation)
+  assert.equal(refresh.status().watchState, 'watching')
   assert.deepEqual(watched, [['repo-a'], ['repo-b']])
 })
