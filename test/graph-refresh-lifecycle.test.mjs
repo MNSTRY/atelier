@@ -197,3 +197,59 @@ test('failed or asynchronous cache invalidation refuses a replacement binding', 
   assert.equal(asynchronous.status().failure, 'cache-clear-failed')
   assert.equal((await asynchronous.read()).projection, null)
 })
+
+for (const retirement of ['source supersession', 'access replacement', 'stop']) {
+  test(`failed staging cleanup retains host custody after ${retirement}`, async t => {
+    const entered = deferred(), release = deferred(), outcomes = [], readerEvents = []
+    let stageCalls = 0, commits = 0, discardCalls = 0, failCleanup = true, revision = 1
+    const refresh = host(t, {
+      build: () => view(revision),
+      onCleanup: outcome => outcomes.push(outcome),
+      async stage() {
+        stageCalls += 1
+        if (stageCalls === 2) {
+          entered.resolve()
+          await release.promise
+          return {
+            commit() { commits += 1 },
+            discard() { discardCalls += 1; if (failCleanup) throw new Error('retired-private-stage-details') },
+          }
+        }
+        return { commit() { commits += 1 }, discard() {} }
+      },
+    })
+    refresh.subscribe(event => readerEvents.push(event))
+    await refresh.flush()
+    revision = 2
+    refresh.invalidate()
+    const completion = refresh.flush()
+    await entered.promise
+    revision = 3
+    if (retirement === 'source supersession') refresh.invalidate()
+    else if (retirement === 'access replacement') refresh.setAccess(binding('replacement-reader'))
+    else refresh.stop()
+    release.resolve()
+    await completion
+    assert.equal(commits, 1, 'neither retired work nor a successor publishes before cleanup is resolved')
+    assert.equal(outcomes.filter(outcome => outcome.state === 'failed').length, 1)
+    const [cleanup] = refresh.cleanupStatus()
+    assert.equal(cleanup.state, 'failed')
+    assert.equal(JSON.stringify([outcomes, refresh.cleanupStatus()]).includes('retired-private'), false)
+    assert.equal(JSON.stringify(readerEvents).includes('cleanupId'), false)
+    if (retirement !== 'source supersession') assert.equal((await refresh.read()).projection, null)
+    if (retirement === 'stop') {
+      refresh.start()
+      refresh.setAccess(binding('after-restart'))
+      await refresh.flush()
+      assert.equal(commits, 1)
+    }
+    failCleanup = false
+    assert.deepEqual(await Promise.all([refresh.retryCleanup(cleanup.cleanupId), refresh.retryCleanup(cleanup.cleanupId)]), [true, true])
+    await refresh.flush()
+    assert.equal(discardCalls, 2, 'concurrent host retries share one discard attempt')
+    assert.deepEqual(refresh.cleanupStatus(), [])
+    assert.equal((await refresh.read()).projection.projectionDigest, view(3).projectionDigest)
+    assert.equal(commits, 2)
+    assert.equal(outcomes.at(-1).state, 'resolved')
+  })
+}
