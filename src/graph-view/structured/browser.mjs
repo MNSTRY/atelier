@@ -144,6 +144,7 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
         const more = make('button', 'Load next page', { type: 'button', 'data-agv-key': 'next-page' })
         const pageRequest = Object.freeze({ projectionDigest: current.projectionDigest, cursor: current.page.nextCursor })
         more.addEventListener('click', async () => {
+          if (disposed || !current || current.projectionDigest !== pageRequest.projectionDigest) return
           const revision = epoch
           try { await onPage(pageRequest) } catch { if (!disposed && epoch === revision) ui.status.textContent = 'Next page unavailable. Try again.' }
         })
