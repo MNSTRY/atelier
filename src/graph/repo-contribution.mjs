@@ -153,7 +153,11 @@ export function buildRepositoryContribution(repo, { scope: scopeInput, inputPath
     const scope = normalizeScope(scopeInput)
     const root = fs.realpathSync(repo.path)
     const git = gitReader(root)
-    if (fs.realpathSync(git(['rev-parse', '--show-toplevel']).trim()) !== root) refuse('repository-root-mismatch')
+    // Filesystem identity handles Windows case/short-name aliases without
+    // treating a different directory as the enrolled repository root.
+    const requestedRoot = fs.statSync(root, { bigint: true })
+    const gitRoot = fs.statSync(git(['rev-parse', '--show-toplevel']).trim(), { bigint: true })
+    if (!requestedRoot.isDirectory() || !gitRoot.isDirectory() || requestedRoot.ino === 0n || gitRoot.ino === 0n || requestedRoot.dev !== gitRoot.dev || requestedRoot.ino !== gitRoot.ino) refuse('repository-root-mismatch')
     const before = observe(git)
     const files = census(root, git, scope)
     const pins = new Map()

@@ -64,6 +64,16 @@ test('rename preserves qualified identity and snapshot; dirty bytes change the s
   assert.equal(dirty.nodes[0].source.revision, dirty.snapshot.digest)
 })
 
+test('filesystem aliases preserve root identity while a nested directory is refused', (t) => {
+  const { a } = fixture(t)
+  const original = build(a)
+  const alias = path.join(path.dirname(a.path), 'ALPHA')
+  if (fs.existsSync(alias)) assert.deepEqual(build({ ...a, path: alias }), original)
+  const nested = path.join(a.path, 'nested')
+  fs.mkdirSync(nested)
+  assert.throws(() => build({ ...a, path: nested }), code('repository-root-mismatch'))
+})
+
 test('each Unicode/CRLF link occurrence keeps exact source and target offsets', (t) => {
   const { a } = fixture(t)
   const raw = doc('same', 'é 🧭 [one](target.md#one) [two](target.md#two) [[target]] [away](../beta/record.md)').replaceAll('\n', '\r\n')
