@@ -1,0 +1,989 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-graph-view.v1.schema.json",
+  "title": "Atelier renderer-neutral graph view",
+  "description": "Derived authorized projection; source repositories and host grants retain authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "producerVersion",
+    "projectionDigest",
+    "snapshot",
+    "completeness",
+    "sourceSnapshot",
+    "accessContext",
+    "nodes",
+    "edges",
+    "evidence",
+    "questions",
+    "diagnostics",
+    "capabilities",
+    "query",
+    "page"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier.graph-view@v1"
+    },
+    "producerVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "projectionDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/digest"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "incomplete"
+      ]
+    },
+    "sourceSnapshot": {
+      "$ref": "#/$defs/sourceSnapshot"
+    },
+    "accessContext": {
+      "$ref": "#/$defs/accessContext"
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 4000,
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "questions": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/question"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "capabilities": {
+      "$ref": "#/$defs/capabilities"
+    },
+    "query": {
+      "$ref": "#/$defs/query"
+    },
+    "page": {
+      "$ref": "#/$defs/page"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitId": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repoId",
+        "localId"
+      ],
+      "properties": {
+        "repoId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "localId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byteStart": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byteEnd": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "pointer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "range": {
+          "$ref": "#/$defs/range"
+        },
+        "targetRange": {
+          "$ref": "#/$defs/range"
+        }
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repoId",
+        "path",
+        "revision",
+        "digest"
+      ],
+      "properties": {
+        "repoId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "revision": {
+          "$ref": "#/$defs/digest"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "rawDigest",
+        "byteLength"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "rawDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "include",
+        "exclude"
+      ],
+      "properties": {
+        "base": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "include": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "inputPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "config",
+        "plan"
+      ],
+      "properties": {
+        "config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repoId",
+        "head",
+        "tree",
+        "dirty",
+        "scope",
+        "files",
+        "digest",
+        "omittedFiles",
+        "inputs"
+      ],
+      "properties": {
+        "repoId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "head": {
+          "$ref": "#/$defs/gitId"
+        },
+        "tree": {
+          "$ref": "#/$defs/gitId"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/file"
+          }
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "omittedFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inputs": {
+          "$ref": "#/$defs/inputPins"
+        }
+      }
+    },
+    "sourceSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repositories"
+      ],
+      "properties": {
+        "repositories": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/repository"
+          }
+        }
+      }
+    },
+    "accessContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proofRef",
+        "authorizedRepoIds",
+        "grantRevision",
+        "policyRevision",
+        "expiresAt",
+        "filter"
+      ],
+      "properties": {
+        "proofRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "authorizedRepoIds": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "grantRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "policyRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "filter": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "sourceKind",
+        "title",
+        "summary",
+        "classification",
+        "lifecycle",
+        "tags",
+        "sourceRef",
+        "displayEligible"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "sourceKind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "classification": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "lifecycle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "displayEligible": {
+          "const": true
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edgeId",
+        "source",
+        "target",
+        "predicate",
+        "family",
+        "acceptanceState",
+        "assurance",
+        "supportRefs",
+        "reviewRefs",
+        "sourceRef",
+        "recordDigest",
+        "policyDigest",
+        "qualifications"
+      ],
+      "properties": {
+        "edgeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "$ref": "#/$defs/ref"
+        },
+        "target": {
+          "$ref": "#/$defs/ref"
+        },
+        "predicate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "family": {
+          "enum": [
+            "hyperlink",
+            "source-declaration",
+            "reviewed-assertion"
+          ]
+        },
+        "acceptanceState": {
+          "const": "active"
+        },
+        "assurance": {
+          "enum": [
+            "navigation",
+            "source-declaration",
+            "reviewed-assertion"
+          ]
+        },
+        "supportRefs": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "reviewRefs": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "sourceRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "recordDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "qualifications": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "checkedAt"
+          ],
+          "properties": {
+            "checkedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "sourceRef",
+        "verification"
+      ],
+      "properties": {
+        "evidenceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "verification": {
+          "enum": [
+            "verified-source",
+            "stale",
+            "unavailable",
+            "unsupported"
+          ]
+        }
+      }
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "questionId",
+        "title",
+        "decision",
+        "nodeRefs",
+        "evidenceRefs",
+        "contradictingRefs",
+        "coverage",
+        "omissionState",
+        "gaps"
+      ],
+      "properties": {
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "decision": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "nodeRefs": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/ref"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "contradictingRefs": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "coverage": {
+          "enum": [
+            "supported",
+            "partial",
+            "abstain",
+            "unknown"
+          ]
+        },
+        "omissionState": {
+          "enum": [
+            "none",
+            "bounded",
+            "unavailable"
+          ]
+        },
+        "gaps": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "diagnosticId",
+        "code",
+        "severity",
+        "action",
+        "nodeRefs",
+        "evidenceRefs"
+      ],
+      "properties": {
+        "diagnosticId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "repoId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "severity": {
+          "enum": [
+            "blocking",
+            "warning",
+            "info"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "nodeRefs": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/ref"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "read",
+        "export",
+        "maxSlice",
+        "maxDepth",
+        "sourceReads",
+        "proposalIntents",
+        "queries"
+      ],
+      "properties": {
+        "read": {
+          "const": true
+        },
+        "export": {
+          "type": "boolean"
+        },
+        "maxSlice": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "maxDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "sourceReads": {
+          "type": "boolean"
+        },
+        "proposalIntents": {
+          "type": "array",
+          "maxItems": 1,
+          "items": {
+            "enum": [
+              "proposeModelChange"
+            ]
+          }
+        },
+        "queries": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "enum": [
+              "metadata-search",
+              "neighborhood",
+              "question",
+              "source-impact"
+            ]
+          }
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/digest"
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "focusRef": {
+          "$ref": "#/$defs/ref"
+        },
+        "relationFilter": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "direction": {
+          "enum": [
+            "out",
+            "in",
+            "both"
+          ]
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "search": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "questionId",
+        "focusRef",
+        "relationFilter",
+        "direction",
+        "depth",
+        "limit",
+        "search"
+      ],
+      "properties": {
+        "questionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "focusRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relationFilter": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "direction": {
+          "enum": [
+            "out",
+            "in",
+            "both"
+          ]
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "search": {
+          "type": "string",
+          "maxLength": 128
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes",
+        "edges",
+        "evidence",
+        "questions",
+        "diagnostics"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "edges": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "questions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offset",
+        "limit",
+        "returned",
+        "omitted",
+        "truncated",
+        "nextCursor"
+      ],
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "returned": {
+          "$ref": "#/$defs/counts"
+        },
+        "omitted": {
+          "$ref": "#/$defs/counts"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
