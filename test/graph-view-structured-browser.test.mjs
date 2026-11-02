@@ -53,6 +53,7 @@ test('structured graph task, semantics and lifecycle from the shared producer fi
     await page.keyboard.press('Tab'); await page.keyboard.press('Enter')
     assert((await inspector.innerText()).includes('First observation'))
     assert(await records().first().evaluate(e => e === document.activeElement))
+    assert.equal(await page.getByRole('button', { name: 'Explore outgoing', exact: true }).getAttribute('aria-pressed'), null)
     await page.getByRole('button', { name: 'Explore outgoing', exact: true }).click()
     assert.equal(await page.evaluate(() => window.intents.at(-1).direction), 'out')
     check('keyboard search selection preserves focus; directed expansion')

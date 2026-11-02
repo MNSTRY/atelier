@@ -38,8 +38,9 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
     fields(parent, [['Repository', sourceRef.repoId], ['Path', sourceRef.path], ['Revision', sourceRef.revision], ['Content digest', sourceRef.digest], ['Locator', sourceRef.locator ? locatorText(sourceRef.locator) : 'Whole source; no narrower locator supplied']])
   }
   const explicit = value => value === undefined || value === null ? 'Not supplied' : typeof value === 'string' ? value : JSON.stringify(value)
-  const button = (text, key, intent, pressed = false) => {
-    const control = make('button', text, { type: 'button', 'data-agv-key': key, 'aria-pressed': pressed })
+  const button = (text, key, intent, pressed) => {
+    const control = make('button', text, { type: 'button', 'data-agv-key': key })
+    if (typeof pressed === 'boolean') control.setAttribute('aria-pressed', String(pressed))
     control.addEventListener('click', () => emit(intent))
     return control
   }
@@ -158,11 +159,13 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
     const inputId = `${prefix}-search`, label = make('label', 'Search this view', { for: inputId })
     const input = make('input', null, { id: inputId, type: 'search', 'data-agv-key': 'search', 'aria-describedby': `${prefix}-search-hint` })
     input.value = query
-    input.addEventListener('input', () => { query = input.value; render() })
+    const search = () => { query = input.value; const matches = render(); ui.status.textContent = `${matches} records in this view match.` }
+    input.addEventListener('input', event => { if (!event.isComposing) search() })
+    input.addEventListener('compositionend', search)
     append(records, label, input, make('p', 'Search is limited to the records delivered in this view. Arrow keys move focus through the record list; Enter or Space selects.', { id: `${prefix}-search-hint` }))
     const normalized = query.trim().toLocaleLowerCase()
     const visible = current.nodes.filter(node => [node.title, node.summary, node.ref.repoId, node.ref.localId, ...(node.tags ?? [])].join(' ').toLocaleLowerCase().includes(normalized))
-    const count = make('p', `${visible.length} records in this view match.`, { role: 'status', 'aria-live': 'polite' })
+    const count = make('p', `${visible.length} records in this view match.`)
     records.append(count)
     const list = make('ul', null, { class: 'agv-records', 'aria-label': 'Record search results' })
     const buttons = []
@@ -215,6 +218,7 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
       if (replacement) { replacement.focus({ preventScroll: true }); if (textRange) replacement.setSelectionRange(...textRange) }
       else panel.focus({ preventScroll: true })
     }
+    return visible.length
   }
   const update = ({ view: nextView = null, selection: nextSelection = null } = {}) => {
     if (disposed) throw new TypeError('structured graph disposed')
