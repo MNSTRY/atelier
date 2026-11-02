@@ -19,6 +19,7 @@ const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0
 const plain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v))
 const text = (v) => typeof v === 'string' && v.trim().length > 0 && !/[\u0000-\u001f]/.test(v)
 const relative = (v) => text(v) && !v.includes('\\') && !/^(?:\/|~|[A-Za-z]:)/.test(v) && v.split('/').every((s) => s !== '' && s !== '.' && s !== '..')
+const sourcePath = (v) => relative(v) && !v.split('/').some((part) => part.toLowerCase() === '.git')
 const hash = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 const bodyDigest = (value) => hash(canonicalize(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'digest'))))
 const pointerToken = (value) => value.replaceAll('~', '~0').replaceAll('/', '~1')
@@ -94,15 +95,24 @@ function normalizeScope(scope = {}) {
 }
 
 function readBytes(root, rel) {
-  if (!relative(rel)) refuse('invalid-source-path')
+  if (!sourcePath(rel)) refuse('invalid-source-path')
   let cursor = root
   for (const segment of rel.split('/').slice(0, -1)) {
     cursor = path.join(cursor, segment)
     const stat = fs.lstatSync(cursor)
     if (!stat.isDirectory() || stat.isSymbolicLink()) refuse('redirected-source-path')
+    rejectNestedRepository(cursor)
   }
   const fd = openRegularFileNoFollow(path.join(root, rel))
   try { return fs.readFileSync(fd) } finally { fs.closeSync(fd) }
+}
+
+function rejectNestedRepository(directory) {
+  try { fs.lstatSync(path.join(directory, '.git')) } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw error
+  }
+  refuse('nested-repository-source')
 }
 
 function gitReader(root) {
@@ -128,7 +138,13 @@ function census(root, git, scope) {
   if (output !== '' && !output.endsWith('\0')) refuse('repository-observation-incomplete')
   const ignored = new Set(output.split('\0').filter(Boolean).map((item) => item.replace(/\/+$/, '')))
   const outside = censusScopeFilter(scope)
-  const isIgnored = (rel, info) => ignored.has(rel.replace(/\/+$/, '')) || (outside?.(rel, info) ?? false)
+  const isIgnored = (rel, info) => {
+    if (ignored.has(rel.replace(/\/+$/, '')) || (outside?.(rel, info) ?? false)) return true
+    // A nested clone or submodule owns its own source. The caller must select
+    // it separately or explicitly exclude it from this repository's scope.
+    if (info?.directory) rejectNestedRepository(path.join(root, rel))
+    return false
+  }
   const files = walkDocuments(root, root, [], isIgnored).sort((a, b) => compare(a.rel, b.rel))
   // Other formats require the existing metadata reader's pinned-byte seam.
   // Never silently omit them, or turn an incomplete contribution into a complete one.
@@ -191,7 +207,10 @@ export function buildRepositoryContribution(repo, { scope: scopeInput, inputPath
     // checks IDs, classifications, predicate vocabulary and relation shapes.
     if (validateKnowledgeGraph(nodes, []).length) refuse('source-graph-invalid')
     for (const input of Object.values(inputPaths)) capture(input)
-    const resolved = resolveWorkspaceLinks({ repos: [{ name: repo.name, root, nodesByPath: new Map(nodes.map((node) => [node.path, node])) }], scanned, isAssetEligible: () => false })
+    // This profile resolves document links only. Keep original embed flags in
+    // the contribution, while disabling the resolver's asset-directory scan.
+    const linkScans = new Map([...scanned].map(([node, scan]) => [node, { ...scan, occurrences: scan.occurrences.map((occurrence) => ({ ...occurrence, embed: false })) }]))
+    const resolved = resolveWorkspaceLinks({ repos: [{ name: repo.name, root, nodesByPath: new Map(nodes.map((node) => [node.path, node])) }], scanned: linkScans, isAssetEligible: () => false })
     const localTargets = new Map(resolved.links.map((link) => [JSON.stringify([link.sourcePath, link.range.start]), link.target]))
     // Recheck inventory and every selected byte, including explicit config/plan
     // inputs. The graph and its source pins were derived from the same buffers.
@@ -252,7 +271,7 @@ export function validateRepositoryContribution(value) {
     if (!check(Array.isArray(snapshot.files), 'invalid-source-files')) return { ok: false, errors }
     const files = new Map()
     for (const file of snapshot.files) {
-      if (check(keys(file, ['path', 'rawDigest', 'byteLength']) && relative(file.path) && digestPattern.test(file.rawDigest) && Number.isSafeInteger(file.byteLength) && file.byteLength >= 0 && !files.has(file.path), 'invalid-source-file')) files.set(file.path, file)
+      if (check(keys(file, ['path', 'rawDigest', 'byteLength']) && sourcePath(file.path) && digestPattern.test(file.rawDigest) && Number.isSafeInteger(file.byteLength) && file.byteLength >= 0 && !files.has(file.path), 'invalid-source-file')) files.set(file.path, file)
     }
     const validRef = (ref) => keys(ref, ['repoId', 'localId']) && ref.repoId === repository.repoId && text(ref.localId)
     const range = (v, pin) => keys(v, ['start', 'end', 'byteStart', 'byteEnd']) && [v.start, v.end, v.byteStart, v.byteEnd].every(Number.isSafeInteger) && v.start >= 0 && v.start < v.end && v.byteStart >= 0 && v.byteStart < v.byteEnd && v.byteEnd <= pin.byteLength
@@ -266,7 +285,7 @@ export function validateRepositoryContribution(value) {
     const nodeKeys = new Map()
     const fields = ['ref', 'source', 'title', 'summary', 'path', 'extension', 'type', 'kgType', 'domain', 'lifecycle', 'status', 'audience', 'classification', 'tags']
     for (const node of value.nodes) {
-      const valid = keys(node, fields) && validRef(node.ref) && validSource(node.source) && node.source.path === node.path && relative(node.path) && fields.slice(2, -1).every((key) => typeof node[key] === 'string') && node.extension === 'md' && node.type === 'markdown' && VALID_KG_TYPES.has(node.kgType) && VALID_STATUSES.has(node.status) && VALID_AUDIENCES.has(node.audience) && node.classification === 'classified' && Array.isArray(node.tags) && node.tags.every(text)
+      const valid = keys(node, fields) && validRef(node.ref) && validSource(node.source) && node.source.path === node.path && sourcePath(node.path) && fields.slice(2, -1).every((key) => typeof node[key] === 'string') && node.extension === 'md' && node.type === 'markdown' && VALID_KG_TYPES.has(node.kgType) && VALID_STATUSES.has(node.status) && VALID_AUDIENCES.has(node.audience) && node.classification === 'classified' && Array.isArray(node.tags) && node.tags.every(text)
       if (check(valid, 'invalid-source-node')) {
         check(!nodeKeys.has(nodeRefKey(node.ref)), 'duplicate-local-node-id')
         nodeKeys.set(nodeRefKey(node.ref), node)

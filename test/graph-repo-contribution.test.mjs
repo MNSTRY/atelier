@@ -74,6 +74,29 @@ test('filesystem aliases preserve root identity while a nested directory is refu
   assert.throws(() => build({ ...a, path: nested }), code('repository-root-mismatch'))
 })
 
+test('a selected nested repository is refused rather than attributed to its parent', (t) => {
+  const { a } = fixture(t)
+  write(a, 'record.md', doc('same', '![[missing.png]]'))
+  const nested = path.join(a.path, 'nested')
+  fs.mkdirSync(nested)
+  git(nested, ['init', '--quiet'])
+  fs.writeFileSync(path.join(nested, 'other.md'), doc('different-local-id'))
+  assert.throws(() => build(a), code('nested-repository-source'))
+  assert.throws(() => build(a, { scope: { exclude: 'nested/' }, inputPaths: { plan: 'nested/other.md' } }), code('nested-repository-source'))
+  const original = fs.readdirSync
+  fs.readdirSync = function(directory, ...args) {
+    if (path.resolve(directory) === nested) throw new Error('excluded repository must not be visited')
+    return original.call(this, directory, ...args)
+  }
+  let scoped
+  try { scoped = build(a, { scope: { exclude: 'nested/' } }) } finally { fs.readdirSync = original }
+  assert.deepEqual(scoped.nodes.map((node) => node.ref.localId), ['same'])
+  assert.equal(scoped.snapshot.files.some((file) => file.path.startsWith('nested/')), false)
+  assert.equal(scoped.ordinaryLinks[0].embed, true)
+  assert.equal(scoped.ordinaryLinks[0].target, null)
+  assert.throws(() => build(a, { scope: { exclude: 'nested/' }, inputPaths: { config: '.git/config' } }), code('invalid-source-path'))
+})
+
 test('each Unicode/CRLF link occurrence keeps exact source and target offsets', (t) => {
   const { a } = fixture(t)
   const raw = doc('same', 'é 🧭 [one](target.md#one) [two](target.md#two) [[target]] [away](../beta/record.md)').replaceAll('\n', '\r\n')
@@ -176,6 +199,7 @@ test('validator refuses tampering, unknown fields and refs detached from their s
     (v) => { v.snapshot.files[0].rawDigest = `sha256:${'0'.repeat(64)}`; v.snapshot.digest = digest(v.snapshot); v.digest = digest(v) },
     (v) => { v.repository.repoId = 'github:999'; v.digest = digest(v) },
     (v) => { v.nodes[0].source.path = '../outside'; v.digest = digest(v) },
+    (v) => { v.snapshot.files[0].path = '.git/record.md'; v.snapshot.digest = digest(v.snapshot); v.nodes[0].path = '.git/record.md'; v.nodes[0].source.path = '.git/record.md'; v.nodes[0].source.revision = v.snapshot.digest; v.digest = digest(v) },
     (v) => { v.nodes.push(structuredClone(v.nodes[0])); v.digest = digest(v) },
     (v) => { v.accepted = true; v.digest = digest(v) },
   ]
