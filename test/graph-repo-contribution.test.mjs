@@ -188,7 +188,9 @@ test('a TypeScript consumer can import source DTOs and receives qualified-ref ty
 
 test('pure topology binds cross-repository paths only through the supplied enrollment', (t) => {
   const { a, b } = fixture(t)
-  write(a, 'record.md', doc('same', '[other](../beta/record.md) [[beta/record]] [[record]] ![[absent.png]]'))
+  write(a, 'record.md', doc('same', '[other](../beta/record.md) [[beta/record]] [[record]] ![[absent.png]] [[Distinct target]] [[Only A]]'))
+  write(a, 'z-local.md', doc('local-target').replace('Invented record', 'Only A'))
+  write(b, 'record.md', doc('same').replace('Invented record', 'Distinct target'))
   const ca = build(a)
   const cb = build(b)
   const supplied = [ca, cb]
@@ -198,12 +200,14 @@ test('pure topology binds cross-repository paths only through the supplied enrol
   for (const key of Object.keys(original)) fs[key] = () => { throw new Error('pure resolver must not read files') }
   let together
   try { together = resolveContributionTopology(supplied, { enrollment }) } finally { Object.assign(fs, original) }
-  assert.equal(together.nodes.length, 2)
+  assert.equal(together.nodes.length, 3)
   assert.deepEqual(together.ordinaryLinks.slice(0, 2).map((link) => link.target), [expected, expected])
   assert.equal(together.ordinaryLinks[0].resolution, 'resolved-cross-repository')
   assert.deepEqual(together.ordinaryLinks[0].provenance, ca.ordinaryLinks[0].provenance)
   assert.equal(together.ordinaryLinks[2].target, null)
   assert.equal(together.ordinaryLinks[3].target, null)
+  assert.deepEqual(together.ordinaryLinks[4].target, expected)
+  assert.deepEqual(together.ordinaryLinks[5].target, { repoId: 'github:1001', localId: 'local-target' })
   const alone = resolveContributionTopology([ca], { enrollment: [enrollment[0]] })
   assert.equal(alone.ordinaryLinks.every((link) => link.target === null || link.target.repoId === 'github:1001'), true)
   assert.equal(JSON.stringify(alone).includes('github:1002'), false)
