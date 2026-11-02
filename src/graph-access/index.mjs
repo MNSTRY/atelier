@@ -67,7 +67,8 @@ function snapshotFor(c, approved) {
 
 function validLocator(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  if (!Object.keys(value).every(k => ['pointer', 'range', 'targetRange'].includes(k))) return false
+  if (!Object.keys(value).every(k => ['pointer', 'range', 'targetRange', 'rangeDigest'].includes(k))) return false
+  if (value.rangeDigest !== undefined && (!digest(value.rangeDigest) || !value.range || !Number.isSafeInteger(value.range.byteStart) || !Number.isSafeInteger(value.range.byteEnd))) return false
   if (value.pointer !== undefined && (typeof value.pointer !== 'string' || value.pointer.length > 1024 || (value.pointer !== '' && !value.pointer.startsWith('/')))) return false
   for (const k of ['range', 'targetRange']) {
     const r = value[k]
@@ -108,7 +109,8 @@ function projectedNode(n, repoId, snapshots) {
  * A local host may do this only over its operator's deliberately permitted clones.
  * Audience, readBoundary, Git authors and browser claims never supply these ports.
  * The contribution is a normalized projection pinned by the decision's digest;
- * verifyContribution must check the owning producer's exact bytes and scope.
+ * verifyContribution must check the owning producer's exact bytes and scope,
+ * including any locator.rangeDigest over its exact raw byte slice.
  */
 export function createGraphAccess(ports, { now = Date.now } = {}) {
   for (const name of ['resolveAccess', 'loadContribution', 'verifyContribution', 'evaluateEdge', 'revalidate']) need(typeof ports?.[name] === 'function')
