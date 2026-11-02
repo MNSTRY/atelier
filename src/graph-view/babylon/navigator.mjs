@@ -173,6 +173,9 @@ export function createGraphNavigator({ createPort, onIntent = () => {} }) {
     for (const method of ['render', 'pick', 'focus', 'select', 'dispose']) {
       if (typeof port?.[method] !== 'function') { port?.dispose?.(); throw new TypeError('Complete scene port required') }
     }
+    // A fresh mount does not ask the retained controller to restore selection.
+    // Initialize the new port before publishing it, including after an empty lens.
+    try { port.select(publicationSelection) } catch (error) { port.dispose(); throw error }
     // Reconcile the retained controller's rebuild highlight against the current
     // consumer selection; an old node cannot undo a clear or edge selection.
     const boundary = { render: () => port.render(), pick: (x, y) => port.pick(x, y),

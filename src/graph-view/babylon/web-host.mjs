@@ -29,6 +29,17 @@ export function mountGraphCanvas(canvas, { B, view, onIntent, onAvailability = (
     listeners.push(() => target.removeEventListener(event, handler, options))
   }
   const available = state => { try { onAvailability(state) } catch { /* Consumer notification. */ } }
+  function clearBuffer() {
+    // Force reallocation: assigning the same width can retain composited pixels.
+    const width = canvas.width
+    canvas.width = width === 0 ? 1 : 0
+    canvas.width = width
+  }
+  function present(result) {
+    if (result.status === 'empty') clearBuffer()
+    fit()
+    return result
+  }
   function dispose() {
     if (disposed) return
     disposed = true
@@ -45,9 +56,7 @@ export function mountGraphCanvas(canvas, { B, view, onIntent, onAvailability = (
           activeCanvases.delete(canvas)
           // Reset the owned drawing buffer synchronously, including the last
           // composited frame, before a narrower view may be delivered.
-          const width = canvas.width
-          canvas.width = width === 0 ? 1 : 0
-          canvas.width = width
+          clearBuffer()
         }
       }
     }
@@ -110,7 +119,7 @@ export function mountGraphCanvas(canvas, { B, view, onIntent, onAvailability = (
     } })
     const mounted = navigator.mount(view)
     engine.resize()
-    fit()
+    present(mounted)
     listen(canvas, 'pointerdown', event => {
       if (event.button === 0 && active()) down = { id: event.pointerId, x: event.clientX, y: event.clientY, dragged: false }
     })
@@ -156,10 +165,15 @@ export function mountGraphCanvas(canvas, { B, view, onIntent, onAvailability = (
       expand(ref, direction) { return active() ? navigator.expand(ref, direction) : { status: 'unavailable' } },
       openEvidence(evidenceId) { return active() ? navigator.openEvidence(evidenceId) : { status: 'unavailable' } },
       setQuestion(questionId) { return active() ? navigator.setQuestion(questionId) : { status: 'unavailable' } },
-      setLens(lens) { if (!active()) return { status: 'unavailable' }; const result = navigator.setLens(lens); fit(); return result },
-      update(next) { if (!active()) return { status: 'unavailable' }; const result = navigator.update(next); fit(); return result },
+      setLens(lens) { if (!active()) return { status: 'unavailable' }; return present(navigator.setLens(lens)) },
+      update(next) { if (!active()) return { status: 'unavailable' }; return present(navigator.update(next)) },
       fit() { if (active()) fit() },
-      reset() { if (!active()) return; navigator.setLens('all'); if (camera) { camera.alpha = Math.PI / 2; camera.beta = .7; fit() } },
+      reset() {
+        if (!active()) return
+        const result = navigator.setLens('all')
+        if (camera) { camera.alpha = Math.PI / 2; camera.beta = .7 }
+        present(result)
+      },
       zoom(factor) { if (active() && camera && Number.isFinite(factor) && factor > 0) { camera.radius = Math.max(camera.lowerRadiusLimit, Math.min(camera.upperRadiusLimit, camera.radius * factor)); stopInertia() } },
       pan(dx, dz) { if (active() && camera && Number.isFinite(dx) && Number.isFinite(dz)) { const target = camera.target; camera.setTarget(new B.Vector3(Math.max(-150, Math.min(150, target.x + dx)), target.y, Math.max(-150, Math.min(150, target.z + dz))), false, false, true); stopInertia() } },
       snapshot() { return navigator?.snapshot() ?? null },

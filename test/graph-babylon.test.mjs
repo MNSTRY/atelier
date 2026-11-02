@@ -208,6 +208,29 @@ test('selection readback refuses intent-type overrides without mutating state or
   h.navigator.dispose()
 })
 
+test('selection highlight survives an empty lens remount without an intent echo', () => {
+  const h = harness(), view = makeFixture(), ref = view.nodes[0].ref
+  view.edges = []
+  h.navigator.mount(view)
+  h.navigator.select(ref)
+  const count = h.intents.length
+  assert.equal(h.navigator.setLens('support').status, 'empty')
+  assert.deepEqual(h.navigator.snapshot().selected, ref)
+  assert.equal(h.navigator.setLens('all').status, 'ready')
+  assert.deepEqual(h.ports.at(-1).selected, {
+    domain: 'atelier', kind: ref.repoId, id: ref.localId, revision: view.nodes[0].sourceRef.revision,
+  })
+  assert.deepEqual(h.navigator.snapshot().selected, ref)
+  assert.equal(h.intents.length, count)
+  h.navigator.setLens('support')
+  h.navigator.receiveSelection(null)
+  h.navigator.setLens('all')
+  assert.equal(h.ports.at(-1).selected, null)
+  assert.equal(h.navigator.snapshot().selected, null)
+  assert.equal(h.intents.length, count)
+  h.navigator.dispose()
+})
+
 function makeFixture(count = 8) {
   const nodes = Array.from({ length: count }, (_, index) => ({
     ref: { repoId: index % 2 ? 'repo-synthetic-b' : 'repo-synthetic-a', localId: `record-${Math.floor(index / 2)}` },

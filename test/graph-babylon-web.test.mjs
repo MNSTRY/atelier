@@ -128,6 +128,36 @@ test('clear removes the bitmap, scheduled work, engine scenes and wrapper listen
   assert.equal(f.events.length, 0)
 })
 
+test('an empty lens clears pixels synchronously and retains the host for a nonempty lens', () => {
+  const f = fixture(), host = f.mount(), noEdges = structuredClone(view)
+  noEdges.edges = []
+  host.update(noEdges)
+  const listeners = f.canvas.listenerCount()
+  assert.equal(host.setLens('support').status, 'empty')
+  assert.equal(f.canvas.bitmap, 'clear')
+  assert.equal(host.status, 'empty')
+  assert.equal(f.engines[0].scenes.length, 0)
+  assert.equal(f.engines[0].disposed, false)
+  assert.equal(f.pendingFrames.size, 1)
+  assert.equal(f.canvas.listenerCount(), listeners)
+  assert.equal(host.setLens('all').status, 'ready')
+  assert.equal(f.engines[0].scenes.length, 1)
+  assert.equal(f.engines.length, 1)
+  host.dispose()
+})
+
+test('an empty replacement clears pixels before returning and later data can mount', () => {
+  const f = fixture(), host = f.mount()
+  const empty = { ...structuredClone(view), projectionDigest: `sha256:${'e'.repeat(64)}`, nodes: [], edges: [] }
+  assert.equal(host.update(empty).status, 'empty')
+  assert.equal(f.canvas.bitmap, 'clear')
+  assert.equal(host.snapshot().sceneNodes, 0)
+  assert.equal(f.engines[0].disposed, false)
+  assert.equal(host.update(view).status, 'ready')
+  assert.equal(f.engines.length, 1)
+  host.dispose()
+})
+
 test('a canvas has one host owner and disposing a former owner cannot clear its replacement', () => {
   const f = fixture(), first = f.mount(), refused = f.mount()
   assert.equal(refused.reason, 'canvas-in-use')
