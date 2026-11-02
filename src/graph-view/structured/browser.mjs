@@ -10,13 +10,13 @@ let nextMountId = 1
 
 // A presentation consumer, never an authorization boundary. The host must deliver
 // a validated reader-specific slice and remove it immediately on grant loss.
-export function mountStructuredGraphView(root, { view = null, selection = null, onIntent, onPage } = {}) {
+export function mountStructuredGraphView(root, { view = null, selection = null, refreshStatus = null, onIntent, onPage } = {}) {
   if (!root?.ownerDocument || mounts.has(root)) throw new TypeError('structured graph root unavailable')
   if (typeof onIntent !== 'function') throw new TypeError('structured graph requires an intent host')
   mounts.add(root)
   const doc = root.ownerDocument
   const prefix = `agv-${nextMountId++}`
-  let current = null, selected = null, query = '', disposed = false, epoch = 0, request = 0
+  let current = null, selected = null, currentRefreshStatus = null, query = '', disposed = false, epoch = 0, request = 0
   let ui, roving = null
   const make = (tag, text, attrs = {}) => {
     const element = doc.createElement(tag)
@@ -98,7 +98,7 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
       const edge = edgeFor(selected.edgeId)
       if (!edge) return
       panel.append(make('h4', `${labelFor(edge.source)} → ${edge.predicate} → ${labelFor(edge.target)}`))
-      fields(panel, [['Relationship identity', edge.edgeId], ['Direction', `${refText(edge.source)} → ${refText(edge.target)}`], ['Predicate', edge.predicate], ['Family', edge.family], ['Acceptance', edge.acceptanceState], ['Assurance', edge.assurance], ['Review receipts', edge.reviewRefs?.join(', ') || 'None supplied in this view'], ['Staleness', edge.staleness ?? 'Not supplied; do not assume current'], ['Verification checked at', edge.verification?.checkedAt], ['Record digest', edge.recordDigest], ['Policy digest', edge.policyDigest], ['Qualifications', edge.qualifications?.join('; ') || 'None supplied in this view']])
+      fields(panel, [['Relationship identity', edge.edgeId], ['Direction', `${refText(edge.source)} → ${refText(edge.target)}`], ['Predicate', edge.predicate], ['Family', edge.family], ['Acceptance', edge.acceptanceState], ['Assurance', edge.assurance], ['Review receipts', edge.reviewRefs?.join(', ') || 'None supplied in this view'], ['Staleness', edge.staleness ?? (currentRefreshStatus?.stale ? 'Displayed source view is stale; edge currency not supplied' : 'Not supplied; do not assume current')], ['Verification checked at', edge.verification?.checkedAt], ['Record digest', edge.recordDigest], ['Policy digest', edge.policyDigest], ['Qualifications', edge.qualifications?.join('; ') || 'None supplied in this view']])
       evidencePin(panel, edge.sourceRef, 'Relationship origin')
       panel.append(make('h4', 'Support'))
       if (!edge.supportRefs?.length) paragraph(panel, 'No support pins supplied.')
@@ -134,6 +134,8 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
     if (!current) { paragraph(ui.content, 'No graph view available.'); return }
     const info = make('p', `Projection ${current.projectionDigest}`, { class: 'agv-ref' })
     ui.content.append(info)
+    if (currentRefreshStatus?.stale) paragraph(ui.content, 'The displayed source view is stale. Rebuild the view before relying on it.', 'agv-note')
+    if (currentRefreshStatus?.failure) paragraph(ui.content, 'The view could not be refreshed. Inspect the source and retry through the host.', 'agv-note')
     if (current.page?.truncated) {
       const omitted = Object.entries(current.page.omitted ?? {}).filter(([, count]) => count > 0).map(([kind, count]) => `${count} ${kind}`).join(', ')
       paragraph(ui.content, `This is a bounded view.${omitted ? ` Omitted from this view: ${omitted}.` : ''}`, 'agv-note')
@@ -220,9 +222,11 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
     }
     return visible.length
   }
-  const update = ({ view: nextView = null, selection: nextSelection = null } = {}) => {
+  const update = ({ view: nextView = null, selection: nextSelection = null, refreshStatus: nextRefreshStatus } = {}) => {
     if (disposed) throw new TypeError('structured graph disposed')
     ++epoch; ++request
+    const previousDigest = current?.projectionDigest, previousRefreshStatus = currentRefreshStatus
+    currentRefreshStatus = null
     // Clear the prior bytes before accepting a replacement; never keep a stale
     // authorized snapshot after the host withdraws or rejects delivery.
     current = null; selected = null
@@ -230,6 +234,7 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
     try {
       if (nextView.schema !== 'atelier.graph-view@v1' || !/^sha256:[a-f0-9]{64}$/.test(nextView.projectionDigest ?? '') || !Array.isArray(nextView.nodes) || !Array.isArray(nextView.edges) || !Array.isArray(nextView.questions) || !Array.isArray(nextView.evidence) || nextView.nodes.length > 500 || nextView.edges.length > 2000 || nextView.evidence.length > 4000 || nextView.questions.length > 100) throw new TypeError()
       current = structuredClone(nextView)
+      currentRefreshStatus = nextRefreshStatus === undefined ? (previousDigest === current.projectionDigest ? previousRefreshStatus : null) : nextRefreshStatus === null ? null : { stale: nextRefreshStatus.stale === true, failure: Boolean(nextRefreshStatus.failure) }
       if (nextSelection?.projectionDigest === current.projectionDigest) {
         const keys = ['ref', 'edgeId', 'evidenceId', 'questionId'].filter(key => nextSelection[key] !== undefined)
         const available = keys.length === 1 && (keys[0] === 'ref' ? nodeFor(nextSelection.ref) :
@@ -241,15 +246,15 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
       render()
       ui.status.textContent = selected ? 'Selection updated.' : 'Graph view ready.'
     } catch {
-      current = null; selected = null; query = ''; roving = null
+      current = null; selected = null; currentRefreshStatus = null; query = ''; roving = null
       render(); ui.status.textContent = 'Graph view unavailable.'
       throw new TypeError('invalid structured graph view')
     }
   }
   shell()
-  try { update({ view, selection }) } catch (error) { mounts.delete(root); root.replaceChildren(); throw error }
+  try { update({ view, selection, refreshStatus }) } catch (error) { mounts.delete(root); root.replaceChildren(); throw error }
   return Object.freeze({ update, clear: () => update({ view: null }), destroy: () => {
     if (disposed) return
-    disposed = true; ++epoch; ++request; current = null; selected = null; query = ''; root.replaceChildren(); mounts.delete(root)
+    disposed = true; ++epoch; ++request; current = null; selected = null; currentRefreshStatus = null; query = ''; root.replaceChildren(); mounts.delete(root)
   } })
 }

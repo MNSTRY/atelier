@@ -65,7 +65,7 @@ reviewed assertion. No source passage is invented when a view supplies only pins
 
 The initial producer fixture provides no edge currency field. The inspector
 therefore says that staleness is not supplied and must not be assumed current.
-It displays each support record's independent verification state. A verification
+It displays each support record's independent verification state. A host can also pass `refreshStatus` from the existing refresh controller's read result. A stale source view and rebuild failure receive explicit labels, including in the edge inspector; arbitrary failure details are never echoed. Selection updates for the same projection preserve that status, and a new projection or withdrawal clears it. A verification
 check time is not a currentness guarantee. Explicit edge currency remains a
 producer dependency.
 
