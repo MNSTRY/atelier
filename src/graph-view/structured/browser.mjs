@@ -3,6 +3,7 @@ import { refKey } from '../refs.mjs'
 import { assertGraphViewIntent } from '../intents.mjs'
 
 const sameRef = (a, b) => Boolean(a && b && a.repoId === b.repoId && a.localId === b.localId)
+const identity = ref => ({ repoId: ref.repoId, localId: ref.localId })
 const refText = ref => `${ref.repoId} / ${ref.localId}`
 const locatorText = locator => Object.entries(locator).map(([key, value]) => `${key}: ${typeof value === 'object' ? Object.entries(value).map(([name, number]) => `${name}=${number}`).join(', ') : value}`).join('; ')
 const mounts = new WeakSet()
@@ -66,7 +67,7 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
     parent.append(button('Inspect evidence', `open:${title}:${evidenceId}`, { type: 'openEvidence', evidenceId }))
   }
   const labelFor = ref => nodeFor(ref)?.title ?? refText(ref)
-  const nodeButton = (ref, suffix) => button(labelFor(ref), `ref:${refKey(ref)}:${suffix}`, { type: 'select', ref }, sameRef(selected?.ref, ref))
+  const nodeButton = (ref, suffix) => button(labelFor(ref), `ref:${refKey(ref)}:${suffix}`, { type: 'select', ref: identity(ref) }, sameRef(selected?.ref, ref))
   const shell = () => {
     root.replaceChildren()
     const style = make('style', structuredStyles)
@@ -118,7 +119,7 @@ export function mountStructuredGraphView(root, { view = null, selection = null, 
       fields(panel, [['Record identity', refText(node.ref)], ['Source kind', node.sourceKind], ['Classification', node.classification], ['Lifecycle', node.lifecycle], ['Tags', node.tags?.join(', ') || 'None']])
       source(panel, node.sourceRef)
       const tools = make('div', null, { class: 'agv-tools' })
-      for (const [direction, label] of current.capabilities?.queries.includes('neighborhood') ? [['out', 'outgoing'], ['in', 'incoming'], ['both', 'both directions']] : []) tools.append(button(`Explore ${label}`, `expand:${direction}`, { type: 'expand', ref: node.ref, direction }))
+      for (const [direction, label] of current.capabilities?.queries.includes('neighborhood') ? [['out', 'outgoing'], ['in', 'incoming'], ['both', 'both directions']] : []) tools.append(button(`Explore ${label}`, `expand:${direction}`, { type: 'expand', ref: identity(node.ref), direction }))
       panel.append(tools)
       const related = current.edges.filter(edge => sameRef(edge.source, node.ref) || sameRef(edge.target, node.ref))
       panel.append(make('h4', 'Relationships in this view'))

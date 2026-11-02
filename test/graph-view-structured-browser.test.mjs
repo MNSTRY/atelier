@@ -78,6 +78,11 @@ test('structured graph task, semantics and lifecycle from the shared producer fi
     await page.keyboard.press('Enter')
     assert.equal(await page.evaluate(() => window.intents.at(-1).ref.repoId), 'synthetic:workshop')
     check('qualified same-local-id selection; focus is separate')
+    const extensionView = structuredClone(fixture); extensionView.nodes.forEach(node => node.ref.ext = {})
+    await page.evaluate(f => window.start(f), extensionView)
+    await records().first().click()
+    assert.deepEqual(await page.evaluate(() => Object.keys(window.intents.at(-1).ref).sort()), ['localId', 'repoId'])
+    check('optional transport metadata never changes semantic identity intents')
     const unknownView = structuredClone(fixture); unknownView.questions[0] = { ...question, coverage: 'abstain', evidenceRefs: [], contradictingRefs: [], gaps: [] }
     await page.evaluate(f => window.start(f), unknownView)
     await page.getByRole('button', { name: `${question.title} · abstain`, exact: true }).click()
