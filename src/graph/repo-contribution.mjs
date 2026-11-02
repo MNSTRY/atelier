@@ -326,7 +326,7 @@ export function resolveContributionTopology(contributions, { enrollment } = {}) 
     const nodesByPath = new Map()
     for (const node of contribution.nodes) {
       const key = nodeRefKey(node.ref)
-      const internal = { id: key, path: node.path }
+      const internal = { id: key, path: node.path, title: node.title }
       nodesByPath.set(node.path, internal)
       byRef.set(key, node.ref)
       const location = path.resolve(root, node.path)
