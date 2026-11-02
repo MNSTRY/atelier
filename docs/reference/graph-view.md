@@ -9,7 +9,9 @@ sources, verify grants, admit assertions or fetch source bodies.
 The implementation lives in `src/graph-view/index.mjs`; package export and shared
 CLI dispatch adoption require the owning program's separate integration. No
 published release or hosted permission implementation is established by this source.
-The schema is `contracts/atelier-graph-view.v1.schema.json`. The two fixtures under
+The schema is `contracts/atelier-graph-view.v1.schema.json`. Optional epoch
+`contractVersion` and empty `ext` containers follow existing schema conventions;
+nonempty request/output extensions are unsupported at this boundary. The two fixtures under
 `fixtures/graph-view/` are invented data, not access grants or provider receipts.
 
 ## Host binding
