@@ -117,11 +117,15 @@ export function createGraphAccess(ports, { now = Date.now } = {}) {
   need(typeof now === 'function')
   const handles = new WeakMap()
   const time = () => { const n = now(); need(Number.isSafeInteger(n)); return n }
+  const live = (state, signal) => {
+    try { need(!signal?.aborted && !state.invalid && state.decision.expiresAt > time()) }
+    catch { state.invalid = true; state.graph = null; throw new GraphAccessRefusal() }
+  }
   const fresh = async (state, signal) => {
     try {
-      need(!signal?.aborted && !state.invalid && state.decision.expiresAt > time())
+      live(state, signal)
       need(await ports.revalidate(state.decision, signal) === true)
-      need(!signal?.aborted && !state.invalid && state.decision.expiresAt > time())
+      live(state, signal)
     } catch { state.invalid = true; state.graph = null; throw new GraphAccessRefusal() }
   }
   const stateFor = binding => { const s = handles.get(binding); need(s); return s }
@@ -133,12 +137,12 @@ export function createGraphAccess(ports, { now = Date.now } = {}) {
         need(['read', 'export'].includes(operation) && !signal?.aborted)
         const decision = validateDecision(await ports.resolveAccess(context, { operation, signal }), operation, time())
         state = { decision, invalid: false }
-        await fresh(state, signal)
+        await fresh(state, signal); live(state, signal)
         const contributions = [], snapshots = new Map(), diagnostics = []
         // Only the approved set is enumerated. A denied repo cannot affect loader
         // calls, raw exceptions, counts, diagnostics, cache keys or search input.
         for (const approved of [...decision.repositories].sort((a, b) => compare(a.repoId, b.repoId))) {
-          await fresh(state, signal)
+          await fresh(state, signal); live(state, signal)
           try {
             const c = bounded(await ports.loadContribution(approved, { operation, signal }))
             need(sourceDigest(c) === approved.contributionDigest)
@@ -160,7 +164,7 @@ export function createGraphAccess(ports, { now = Date.now } = {}) {
             diagnostics.push({ code: 'authorized-source-unavailable', severity: 'warning', repoId: approved.repoId,
               nodeRefs: [], evidenceRefs: [], action: 'Refresh the authorized source.' })
           }
-          await fresh(state, signal)
+          await fresh(state, signal); live(state, signal)
         }
         const nodes = [], evidence = [], edges = [], nodeKeys = new Set(), evidenceIds = new Set(), edgeIds = new Set()
         for (const c of contributions) {
@@ -182,7 +186,7 @@ export function createGraphAccess(ports, { now = Date.now } = {}) {
           const home = source(raw.sourceRef, snapshots)
           if (!home || home.repoId !== c.repository.repoId || !list(raw.supportRefs, 64) || !raw.supportRefs.every(id => evidenceIds.has(id))) continue
           if (new Set(raw.supportRefs).size !== raw.supportRefs.length) continue
-          await fresh(state, signal)
+          await fresh(state, signal); live(state, signal)
           // The edge owner verifies its immutable record, signatures and policy.
           // A contribution's eligible/accepted flags have no authority.
           const result = bounded(await ports.evaluateEdge(raw, decision, { signal }))
@@ -225,12 +229,12 @@ export function createGraphAccess(ports, { now = Date.now } = {}) {
           repositories: [...decision.repositories].sort((a, b) => compare(a.repoId, b.repoId)), graphDigest: hash(graph) })
         const binding = Object.freeze({ cacheKey, expiresAt: decision.expiresAt })
         state.graph = graph; state.operation = operation; handles.set(binding, state)
-        await fresh(state, signal)
+        await fresh(state, signal); live(state, signal)
         return Object.freeze({ graph, binding })
       } catch { if (state) { state.invalid = true; state.graph = null }; throw new GraphAccessRefusal() }
     },
     async revalidate(binding, { signal } = {}) {
-      try { await fresh(stateFor(binding), signal); return true } catch { return false }
+      try { const state = stateFor(binding); await fresh(state, signal); live(state, signal); return true } catch { return false }
     },
     invalidate(binding) {
       try { const state = stateFor(binding); state.invalid = true; state.graph = null; return true } catch { return false }
@@ -241,7 +245,7 @@ export function createGraphAccess(ports, { now = Date.now } = {}) {
         // Object identity prevents a copied/mixed artifact or caller label from
         // becoming a reader-specific graph. Export needs a fresh export decision.
         need(graph === state.graph && operation === state.operation)
-        await fresh(state, signal)
+        await fresh(state, signal); live(state, signal)
         return graph
       } catch { throw new GraphAccessRefusal() }
     },

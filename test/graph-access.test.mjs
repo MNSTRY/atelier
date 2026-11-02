@@ -333,3 +333,15 @@ test('invalid, orphaned or out-of-bounds range digests make the approved source 
     assert.equal(graph.edges.length, 0)
   }
 })
+
+test('invalidation queued between host verification and the final promise handoff wins', async () => {
+  for (const operation of ['guard', 'revalidate']) {
+    const f = fixture([A]), result = await f.access.loadAuthorizedGraph({})
+    f.ports.revalidate = async () => {
+      queueMicrotask(() => queueMicrotask(() => f.access.invalidate(result.binding)))
+      return true
+    }
+    if (operation === 'guard') await assert.rejects(f.access.guardArtifact(result.binding, result.graph), GraphAccessRefusal)
+    else assert.equal(await f.access.revalidate(result.binding), false)
+  }
+})
