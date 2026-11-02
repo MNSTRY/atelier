@@ -34,14 +34,18 @@ function records(view) {
   const evidence = index(view.evidence, item => text(item.evidenceId) ? item.evidenceId : fail())
   const questions = index(view.questions, item => text(item.questionId) ? item.questionId : fail())
   const sources = new Map()
-  for (const item of [...nodes.values(), ...evidence.values()]) {
-    const source = item.sourceRef
-    if (!source) continue
+  function addSource(source) {
+    if (!source) return
     const key = sourceKey(source)
     // Keep all exact source pins (including locators), not whichever record
     // happened to be visited last. One source can support several questions.
     if (!sources.has(key)) sources.set(key, { repoId: source.repoId, path: source.path, pins: new Set() })
     sources.get(key).pins.add(canonicalize(source))
+  }
+  for (const item of [...nodes.values(), ...evidence.values()]) addSource(item.sourceRef)
+  for (const repository of view.sourceSnapshot?.repositories ?? []) {
+    for (const file of repository.files ?? []) addSource({ repoId: repository.repoId, path: file.path, revision: repository.digest, digest: file.rawDigest, byteLength: file.byteLength })
+    for (const input of Object.values(repository.inputs ?? {})) addSource(input)
   }
   for (const [key, source] of sources) sources.set(key, { ...source, pins: [...source.pins].sort(order) })
   for (const edge of edges.values()) {
@@ -50,7 +54,8 @@ function records(view) {
   }
   for (const question of questions.values()) {
     if (!Array.isArray(question.nodeRefs) || question.nodeRefs.some(ref => !nodes.has(refKey(ref))) ||
-        !Array.isArray(question.evidenceRefs) || question.evidenceRefs.some(id => !evidence.has(id))) fail()
+        !Array.isArray(question.evidenceRefs) || question.evidenceRefs.some(id => !evidence.has(id)) ||
+        (question.contradictingRefs !== undefined && (!Array.isArray(question.contradictingRefs) || question.contradictingRefs.some(id => !evidence.has(id))))) fail()
   }
   return { nodes, edges, evidence, questions, sources }
 }
@@ -95,7 +100,7 @@ export function compareGraphSnapshots(before, after) {
     }
   }
   for (const graph of [a, b]) for (const question of graph.questions.values()) {
-    if (question.nodeRefs.some(ref => affectedNodes.has(refKey(ref))) || question.evidenceRefs.some(id => affectedEvidence.has(id))) affectedQuestions.add(question.questionId)
+    if (question.nodeRefs.some(ref => affectedNodes.has(refKey(ref))) || [...question.evidenceRefs, ...(question.contradictingRefs ?? [])].some(id => affectedEvidence.has(id))) affectedQuestions.add(question.questionId)
   }
   return {
     beforeDigest: before.projectionDigest, afterDigest: after.projectionDigest,
