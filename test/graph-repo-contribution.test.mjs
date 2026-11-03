@@ -116,6 +116,16 @@ test('input components that alias the metadata identity refuse before reading by
   git(a.path, ['worktree', 'add', '--detach', '--quiet', worktree, 'HEAD'])
   fs.linkSync(path.join(worktree, '.git'), path.join(worktree, 'metadata-input.json'))
   assert.throws(() => build({ ...a, path: worktree }, { inputPaths: { config: 'metadata-input.json' } }), code('invalid-source-path'))
+  // The same alias below an ordinary subdirectory refuses before reading too.
+  fs.mkdirSync(path.join(worktree, 'nested'))
+  fs.linkSync(path.join(worktree, '.git'), path.join(worktree, 'nested', 'metadata-input.json'))
+  const reads = []
+  const readFile = fs.readFileSync
+  fs.readFileSync = function(file, ...args) { reads.push(file); return readFile.call(this, file, ...args) }
+  try {
+    assert.throws(() => build({ ...a, path: worktree }, { inputPaths: { config: 'nested/metadata-input.json' } }), code('invalid-source-path'))
+  } finally { fs.readFileSync = readFile }
+  assert.ok(!reads.some(file => typeof file === 'string' && file.endsWith(path.join('nested', 'metadata-input.json'))), 'metadata alias was read')
 })
 
 test('Windows metadata short-name input aliases refuse when the filesystem supplies one', { skip: process.platform !== 'win32' }, (t) => {
