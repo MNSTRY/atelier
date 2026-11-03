@@ -27,7 +27,7 @@ export function validateZoneRule(rule = {}) {
   if (!Number.isInteger(depth) || depth < 1 || depth > 4) throw new TypeError('Zone rule depth must be an integer from 1 to 4')
   const labels = rule.labels ?? {}
   if (typeof labels !== 'object' || Array.isArray(labels) || Object.values(labels).some(v => typeof v !== 'string' || v.length > 80)) throw new TypeError('Zone rule labels must map folders to short names')
-  return { prefix, depth, labels: { ...labels }, rootLabel: typeof rule.rootLabel === 'string' ? rule.rootLabel.slice(0, 80) : 'Workspace root' }
+  return { prefix, depth, labels: Object.assign(Object.create(null), labels), rootLabel: typeof rule.rootLabel === 'string' ? rule.rootLabel.slice(0, 80) : 'Workspace root' }
 }
 
 /** The owner-configured zone of a record path. Records outside the prefix share one root zone. */
@@ -37,7 +37,7 @@ export function zoneOf(path, rule) {
   const parts = path.slice(r.prefix.length).split('/')
   if (parts.length <= r.depth) return { id: '_root', label: r.rootLabel }
   const folder = parts.slice(0, r.depth).join('/')
-  return { id: folder, label: r.labels[folder] ?? humanize(folder.split('/').at(-1)) }
+  return { id: folder, label: Object.hasOwn(r.labels, folder) ? r.labels[folder] : humanize(folder.split('/').at(-1)) }
 }
 
 export function buildWorkspaceModel({ graph, plan = null, zoneRule = {}, summaryLength = 280 }) {

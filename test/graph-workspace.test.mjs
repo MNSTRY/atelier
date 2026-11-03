@@ -5,7 +5,7 @@ import {
   seedPositions, layoutWorkspace, normalizePositions, zoneGeometry,
   planConstellation, aggregateZones, zoneSlice, rankRecords,
   placeLabels, labelBudget, overlaps,
-  DEFAULT_RECIPES, composeRecipes, validateRecipe, availableRecipes,
+  DEFAULT_RECIPES, composeRecipes, validateRecipe, availableRecipes, primaryActionsFor,
   DEFAULT_THEME, composeTheme, validateTheme, contrastRatio,
   conceptSteps, relationSteps, guideConcept, guideRelation, stepState, createDraftStore, memoryStorage, readiness,
   fingerprintsFrom, scanForFingerprints,
@@ -131,6 +131,13 @@ test('recipes: only combinations the shell honours are accepted or offered', () 
   assert.throws(() => add({ id: 'odd', room: 'review', lens: 'concept', primary: 'review' }), /only a constellation recipe takes a lens/)
   assert.throws(() => add({ id: 'odd', room: 'constellation', subject: 'record', primary: 'search' }), /only a workbench recipe takes a subject/)
   assert.throws(() => composeRecipes({ owner: [{ id: 'refine', room: 'constellation' }] }), /only a workbench recipe takes a subject/)
+  // Every accepted action has a target in its room.
+  assert.throws(() => composeRecipes({ owner: [{ id: 'explore', primary: 'pick' }] }), /primary pick is not available here; use search/)
+  assert.throws(() => composeRecipes({ owner: [{ id: 'refine', primary: 'review' }] }), /primary review is not available here; use next-step/)
+  assert.throws(() => composeRecipes({ owner: [{ id: 'inspect', primary: 'next-step' }] }), /use walk/)
+  assert.throws(() => add({ id: 'odd', room: 'review', primary: 'search' }), /use review/)
+  assert.throws(() => add({ id: 'odd', room: 'constellation', lens: 'zone', primary: 'open-evidence' }), /use pick or search/)
+  for (const r of DEFAULT_RECIPES) assert.ok(primaryActionsFor(r).includes(r.primary), r.id)
   const { recipes } = composeRecipes({ coach: [
     { id: 'check', label: 'Check', description: 'D', room: 'review', primary: 'review' },
     { id: 'bind', label: 'Bind', description: 'D', room: 'workbench', subject: 'relation', primary: 'next-step' },
@@ -170,6 +177,10 @@ test('theme: every layer is typed and checked; resource loading and unreadable c
   // A later valid layer cannot launder an earlier invalid one.
   assert.throws(() => composeTheme(DEFAULT_THEME, layer({ '--accent': 'url(x)' }), layer({ '--accent': '#a0e0c0' })), /--accent/)
   assert.ok(composeTheme(DEFAULT_THEME, layer({ '--shadow': '0 8px 24px rgba(0, 0, 0, 0.4)' })))
+  // Chrome text sits on translucent glass; a glass that hides it is refused.
+  assert.throws(() => composeTheme(DEFAULT_THEME, layer({ '--surface-glass': '#eef1f7' })), /--ink on --surface-glass over --canvas/)
+  assert.throws(() => composeTheme(DEFAULT_THEME, layer({ '--surface-glass': 'rgba(238, 241, 247, 0.9)' })), /--surface-glass/)
+  assert.ok(composeTheme(DEFAULT_THEME, layer({ '--surface-glass': 'rgba(20, 24, 32, 0.8)' })))
 })
 
 test('scale: a zone slice conserves every link and projects plan declarations onto kept records', () => {
@@ -220,6 +231,40 @@ test('authoring: steps, structural guidance, plan wording state, storage-port dr
   assert.throws(() => createDraftStore({ storage, identity }), /draft key/)
   assert.throws(() => createDraftStore({ storage, key: 'k' }), /identity/)
   assert.throws(() => createDraftStore({ storage, key: 'k', identity, persistence: 'cloud' }), /persistence/)
+})
+
+test('authoring: relation drafts need readable evidence before they are ready', () => {
+  const m = model()
+  const rel = m.plan.relations[0]
+  const steps = relationSteps(rel)
+  assert.deepEqual(steps.map(x => x.id), ['meaning', 'forward', 'reverse', 'evidence', 'disconfirming'])
+  const store = createDraftStore({ storage: memoryStorage(), key: 'r', identity: { workspace: 'w' }, delayMs: 0 })
+  Object.assign(store.relation(rel), { meaning: 'Lets you check which program a study informs.', forward: 'The study informs the program.', reverse: 'The program draws on the study.', disconfirming: 'A program that ignores every study.' })
+  store.changed()
+  const readable = new Set(m.nodes.map(n => n.id))
+  let r = readiness({ ...m.plan, concepts: [] }, store, readable)
+  assert.equal(r.status, 'needs-attention', 'no evidence, not ready')
+  assert.ok(r.items[0].guide.fields.evidence.some(x => /Cite at least one/.test(x.text)))
+  store.relationDraft(rel.id).evidence.push({ id: m.nodes[0].id })
+  r = readiness({ ...m.plan, concepts: [] }, store, readable)
+  assert.equal(r.status, 'ready-for-human-review')
+  r = readiness({ ...m.plan, concepts: [] }, store, new Set())
+  assert.equal(r.status, 'needs-attention', 'unreadable relation evidence blocks readiness')
+  assert.ok(r.items[0].guide.fields.evidence.some(x => /not readable here/.test(x.text)))
+  const storage = memoryStorage()
+  const a = createDraftStore({ storage, key: 'k', identity: { workspace: 'w' }, delayMs: 0 })
+  a.relation(rel).evidence.push({ id: m.nodes[1].id, title: 'T' }); a.changed()
+  assert.equal(createDraftStore({ storage, key: 'k', identity: { workspace: 'w' } }).relationDraft(rel.id).evidence[0].id, m.nodes[1].id, 'relation evidence persists')
+})
+
+test('model: folders named like inherited properties are ordinary zones', () => {
+  const nodes = ['constructor', 'toString', '__proto__', 'hasOwnProperty'].map((folder, i) => ({ id: 'n' + i, title: 'Note ' + i, summary: '', repo: 'r', path: `notes/${folder}/note-${i}.md`, type: 'constructor', status: 'active', audience: 'team', tags: [], relations: {} }))
+  const m = buildWorkspaceModel({ graph: { ...fixture.graph, nodes, edges: [] }, zoneRule: { prefix: 'notes/', depth: 1 } })
+  assert.equal(m.zones.length, 4)
+  for (const z of m.zones) assert.equal(typeof z.label, 'string', z.id)
+  assert.equal(zoneOf('notes/constructor/a.md', { prefix: 'notes/' }).label, 'Constructor')
+  const agg = aggregateZones(m)
+  for (const z of agg.zones) assert.equal(z.types.constructor, 1)
 })
 
 test('authoring: drafts are bound to one workspace identity and survive hostile ids', () => {

@@ -26,6 +26,7 @@ export function relationSteps(relation, titleOf = id => id) {
     { id: 'meaning', label: 'Meaning', prompt: `What does “${verb}” claim here?`, help: 'Say what the relation lets you check, not that it proves anything.' },
     { id: 'forward', label: 'Forward', prompt: `Read it from ${titleOf(relation.from)} to ${titleOf(relation.to)}.`, help: `Start with “${titleOf(relation.from)}…”` },
     { id: 'reverse', label: 'Reverse', prompt: `Read it from ${titleOf(relation.to)} back to ${titleOf(relation.from)}.`, help: 'The same claim from the other end. It creates no inverse relation.' },
+    { id: 'evidence', label: 'Evidence', prompt: 'Which records show this relation at work?', help: 'Cite records you have looked at. Citing does not create the relation.', kind: 'evidence' },
     { id: 'disconfirming', label: 'Prove wrong', prompt: 'What would show this relation does not hold?', help: 'One observation is enough.' },
   ]
 }
@@ -50,16 +51,20 @@ export function guideConcept(concept, draft, readableIds = null) {
   const near = (draft.nearMiss ?? '').trim()
   if (!near) f.nearMiss.push({ tone: 'error', text: 'Add a close example that must stay separate.' })
   else if (near.toLowerCase() === (draft.example ?? '').trim().toLowerCase()) f.nearMiss.push({ tone: 'error', text: 'The near miss must differ from the example.' })
-  const evidence = draft.evidence ?? []
-  // Readiness promises completeness and grounding in readable records, so these block it.
-  if (!evidence.length) f.evidence.push({ tone: 'error', text: 'Cite at least one record you have looked at.' })
-  if (readableIds) for (const b of evidence) if (!readableIds.has(b.id)) f.evidence.push({ tone: 'error', text: 'One cited record is not readable here. It cannot support a proposal made from this view.' })
+  guideEvidence(f, draft, readableIds)
   if (!(draft.disconfirming ?? '').trim()) f.disconfirming.push({ tone: 'error', text: 'Name one observation that would prove it wrong.' })
   return summarize(f)
 }
 
-export function guideRelation(draft) {
-  const f = fields(['meaning', 'forward', 'reverse', 'disconfirming'])
+// Readiness promises completeness and grounding in readable records, so these block it.
+function guideEvidence(f, draft, readableIds) {
+  const evidence = draft.evidence ?? []
+  if (!evidence.length) f.evidence.push({ tone: 'error', text: 'Cite at least one record you have looked at.' })
+  if (readableIds) for (const b of evidence) if (!readableIds.has(b.id)) f.evidence.push({ tone: 'error', text: 'One cited record is not readable here. It cannot support a proposal made from this view.' })
+}
+
+export function guideRelation(draft, readableIds = null) {
+  const f = fields(['meaning', 'forward', 'reverse', 'evidence', 'disconfirming'])
   const meaning = (draft.meaning ?? '').trim()
   if (!meaning) f.meaning.push({ tone: 'error', text: 'Explain what this relation claims.' })
   else if (/\b(proves?|guarantees?|always)\b/i.test(meaning)) f.meaning.push({ tone: 'warn', text: 'Avoid claiming proof; say what it lets you check.' })
@@ -67,6 +72,7 @@ export function guideRelation(draft) {
   const reverse = (draft.reverse ?? '').trim()
   if (!reverse) f.reverse.push({ tone: 'error', text: 'Write the reverse reading.' })
   else if (reverse.toLowerCase() === (draft.forward ?? '').trim().toLowerCase()) f.reverse.push({ tone: 'warn', text: 'Start the reverse reading from the other end.' })
+  guideEvidence(f, draft, readableIds)
   if (!(draft.disconfirming ?? '').trim()) f.disconfirming.push({ tone: 'error', text: 'Name what would show it does not hold.' })
   return summarize(f)
 }
@@ -92,6 +98,7 @@ const dict = () => Object.create(null)
 const own = (o, k) => Object.hasOwn(o, k) ? o[k] : undefined
 const str = v => typeof v === 'string' && v.length <= 20000
 const ID = v => typeof v === 'string' && v.length > 0 && v.length <= 512
+const restoreEvidence = list => Array.isArray(list) ? list.filter(b => b && ID(b.id)).slice(0, 200).map(b => ({ id: b.id, title: str(b.title) ? b.title : b.id, citedAt: str(b.citedAt) ? b.citedAt : null })) : []
 function restoreData(raw) {
   const out = { concepts: dict(), relations: dict(), deferred: dict(), savedAt: null }
   if (!raw || typeof raw !== 'object') return out
@@ -99,13 +106,14 @@ function restoreData(raw) {
     if (!ID(id) || !c || typeof c !== 'object') continue
     const d = { definition: '', identityRule: '', example: '', nearMiss: '', disconfirming: '', evidence: [] }
     for (const k of ['definition', 'identityRule', 'example', 'nearMiss', 'disconfirming']) if (str(c[k])) d[k] = c[k]
-    if (Array.isArray(c.evidence)) d.evidence = c.evidence.filter(b => b && ID(b.id)).slice(0, 200).map(b => ({ id: b.id, title: str(b.title) ? b.title : b.id, citedAt: str(b.citedAt) ? b.citedAt : null }))
+    d.evidence = restoreEvidence(c.evidence)
     out.concepts[id] = d
   }
   for (const [id, r] of Object.entries(raw.relations ?? {})) {
     if (!ID(id) || !r || typeof r !== 'object') continue
-    const d = { meaning: '', forward: '', reverse: '', disconfirming: '' }
-    for (const k of Object.keys(d)) if (str(r[k])) d[k] = r[k]
+    const d = { meaning: '', forward: '', reverse: '', disconfirming: '', evidence: [] }
+    for (const k of ['meaning', 'forward', 'reverse', 'disconfirming']) if (str(r[k])) d[k] = r[k]
+    d.evidence = restoreEvidence(r.evidence)
     out.relations[id] = d
   }
   for (const [k, v] of Object.entries(raw.deferred ?? {})) if (ID(k) && v === true) out.deferred[k] = true
@@ -147,7 +155,7 @@ export function createDraftStore({ storage = memoryStorage(), key, identity, per
     persistence,
     onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn) },
     concept(c) { if (!own(data.concepts, c.id)) data.concepts[c.id] = { definition: c.definition ?? '', identityRule: c.identityRule ?? '', example: '', nearMiss: '', disconfirming: '', evidence: [] }; return data.concepts[c.id] },
-    relation(r) { if (!own(data.relations, r.id)) data.relations[r.id] = { meaning: r.meaning ?? '', forward: '', reverse: '', disconfirming: '' }; return data.relations[r.id] },
+    relation(r) { if (!own(data.relations, r.id)) data.relations[r.id] = { meaning: r.meaning ?? '', forward: '', reverse: '', disconfirming: '', evidence: [] }; return data.relations[r.id] },
     conceptDraft(id) { return own(data.concepts, id) },
     relationDraft(id) { return own(data.relations, id) },
     defer(kind, id, step, value) { const k = `${kind}:${id}:${step}`; if (value) data.deferred[k] = true; else delete data.deferred[k]; this.changed() },
@@ -170,7 +178,7 @@ export function readiness(plan, store, readableIds) {
   for (const r of plan?.relations ?? []) {
     const d = store.relationDraft ? store.relationDraft(r.id) : (Object.hasOwn(store.data.relations, r.id) ? store.data.relations[r.id] : undefined)
     if (!d) continue
-    if (d.meaning !== (r.meaning ?? '') || d.forward || d.reverse || d.disconfirming) items.push({ kind: 'relation', id: r.id, title: r.id, guide: guideRelation(d) })
+    if (d.meaning !== (r.meaning ?? '') || d.forward || d.reverse || d.disconfirming || d.evidence?.length) items.push({ kind: 'relation', id: r.id, title: r.id, guide: guideRelation(d, readableIds) })
   }
   const errors = items.reduce((n, i) => n + i.guide.errors, 0)
   return { status: !items.length ? 'nothing-drafted' : errors ? 'needs-attention' : 'ready-for-human-review', items, errors }

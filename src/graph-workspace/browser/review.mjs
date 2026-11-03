@@ -34,6 +34,7 @@ export function renderReview(root, { model, store, onBack, onOpen, backLabel = '
       const t = id => plan.concepts.find(c => c.id === id)?.title ?? id
       card.append(h('h3', { text: `${t(rel.from)} → ${t(rel.to)}` }), pair('Meaning', rel.meaning, d.meaning))
       for (const [k, v] of [['Forward', d.forward], ['Reverse', d.reverse], ['Would prove it wrong', d.disconfirming]]) if (v) card.append(h('p', { class: 'line' }, h('span', { class: 'label', text: k + ' ' }), v))
+      card.append(h('p', { class: 'label', text: `Evidence · ${d.evidence.length}` }), h('ul', { class: 'cited' }, d.evidence.map(b => h('li', { text: visible.has(b.id) ? byId.get(b.id).title : 'A record outside what you can read' }))))
       card.append(h('p', { class: 'step-help', text: 'One directed relation. The reverse reading is explanation, not a second relation.' }))
     }
     if (item.guide.errors) card.append(h('p', { class: 'guide-error', text: `${item.guide.errors} step(s) still need attention.` }))

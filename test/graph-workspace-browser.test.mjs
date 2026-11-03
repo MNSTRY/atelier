@@ -29,6 +29,11 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
       import { generateCommons } from './test/helpers/graph-workspace-commons.mjs'
       const params = new URLSearchParams(location.search)
       const fixture = generateCommons({ size: Number(params.get('size') ?? 900), seed: 11 })
+      if (params.get('reserved') === '1') {
+        // Folders named like inherited properties are ordinary zones.
+        const names = ['constructor', 'toString', '__proto__']
+        fixture.graph.nodes.forEach((n, i) => { if (i % 7 === 0) n.path = 'notes/' + names[i % 3] + '/' + n.path.split('/').at(-1) })
+      }
       const model = buildWorkspaceModel(fixture)
       layoutWorkspace(model, { Graph, forceAtlas2, iterations: 300 })
       const coach = params.get('coach') === '1'
@@ -178,6 +183,12 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     assert.equal(await p.evaluate(() => document.activeElement?.id), 'gw-command')
     r = await run('question')
     assert.equal(r.lens, 'question'); assert.equal(r.primary, 'Open the evidence')
+    await context.close()
+    // Reserved-looking folder names render as zone names without errors.
+    ;({ p, context } = await open('?reserved=1'))
+    const reserved = await p.evaluate(() => window.model.zones.filter(z => ['constructor', 'toString', '__proto__'].includes(z.id)).map(z => typeof z.label))
+    assert.deepEqual(reserved, ['string', 'string', 'string'])
+    assert.ok((await labelsOk(p)).zones.length >= 3)
     await context.close()
     // Without WebGL the same tasks remain through Text view and the workbench.
     ;({ p, context } = await open('?webgl=off'))

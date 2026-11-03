@@ -17,7 +17,7 @@ export function planConstellation(model, budget = DEFAULT_BUDGET) {
 /** Zone-level summary of the whole: counts by type and directed bundles by edge class. */
 export function aggregateZones(model) {
   const zoneOfId = new Map(model.nodes.map(n => [n.id, n.zone]))
-  const zones = model.zones.map(z => ({ id: z.id, label: z.label, index: z.index, count: z.count, types: {}, declaredRelations: 0 }))
+  const zones = model.zones.map(z => ({ id: z.id, label: z.label, index: z.index, count: z.count, types: Object.create(null), declaredRelations: 0 }))
   const byId = new Map(zones.map(z => [z.id, z]))
   for (const n of model.nodes) { const z = byId.get(n.zone); z.types[n.type] = (z.types[n.type] ?? 0) + 1 }
   const bundles = new Map()

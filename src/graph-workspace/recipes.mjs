@@ -9,6 +9,15 @@ export const LAYERS = Object.freeze(['atelier', 'coach', 'owner'])
 /** The single emphasised action of a recipe. The default shell implements each one. */
 export const PRIMARY_ACTIONS = Object.freeze(['search', 'open-evidence', 'next-step', 'walk', 'review', 'pick'])
 
+/** The primary actions the default shell honours for a recipe's room, lens and subject. */
+export function primaryActionsFor({ room, lens = null, subject = null }) {
+  if (room === 'review') return ['review']
+  if (room === 'workbench') return subject === 'record' ? ['walk'] : ['next-step']
+  if (lens === 'zone') return ['pick', 'search']
+  if (lens) return ['open-evidence', 'pick', 'search']
+  return ['search']
+}
+
 export const DEFAULT_RECIPES = Object.freeze([
   { id: 'explore', label: 'Explore', room: 'constellation', lens: null, subject: null, primary: 'search', description: 'Wander the whole graph. Zones on, search ready.' },
   { id: 'question', label: 'Answer a question', room: 'constellation', lens: 'question', subject: null, primary: 'open-evidence', description: 'Light the records that declare a question’s concepts.' },
@@ -55,6 +64,8 @@ export function composeRecipes({ atelier = DEFAULT_RECIPES, coach = [], owner = 
       if (next.room === 'workbench' && !next.subject) throw new TypeError(`${layer} recipe ${entry.id}: a workbench recipe needs a subject`)
       if (next.room !== 'workbench' && next.subject) throw new TypeError(`${layer} recipe ${entry.id}: only a workbench recipe takes a subject`)
       if (next.room !== 'constellation' && next.lens) throw new TypeError(`${layer} recipe ${entry.id}: only a constellation recipe takes a lens`)
+      const actions = primaryActionsFor(next)
+      if (!actions.includes(next.primary)) throw new TypeError(`${layer} recipe ${entry.id}: primary ${next.primary} is not available here; use ${actions.join(' or ')}`)
       resolved.set(entry.id, next)
       const fields = provenance.get(entry.id) ?? {}
       for (const key of Object.keys(entry)) if (key !== 'id') fields[key] = layer

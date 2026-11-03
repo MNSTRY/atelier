@@ -60,6 +60,17 @@ const TEXT_PAIRS = [
   ['--accent-ink', '--accent', 4.5], ['--accent', '--canvas', 4.5], ['--accent', '--surface', 4.5],
   ['--warn', '--surface', 4.5], ['--danger', '--surface', 4.5], ['--ok', '--surface', 4.5],
 ]
+// Text on the translucent chrome (pills, command bar, selection card), composited
+// over each backdrop it floats on.
+const GLASS_TEXT = [['--ink', 4.5], ['--ink-2', 4.5], ['--ink-3', 4.5]]
+const GLASS_BACKDROPS = ['--canvas', '--surface-2']
+function composite(over, under) {
+  const rgb = h => { const n = parseInt(h.slice(1, 7), 16); return [n >> 16, (n >> 8) & 255, n & 255] }
+  const m = RGBA.test(over) ? over.match(/[\d.]+/g).map(Number) : [...rgb(over), 1]
+  const [r, g, b, a] = [Math.min(255, m[0]), Math.min(255, m[1]), Math.min(255, m[2]), Math.min(1, m[3])]
+  const base = rgb(under)
+  return '#' + [r, g, b].map((v, i) => Math.round(v * a + base[i] * (1 - a)).toString(16).padStart(2, '0')).join('')
+}
 
 function layerProblems(layer, { partial }) {
   const problems = []
@@ -105,6 +116,10 @@ export function validateTheme(theme) {
     const { vars, graph } = theme.schemes[scheme]
     if (vars['--canvas'].toLowerCase() !== graph.canvas.toLowerCase()) problems.push(`${scheme}: --canvas and graph.canvas must be the same colour`)
     for (const [fg, bg, min] of TEXT_PAIRS) if (contrastRatio(vars[fg], vars[bg]) < min) problems.push(`${scheme}: ${fg} on ${bg} is below ${min}:1`)
+    for (const backdrop of GLASS_BACKDROPS) {
+      const glass = composite(vars['--surface-glass'], vars[backdrop])
+      for (const [fg, min] of GLASS_TEXT) if (contrastRatio(vars[fg], glass) < min) problems.push(`${scheme}: ${fg} on --surface-glass over ${backdrop} is below ${min}:1`)
+    }
     if (contrastRatio(graph.label, graph.canvas) < 7) problems.push(`${scheme}: label contrast on the canvas is below 7:1`)
     if (Math.min(...graph.zones.map(z => contrastRatio(z, graph.canvas))) < 3) problems.push(`${scheme}: a zone colour is below 3:1 on the canvas (zone names are large text)`)
   }

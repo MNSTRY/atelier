@@ -205,7 +205,7 @@ export function mountGraphWorkspace(root, options) {
     }
   }
   function focusPrimary(action) {
-    if (action === 'walk') el.workbench.querySelector('.wb-neighbour')?.focus()
+    if (action === 'walk') (el.workbench.querySelector('.wb-neighbour') ?? el.workbench.querySelector('#wb-title'))?.focus()
     else if (action === 'next-step') el.workbench.querySelector('.wb-sheet textarea, .wb-sheet input, .wb-sheet button.primary')?.focus()
   }
   function questionLit() {

@@ -6,7 +6,7 @@ import { h, clear } from './dom.mjs'
 import { conceptSteps, relationSteps, guideConcept, guideRelation, stepState } from '../authoring.mjs'
 
 const VERB = { depends_on: 'depends on', supports: 'supports', contradicts: 'challenges', evidences: 'is evidence about', related: 'links to', supersedes: 'replaces', belongs_to: 'belongs to', implements: 'puts into practice', declares: 'declares' }
-const verb = p => VERB[p] ?? p.replaceAll('_', ' ')
+const verb = p => Object.hasOwn(VERB, p) ? VERB[p] : p.replaceAll('_', ' ')
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export function createWorkbench({ root, model, palette, store, vocab, onBack, onReview, onShowOnMap }) {
@@ -180,7 +180,7 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     const titleOf = id => conceptById.get(id)?.title ?? id
     const steps = isConcept ? conceptSteps(item) : relationSteps(item, titleOf)
     const d = isConcept ? store.concept(item) : store.relation(item)
-    const guide = isConcept ? guideConcept(item, d, visible) : guideRelation(d)
+    const guide = isConcept ? guideConcept(item, d, visible) : guideRelation(d, visible)
     const originals = isConcept ? { definition: item.definition, identityRule: item.identityRule } : { meaning: item.meaning }
     const states = steps.map(s => stepState(d[s.id], guide.fields[s.id], store.deferred(subject.kind, subject.id, s.id), originals[s.id]))
     const countText = list => `${list.filter(x => x === 'answered').length} of ${steps.length} drafted · ${list.filter(x => x === 'plan').length} use the plan wording · ${list.filter(x => x === 'deferred').length} deferred`
@@ -205,7 +205,7 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     }
     const guideList = h('ul', { class: 'guide', id: 'step-guide', 'aria-live': 'polite' })
     const updateGuide = () => {
-      const g = isConcept ? guideConcept(item, d, visible) : guideRelation(d)
+      const g = isConcept ? guideConcept(item, d, visible) : guideRelation(d, visible)
       clear(guideList)
       for (const m of g.fields[s.id] ?? []) guideList.append(h('li', { class: 'guide-' + m.tone, text: m.text }))
       const now = steps.map(x => stepState(d[x.id], g.fields[x.id], store.deferred(subject.kind, subject.id, x.id), originals[x.id]))
@@ -233,7 +233,8 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     if (c && subject.kind === 'concept') c.textContent = store.conceptDraft(subject.id)?.definition ?? ''
   }
 
-  function evidenceStep(concept, d) {
+  function evidenceStep(item, d) {
+    const isConcept = !Object.hasOwn(item, 'predicate')
     const wrap = h('div', { class: 'evidence' })
     const cited = h('ul', { class: 'cited' })
     for (const b of d.evidence) cited.append(h('li', {}, h('span', { text: visible.has(b.id) ? byId.get(b.id).title : 'A record outside what you can read' }),
@@ -248,10 +249,17 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
       for (const id of list) ul.append(h('li', {}, h('span', { class: 'dot', style: `background:${zoneColor(byId.get(id).zone)}` }), h('span', { class: 'suggest-title', text: byId.get(id).title }), h('button', { class: 'cite secondary small', type: 'button', onclick: () => cite(id) }, 'Cite')))
       wrap.append(ul)
     }
-    suggest(`${vocab.records[0].toUpperCase() + vocab.records.slice(1)} that declare this concept`, concept.declaredBy, 'The record itself carries this concept’s tag.')
-    const term = concept.title.toLowerCase()
-    const matches = model.nodes.filter(n => !concept.declaredBy.includes(n.id) && (n.title + ' ' + n.summary).toLowerCase().includes(term)).map(n => n.id)
-    suggest('Text matches', matches, 'These mention the word. That alone does not make them members.')
+    const Records = vocab.records[0].toUpperCase() + vocab.records.slice(1)
+    if (isConcept) {
+      suggest(`${Records} that declare this concept`, item.declaredBy, 'The record itself carries this concept’s tag.')
+      const term = item.title.toLowerCase()
+      const matches = model.nodes.filter(n => !item.declaredBy.includes(n.id) && (n.title + ' ' + n.summary).toLowerCase().includes(term)).map(n => n.id)
+      suggest('Text matches', matches, 'These mention the word. That alone does not make them members.')
+    } else {
+      const ends = [item.from, item.to].map(id => new Set(conceptById.get(id)?.declaredBy ?? []))
+      suggest(`${Records} that declare both concepts`, [...ends[0]].filter(id => ends[1].has(id)), 'Each carries both concept tags.')
+      suggest(`${Records} that declare either concept`, [...new Set([...ends[0], ...ends[1]])].filter(id => !(ends[0].has(id) && ends[1].has(id))), 'One end only. That alone does not show the relation.')
+    }
     const find = h('input', { type: 'search', class: 'find', placeholder: `Find any ${vocab.record}…`, 'aria-label': `Find a ${vocab.record} to cite` })
     const results = h('ul', { class: 'suggest' })
     find.addEventListener('input', () => {
