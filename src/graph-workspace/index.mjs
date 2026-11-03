@@ -1,7 +1,7 @@
 // Graph workspace primitives: the read model, scale and layout helpers, label
 // placement, layered recipes and themes, focused authoring and a disclosure gate.
 // Pure modules only; browser rooms live under ./browser/index.mjs.
-export { buildWorkspaceModel, zoneOf, validateZoneRule, edgeClass, EDGE_CLASSES, neighbours } from './model.mjs'
+export { buildWorkspaceModel, zoneOf, ROOT_ZONE, validateZoneRule, edgeClass, EDGE_CLASSES, neighbours } from './model.mjs'
 export { seedPositions, layoutWorkspace, normalizePositions, zoneGeometry, LAYOUT_WEIGHTS } from './geometry.mjs'
 export { planConstellation, aggregateZones, zoneSlice, rankRecords, DEFAULT_BUDGET } from './scale.mjs'
 export { placeLabels, labelThreshold, labelBudget, overlaps } from './labels.mjs'

@@ -34,6 +34,7 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
         const names = ['constructor', 'toString', '__proto__']
         fixture.graph.nodes.forEach((n, i) => { if (i % 7 === 0) n.path = 'notes/' + names[i % 3] + '/' + n.path.split('/').at(-1) })
       }
+      if (params.get('empty') === '1') { fixture.graph.nodes = []; fixture.graph.edges = [] }
       const model = buildWorkspaceModel(fixture)
       layoutWorkspace(model, { Graph, forceAtlas2, iterations: 300 })
       const coach = params.get('coach') === '1'
@@ -66,7 +67,7 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     const p = await context.newPage()
     p.on('pageerror', e => errors.push(e.message))
     await p.goto(pathToFileURL(page).href + query)
-    await p.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 60000 })
+    await p.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 60000 }).catch(e => { throw new Error(`page did not mount: ${errors.join(' | ') || e.message}`) })
     await p.waitForTimeout(800)
     return { p, context }
   }
@@ -183,6 +184,14 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     assert.equal(await p.evaluate(() => document.activeElement?.id), 'gw-command')
     r = await run('question')
     assert.equal(r.lens, 'question'); assert.equal(r.primary, 'Open the evidence')
+    await context.close()
+    // An empty readable graph offers only recipes whose primary action has a target.
+    ;({ p, context } = await open('?recipes=all&empty=1'))
+    const offered = await p.evaluate(() => window.gw.recipes.map(r => r.id))
+    assert.ok(offered.includes('explore') && !offered.includes('by-zone') && !offered.includes('inspect'), offered.join())
+    await p.evaluate(() => window.gw.setRecipe('explore'))
+    await p.click('[data-gw="primary"]')
+    assert.equal(await p.evaluate(() => document.activeElement?.id), 'gw-command')
     await context.close()
     // Reserved-looking folder names render as zone names without errors.
     ;({ p, context } = await open('?reserved=1'))

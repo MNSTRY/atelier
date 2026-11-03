@@ -83,5 +83,6 @@ export function availableRecipes(recipes, model) {
   return recipes.filter(r =>
     (r.subject !== 'concept' || concepts) && (r.subject !== 'relation' || relations) &&
     (r.lens !== 'question' || questions) && (r.lens !== 'concept' || concepts) &&
-    (r.room !== 'review' || concepts) && (r.subject !== 'record' || model.nodes.length > 0))
+    (r.room !== 'review' || concepts) && (r.subject !== 'record' || model.nodes.length > 0) &&
+    (r.lens !== 'zone' || model.zones?.length > 0))
 }

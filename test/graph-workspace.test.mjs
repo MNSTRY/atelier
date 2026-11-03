@@ -43,7 +43,8 @@ test('model: refuses duplicate ids, a wrong schema and unsafe zone rules', () =>
   assert.throws(() => validateZoneRule({ prefix: '../x' }), /prefix/)
   assert.throws(() => validateZoneRule({ depth: 9 }), /depth/)
   assert.deepEqual(zoneOf('notes/field-studies/a.md', { prefix: 'notes/', labels: { 'field-studies': 'Field' } }), { id: 'field-studies', label: 'Field' })
-  assert.equal(zoneOf('README.md', { prefix: 'notes/' }).id, '_root')
+  assert.equal(zoneOf('README.md', { prefix: 'notes/' }).id, '/')
+  assert.equal(zoneOf('notes/_root/a.md', { prefix: 'notes/' }).id, '_root', 'a folder named _root is its own zone')
 })
 
 test('geometry: layout is injected, normalised and zone-seeded', () => {
@@ -150,7 +151,9 @@ test('recipes: only combinations the shell honours are accepted or offered', () 
   assert.ok(!availableRecipes(recipes, noRelations).some(r => r.id === 'bind'))
   const noConcepts = { ...m, plan: { concepts: [], relations: [], questions: [] } }
   assert.deepEqual(availableRecipes(recipes, noConcepts).map(r => r.id), ['explore', 'inspect', 'by-zone'])
-  assert.deepEqual(availableRecipes(recipes, { plan: null, nodes: [] }).map(r => r.id), ['explore', 'by-zone'])
+  assert.deepEqual(availableRecipes(recipes, { plan: null, nodes: [], zones: [] }).map(r => r.id), ['explore'], 'no zones, no zone recipe')
+  const empty = buildWorkspaceModel({ graph: { ...fixture.graph, nodes: [], edges: [] } })
+  assert.deepEqual(availableRecipes(recipes, empty).map(r => r.id), ['explore'])
 })
 
 test('theme: night is the default, overrides validate, unsafe or low-contrast values are refused', () => {
@@ -255,6 +258,20 @@ test('authoring: relation drafts need readable evidence before they are ready', 
   const a = createDraftStore({ storage, key: 'k', identity: { workspace: 'w' }, delayMs: 0 })
   a.relation(rel).evidence.push({ id: m.nodes[1].id, title: 'T' }); a.changed()
   assert.equal(createDraftStore({ storage, key: 'k', identity: { workspace: 'w' } }).relationDraft(rel.id).evidence[0].id, m.nodes[1].id, 'relation evidence persists')
+})
+
+test('model: the synthetic root zone never merges with a folder named _root', () => {
+  const node = (id, path) => ({ id, title: id, summary: '', repo: 'r', path, type: 'note', status: 'active', audience: 'team', tags: [], relations: {} })
+  const nodes = [node('readme', 'README.md'), node('a', 'notes/_root/a.md'), node('b', 'notes/_root/b.md')]
+  const edges = [{ source: 'readme', target: 'a', type: 'related' }, { source: 'a', target: 'b', type: 'related' }]
+  const m = buildWorkspaceModel({ graph: { ...fixture.graph, nodes, edges }, zoneRule: { prefix: 'notes/' } })
+  assert.deepEqual(m.zones.map(z => [z.id, z.count]).sort(), [['/', 1], ['_root', 2]])
+  const agg = aggregateZones(m)
+  assert.equal(agg.coverage.linksBetweenZones, 1); assert.equal(agg.coverage.linksInsideZones, 1)
+  const slice = zoneSlice(m, '_root')
+  assert.deepEqual(slice.nodes.map(n => n.id).sort(), ['a', 'b'])
+  assert.equal(slice.slice.linksToOtherZonesCount, 1)
+  assert.deepEqual(zoneSlice(m, '/').nodes.map(n => n.id), ['readme'])
 })
 
 test('model: folders named like inherited properties are ordinary zones', () => {

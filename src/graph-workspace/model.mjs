@@ -30,12 +30,15 @@ export function validateZoneRule(rule = {}) {
   return { prefix, depth, labels: Object.assign(Object.create(null), labels), rootLabel: typeof rule.rootLabel === 'string' ? rule.rootLabel.slice(0, 80) : 'Workspace root' }
 }
 
+/** The zone of records outside the folder rule. No folder id can be '/'. */
+export const ROOT_ZONE = '/'
+
 /** The owner-configured zone of a record path. Records outside the prefix share one root zone. */
 export function zoneOf(path, rule) {
   const r = validateZoneRule(rule)
-  if (typeof path !== 'string' || !path.startsWith(r.prefix)) return { id: '_root', label: r.rootLabel }
+  if (typeof path !== 'string' || !path.startsWith(r.prefix)) return { id: ROOT_ZONE, label: r.rootLabel }
   const parts = path.slice(r.prefix.length).split('/')
-  if (parts.length <= r.depth) return { id: '_root', label: r.rootLabel }
+  if (parts.length <= r.depth) return { id: ROOT_ZONE, label: r.rootLabel }
   const folder = parts.slice(0, r.depth).join('/')
   return { id: folder, label: Object.hasOwn(r.labels, folder) ? r.labels[folder] : humanize(folder.split('/').at(-1)) }
 }

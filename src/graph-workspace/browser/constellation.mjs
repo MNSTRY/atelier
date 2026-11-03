@@ -138,7 +138,7 @@ export function createConstellation({ container, model, palette, font = 'system-
     for (const z of geometry) for (const b of z.blobs) { const r = 34 + 11 * Math.sqrt(b.weight); minX = Math.min(minX, b.x - r); maxX = Math.max(maxX, b.x + r); minY = Math.min(minY, b.y - r); maxY = Math.max(maxY, b.y + r) }
     const size = 1400, scale = size / Math.max(maxX - minX, maxY - minY, 1)
     const canvas = document.createElement('canvas')
-    canvas.width = Math.ceil((maxX - minX) * scale); canvas.height = Math.ceil((maxY - minY) * scale)
+    canvas.width = Number.isFinite(minX) ? Math.ceil((maxX - minX) * scale) : 0; canvas.height = Number.isFinite(minY) ? Math.ceil((maxY - minY) * scale) : 0
     const ctx = canvas.getContext('2d')
     ctx.globalCompositeOperation = palette.mode === 'dark' ? 'lighter' : 'multiply'
     for (const zone of geometry) {
@@ -157,6 +157,8 @@ export function createConstellation({ container, model, palette, font = 'system-
     const { ctx } = sizeCanvas(zoneCanvas)
     if (!state.zonesOn) return
     if (!glow) buildGlow()
+    // An empty or single-point readable set has no area to glow.
+    if (!glow.canvas.width || !glow.canvas.height || !Number.isFinite(glow.minX)) return
     const a = renderer.graphToViewport({ x: glow.minX, y: glow.minY }), b = renderer.graphToViewport({ x: glow.maxX, y: glow.maxY })
     ctx.globalAlpha = (activeSet() || state.lit || state.focusZone) ? 0.45 : 1
     // The viewport flips the graph's y axis; mirror the glow image to match.
