@@ -9,6 +9,20 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.15
+
+This release adds the graph workspace (`@mnstry/atelier/graph-workspace` and
+`@mnstry/atelier/graph-workspace/browser`) and the graph view, access and
+source-contribution modules. Existing consumers do not need to change. No schema
+or stored record format changes, with one effect on Knowledge Health:
+
+- Knowledge Health regenerates its rule identity for the knowledge-graph file:
+  the `check` each assessment carries names a new `version` and `sourceTree`.
+  The rule it applies is unchanged. A workshop contribution started on
+  0.2.0-alpha.14, completed or not, cannot start Review on this release
+  (`finding changed; refresh before selecting a new draft`); start Review
+  before upgrading, or record a new contribution.
+
 ## Upgrading to 0.2.0-alpha.14
 
 `atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
