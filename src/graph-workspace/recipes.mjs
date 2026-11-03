@@ -30,7 +30,8 @@ export const DEFAULT_RECIPES = Object.freeze([
 
 const FIELDS = ['label', 'room', 'lens', 'subject', 'primary', 'description']
 const text = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max
-const currentRoom = room => (typeof room === 'string' && Object.hasOwn(DEPRECATED_ROOMS, room) ? DEPRECATED_ROOMS[room] : room)
+/** A room name as this release reads it: deprecated names map to their replacements. */
+export const currentRoom = room => (typeof room === 'string' && Object.hasOwn(DEPRECATED_ROOMS, room) ? DEPRECATED_ROOMS[room] : room)
 
 export function validateRecipe(recipe, { partial = false } = {}) {
   const problems = []
@@ -57,7 +58,8 @@ export function validateRecipe(recipe, { partial = false } = {}) {
  */
 export function composeRecipes({ atelier = DEFAULT_RECIPES, distribution, coach, owner = [] } = {}) {
   if (distribution !== undefined && coach !== undefined) throw new TypeError('Give the distribution layer once: `coach` is its deprecated name')
-  const middle = distribution ?? coach ?? []
+  // Only an omitted layer defaults; anything supplied (null included) is validated below.
+  const middle = distribution !== undefined ? distribution : coach !== undefined ? coach : []
   const resolved = new Map()
   const provenance = new Map()
   for (const [layer, list] of [['atelier', atelier], ['distribution', middle], ['owner', owner]]) {

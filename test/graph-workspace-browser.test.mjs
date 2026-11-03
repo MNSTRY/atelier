@@ -39,6 +39,7 @@ test('graph workspace rooms: map, workbench, review, recipes, themes and fallbac
       layoutWorkspace(model, { Graph, forceAtlas2, iterations: 300 })
       const layered = params.get('layered') === '1'
       const every = params.get('recipes') === 'all'
+      const legacy = params.get('recipes') === 'legacy'
       const extra = [
         { id: 'check', label: 'Check the proposal', description: 'Review what is drafted.', room: 'review', primary: 'review' },
         { id: 'bind', label: 'Refine a relation', description: 'One relation at a time.', room: 'workbench', subject: 'relation', primary: 'next-step' },
@@ -50,7 +51,8 @@ test('graph workspace rooms: map, workbench, review, recipes, themes and fallbac
         model, deps: { Sigma, Graph, EdgeArrowProgram, FA2Layout }, intro: false,
         webgl: params.get('webgl') === 'off' ? false : undefined,
         profile: { id: params.get('workspace') ?? 'commons', name: 'Invented commons', vocabulary: { record: 'note', records: 'notes', zone: 'folder' } },
-        recipes: every ? composeRecipes({ distribution: extra }).recipes : layered ? composeRecipes({ distribution: [{ id: 'explore', label: 'Wander the shore' }], owner: [{ id: 'inspect', hidden: true }] }).recipes : undefined,
+        // legacy: complete alpha.15 recipes handed straight to the shell, never composed.
+        recipes: legacy ? [{ id: 'explore', label: 'Explore', description: 'All of it.', room: 'constellation', lens: null, subject: null, primary: 'search', hidden: false }, { id: 'old-zone', label: 'One folder', description: 'Dim everything else.', room: 'constellation', lens: 'zone', subject: null, primary: 'pick', hidden: false }, { id: 'old-concept', label: 'Follow a concept', description: 'Light its notes.', room: 'constellation', lens: 'concept', subject: null, primary: 'open-evidence', hidden: false }] : every ? composeRecipes({ distribution: extra }).recipes : layered ? composeRecipes({ distribution: [{ id: 'explore', label: 'Wander the shore' }], owner: [{ id: 'inspect', hidden: true }] }).recipes : undefined,
         theme: layered ? composeTheme(DEFAULT_THEME, { id: 'distribution', schemes: { dark: { vars: { '--accent': '#a0e0c0' } } } }) : DEFAULT_THEME,
       })
       document.body.dataset.ready = 'true'
@@ -185,6 +187,15 @@ test('graph workspace rooms: map, workbench, review, recipes, themes and fallbac
     assert.equal(await p.evaluate(() => document.activeElement?.id), 'gw-command')
     r = await run('question')
     assert.equal(r.lens, 'question'); assert.equal(r.primary, 'Open the evidence')
+    await context.close()
+    // Uncomposed alpha.15 recipes still get their lenses and primary-action targets.
+    ;({ p, context } = await open('?recipes=legacy'))
+    r = await run('old-zone')
+    assert.equal(r.room, 'map'); assert.equal(r.lens, 'zone'); assert.equal(r.primary, 'Choose')
+    await p.click('[data-gw="primary"]')
+    assert.equal(await p.evaluate(() => document.activeElement?.tagName), 'SELECT', 'a legacy zone recipe keeps its zone selector')
+    r = await run('old-concept')
+    assert.equal(r.room, 'map'); assert.equal(r.lens, 'concept'); assert.equal(r.primary, 'Open the evidence')
     await context.close()
     // An empty readable graph offers only recipes whose primary action has a target.
     ;({ p, context } = await open('?recipes=all&empty=1'))

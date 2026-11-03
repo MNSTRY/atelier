@@ -5,7 +5,7 @@ export { buildWorkspaceModel, zoneOf, ROOT_ZONE, validateZoneRule, edgeClass, ED
 export { seedPositions, layoutWorkspace, normalizePositions, zoneGeometry, LAYOUT_WEIGHTS } from './geometry.mjs'
 export { planMap, planConstellation, aggregateZones, zoneSlice, rankRecords, DEFAULT_BUDGET } from './scale.mjs'
 export { placeLabels, labelThreshold, labelBudget, overlaps } from './labels.mjs'
-export { DEFAULT_RECIPES, composeRecipes, validateRecipe, availableRecipes, ROOMS, DEPRECATED_ROOMS, LENSES, SUBJECTS, LAYERS, PRIMARY_ACTIONS, primaryActionsFor } from './recipes.mjs'
+export { DEFAULT_RECIPES, composeRecipes, validateRecipe, availableRecipes, ROOMS, DEPRECATED_ROOMS, currentRoom, LENSES, SUBJECTS, LAYERS, PRIMARY_ACTIONS, primaryActionsFor } from './recipes.mjs'
 export { DEFAULT_THEME, composeTheme, validateTheme, contrastRatio } from './theme.mjs'
 export { conceptSteps, relationSteps, guideConcept, guideRelation, stepState, createDraftStore, memoryStorage, readiness } from './authoring.mjs'
 export { fingerprintsFrom, scanForFingerprints } from './disclosure.mjs'

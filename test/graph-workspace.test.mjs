@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   buildWorkspaceModel, zoneOf, validateZoneRule, edgeClass, neighbours,
   seedPositions, layoutWorkspace, normalizePositions, zoneGeometry,
-  planMap, planConstellation, aggregateZones, zoneSlice, rankRecords, DEPRECATED_ROOMS,
+  planMap, planConstellation, aggregateZones, zoneSlice, rankRecords, DEPRECATED_ROOMS, currentRoom,
   placeLabels, labelBudget, overlaps,
   DEFAULT_RECIPES, composeRecipes, validateRecipe, availableRecipes, primaryActionsFor, LAYERS, ROOMS,
   DEFAULT_THEME, composeTheme, validateTheme, contrastRatio,
@@ -337,6 +337,9 @@ test('alpha.15 names keep working for one release: coach layer, constellation ro
   assert.equal(zone.room, 'map', 'a constellation recipe is read as a map recipe')
   assert.deepEqual(validateRecipe({ id: 'x', label: 'X', description: 'D', room: 'constellation', primary: 'search' }), [])
   assert.throws(() => composeRecipes({ coach: [], distribution: [] }), /deprecated name/)
+  for (const layer of ['coach', 'distribution']) assert.throws(() => composeRecipes({ [layer]: null }), /distribution recipes must be a list/, `${layer}: null is refused, not defaulted`)
+  assert.equal(composeRecipes({}).recipes.length, DEFAULT_RECIPES.length, 'an omitted middle layer still defaults')
+  assert.equal(currentRoom('constellation'), 'map'); assert.equal(currentRoom('workbench'), 'workbench'); assert.equal(currentRoom('__proto__'), '__proto__')
   assert.deepEqual(LAYERS, ['atelier', 'distribution', 'owner'])
   assert.deepEqual(ROOMS, ['map', 'workbench', 'review'])
 })

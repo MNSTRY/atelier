@@ -21,7 +21,7 @@ import { renderReview } from './review.mjs'
 import { injectGraphWorkspaceStyles } from './styles.mjs'
 import { h, clear } from './dom.mjs'
 import { createDraftStore, readiness, memoryStorage } from '../authoring.mjs'
-import { composeRecipes, availableRecipes } from '../recipes.mjs'
+import { composeRecipes, availableRecipes, currentRoom } from '../recipes.mjs'
 import { DEFAULT_THEME, validateTheme } from '../theme.mjs'
 
 const fmt = n => n.toLocaleString('en-US')
@@ -56,7 +56,9 @@ export function mountGraphWorkspace(root, options) {
     model, deps = null, theme = DEFAULT_THEME, profile = {}, initialRecipe = null, intro = true,
     webgl = hasWebGL() && !!deps,
   } = options
-  const recipesAll = options.recipes ?? composeRecipes().recipes
+  // Recipes may arrive already composed (possibly by alpha.15 code): read their
+  // room names as this release does, keeping everything else, provenance included.
+  const recipesAll = (options.recipes ?? composeRecipes().recipes).map(r => (r && typeof r === 'object' && 'room' in r ? { ...r, room: currentRoom(r.room) } : r))
   const recipes = availableRecipes(recipesAll, model)
   const byRecipe = new Map(recipes.map(r => [r.id, r]))
   const vocab = { record: 'record', records: 'records', zone: 'zone', concept: 'concept', model: 'Concepts', ...(profile.vocabulary ?? {}) }
