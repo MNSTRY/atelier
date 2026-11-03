@@ -100,9 +100,12 @@ function readBytes(root, rel) {
   const segments = rel.split('/')
   // The repository's own metadata identity is retained for every component, so
   // a hard link to a worktree metadata file refuses even below a subdirectory.
+  // An observed repository always has it; its absence means the repository
+  // changed after observation, and nothing is read without the guard.
   let rootMetadata
   try { rootMetadata = fs.statSync(path.join(root, '.git'), { bigint: true }) } catch (error) {
     if (error?.code !== 'ENOENT') throw error
+    refuse('repository-snapshot-changed')
   }
   for (const [index, segment] of segments.entries()) {
     const next = path.join(cursor, segment)
@@ -115,7 +118,7 @@ function readBytes(root, rel) {
       if (error?.code !== 'ENOENT') throw error
     }
     if (metadata && stat.dev === metadata.dev && stat.ino === metadata.ino) refuse('invalid-source-path')
-    if (rootMetadata && stat.dev === rootMetadata.dev && stat.ino === rootMetadata.ino) refuse('invalid-source-path')
+    if (stat.dev === rootMetadata.dev && stat.ino === rootMetadata.ino) refuse('invalid-source-path')
     cursor = next
     if (index < segments.length - 1) {
       if (!stat.isDirectory() || stat.isSymbolicLink()) refuse('redirected-source-path')

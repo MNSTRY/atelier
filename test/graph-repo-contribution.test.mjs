@@ -117,15 +117,56 @@ test('input components that alias the metadata identity refuse before reading by
   fs.linkSync(path.join(worktree, '.git'), path.join(worktree, 'metadata-input.json'))
   assert.throws(() => build({ ...a, path: worktree }, { inputPaths: { config: 'metadata-input.json' } }), code('invalid-source-path'))
   // The same alias below an ordinary subdirectory refuses before reading too.
+  // Production reads through a descriptor, so the detector binds descriptors
+  // and paths alike to the metadata object's identity.
   fs.mkdirSync(path.join(worktree, 'nested'))
   fs.linkSync(path.join(worktree, '.git'), path.join(worktree, 'nested', 'metadata-input.json'))
-  const reads = []
-  const readFile = fs.readFileSync
-  fs.readFileSync = function(file, ...args) { reads.push(file); return readFile.call(this, file, ...args) }
+  const target = fs.statSync(path.join(worktree, '.git'), { bigint: true })
+  const detect = (t2) => {
+    const reads = []
+    const readFile = fs.readFileSync
+    fs.readFileSync = function(file, ...args) {
+      const stat = typeof file === 'number' ? fs.fstatSync(file, { bigint: true }) : fs.statSync(file, { bigint: true, throwIfNoEntry: false })
+      if (stat && stat.dev === target.dev && stat.ino === target.ino) reads.push(file)
+      return readFile.call(this, file, ...args)
+    }
+    t2.after(() => { fs.readFileSync = readFile })
+    return { reads, restore: () => { fs.readFileSync = readFile } }
+  }
+  // The detector itself sees a descriptor read of the metadata object.
+  const probe = detect(t)
+  const fd = fs.openSync(path.join(worktree, 'nested', 'metadata-input.json'), 'r')
+  try { fs.readFileSync(fd) } finally { fs.closeSync(fd); probe.restore() }
+  assert.equal(probe.reads.length, 1, 'detector misses descriptor reads')
+  const watch = detect(t)
   try {
     assert.throws(() => build({ ...a, path: worktree }, { inputPaths: { config: 'nested/metadata-input.json' } }), code('invalid-source-path'))
-  } finally { fs.readFileSync = readFile }
-  assert.ok(!reads.some(file => typeof file === 'string' && file.endsWith(path.join('nested', 'metadata-input.json'))), 'metadata alias was read')
+  } finally { watch.restore() }
+  assert.deepEqual(watch.reads, [], 'metadata alias was read')
+})
+
+test('a root metadata entry that disappears after observation refuses before any source read', (t) => {
+  const { a } = fixture(t)
+  write(a, 'notes/config.json', '{}')
+  const rootGit = path.resolve(path.join(fs.realpathSync(a.path), '.git'))
+  const input = fs.statSync(path.join(a.path, 'notes', 'config.json'), { bigint: true })
+  const stat = fs.statSync
+  const readFile = fs.readFileSync
+  const reads = []
+  // Git commands observe the repository through their own process; only this
+  // process's identity check sees the entry gone, as after a concurrent removal.
+  fs.statSync = function(file, ...args) {
+    if (path.resolve(String(file)) === rootGit) { const error = new Error('gone'); error.code = 'ENOENT'; throw error }
+    return stat.call(this, file, ...args)
+  }
+  fs.readFileSync = function(file, ...args) {
+    const s = typeof file === 'number' ? fs.fstatSync(file, { bigint: true }) : null
+    if (s && s.dev === input.dev && s.ino === input.ino) reads.push(file)
+    return readFile.call(this, file, ...args)
+  }
+  t.after(() => { fs.statSync = stat; fs.readFileSync = readFile })
+  assert.throws(() => build(a, { inputPaths: { config: 'notes/config.json' } }), code('repository-snapshot-changed'))
+  assert.deepEqual(reads, [], 'source bytes were read without the metadata guard')
 })
 
 test('Windows metadata short-name input aliases refuse when the filesystem supplies one', { skip: process.platform !== 'win32' }, (t) => {
