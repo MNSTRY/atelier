@@ -1,6 +1,6 @@
 # MNSTRY Atelier
 
-The `0.2.0-alpha.15` candidate adds an [extension SDK and Postgres project workflow](docs/guides/extensions.md). Publication and native host qualification are separate release gates.
+`0.2.0-alpha.15` adds a [graph workspace](docs/guides/graph-workspace.md) (a constellation of every readable record, a focused authoring workbench and a review room, built from primitives coaches and owners can compose), renderer-neutral graph views and an [extension SDK and Postgres project workflow](docs/guides/extensions.md). Native host qualification remains a separate gate.
 
 **Turn a repository into a living, governed system.**
 

@@ -57,6 +57,8 @@
     "./cli": "./src/cli/run.mjs",
     "./project": "./src/project/config.mjs",
     "./graph": "./src/graph/graph.mjs",
+    "./graph-workspace": "./src/graph-workspace/index.mjs",
+    "./graph-workspace/browser": "./src/graph-workspace/browser/index.mjs",
     "./projection": "./src/projection/project.mjs",
     "./readiness": "./src/readiness/readiness.mjs",
     "./readiness-protocols": "./src/readiness-protocols/bundled-pack.mjs",
@@ -195,9 +197,12 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "0.28.2",
+    "graphology": "0.25.4",
+    "graphology-layout-forceatlas2": "0.10.1",
     "playwright": "1.55.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "sigma": "3.0.2",
     "typescript": "5.8.3"
   },
   "license": "Apache-2.0",

@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.15
+
+- Add the graph workspace (`@mnstry/atelier/graph-workspace` and `/graph-workspace/browser`): one graph in three rooms, a constellation of every readable record on a night-sky canvas with folder zones and collision-free labels, a workbench of sparse cards beside a focused authoring sheet, and a review that shows before and proposed and leaves the decision to a person. Work recipes choose the room, lens and primary action, and compose across Atelier, coach and owner layers with per-field provenance; themes compose the same way and refuse unsafe values and low contrast. Scale helpers show the whole as zones beyond 12,000 records and open one zone at a time with every omission counted. Drafts live behind a storage port (this browser by default, and the interface says so). A shareable-content gate finds fingerprints of private graphs in shareable text. Renderer packages are injected by the host; Atelier adds no runtime dependency. See the [graph workspace guide](docs/guides/graph-workspace.md).
+- Add renderer-neutral graph views (`atelier.graph-view@v1`), a reader-bound graph access port, repository-qualified Markdown source contributions, a source-bound edge eligibility policy and adapters that bind source contributions through edge policy to graph access. Hosts still own authentication, grants, revalidation and keys.
+- Add a structured graph explorer with a provenance inspector, an optional Babylon graph-view consumer, source-bound ontology guidance drafts, and an authorized projection refresh lifecycle with scoped impact comparison.
+- Refuse aliases of Git metadata and impossible UTF-16 or UTF-8 locator offsets in repository contributions, and resolve outgoing links from uppercase `.MD` sources.
 
 - Accept a longer personal-selection history without a fresh confirmation only when it still holds the accepted record at its position. After a confirmed shortening, a divergent history at or above the earlier maximum refuses until it is confirmed again; ordinary appends and exact restoration are unchanged.
 
@@ -36,9 +41,6 @@
 
 - Add native Drizzle DB-first/code-first and Prisma 7 project profiles, prepared scoped transactions and provider receipt recovery. Optional provider dependencies stay in the generated app; Root and supported-host acceptance remain separate gates.
 
-The alpha.15 source version below is an unpublished candidate reservation. Shipping requires the maintainer's separate release PR and decision.
-
-## 0.2.0-alpha.15
 
 - Organize current documentation into start, guides, reference and maintainer folders with one index. Remove superseded planning/review and event walkthrough files. Remove the retired Obsidian publication experiment, retaining its active isolated-app test fixture in the maintained harness with read-only inspection and refusal coverage. Required packed-document and inbound references follow the new paths.
 
