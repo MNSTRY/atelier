@@ -97,6 +97,37 @@ test('a selected nested repository is refused rather than attributed to its pare
   assert.throws(() => build(a, { scope: { exclude: 'nested/' }, inputPaths: { config: '.git/config' } }), code('invalid-source-path'))
 })
 
+test('input components that alias the metadata identity refuse before reading bytes', (t) => {
+  const { root, a } = fixture(t)
+  write(a, 'metadata-alias/config', 'must not be read')
+  const alias = path.join(fs.realpathSync(a.path), 'metadata-alias')
+  const metadata = fs.statSync(path.join(a.path, '.git'), { bigint: true })
+  const original = fs.lstatSync
+  fs.lstatSync = function(file, ...args) {
+    if (path.resolve(file) === alias) return metadata
+    return original.call(this, file, ...args)
+  }
+  try {
+    assert.throws(() => build(a, { scope: { exclude: 'metadata-alias/' }, inputPaths: { config: 'metadata-alias/config' } }), code('invalid-source-path'))
+  } finally { fs.lstatSync = original }
+  // A worktree uses a metadata file. Its ordinary hard-link alias exercises
+  // the same object binding at a selected leaf without a mocked filesystem.
+  const worktree = path.join(root, 'linked-worktree')
+  git(a.path, ['worktree', 'add', '--detach', '--quiet', worktree, 'HEAD'])
+  fs.linkSync(path.join(worktree, '.git'), path.join(worktree, 'metadata-input.json'))
+  assert.throws(() => build({ ...a, path: worktree }, { inputPaths: { config: 'metadata-input.json' } }), code('invalid-source-path'))
+})
+
+test('Windows metadata short-name input aliases refuse when the filesystem supplies one', { skip: process.platform !== 'win32' }, (t) => {
+  const { a } = fixture(t)
+  const metadata = path.join(a.path, '.git')
+  const short = execFileSync('cmd.exe', ['/d', '/s', '/c', `for %I in ("${metadata}") do @echo %~sI`], { encoding: 'utf8' }).trim()
+  const alias = path.basename(short)
+  if (alias.toLowerCase() === '.git') { t.skip('filesystem does not supply a distinct metadata short name'); return }
+  assert.equal(fs.statSync(path.join(a.path, alias), { bigint: true }).ino, fs.statSync(metadata, { bigint: true }).ino)
+  assert.throws(() => build(a, { inputPaths: { config: `${alias}/config` } }), code('invalid-source-path'))
+})
+
 test('each Unicode/CRLF link occurrence keeps exact source and target offsets', (t) => {
   const { a } = fixture(t)
   const raw = doc('same', 'é 🧭 [one](target.md#one) [two](target.md#two) [[target]] [away](../beta/record.md)').replaceAll('\n', '\r\n')
@@ -212,6 +243,33 @@ test('validator refuses tampering, unknown fields and refs detached from their s
   assert.equal(validateRepositoryContribution({}).ok, false)
 })
 
+test('digest-consistent impossible UTF16 and UTF8 provenance ranges refuse', (t) => {
+  const { a } = fixture(t)
+  write(a, 'record.md', doc('same', '[target](target.md)', '    supports: "elsewhere"'))
+  write(a, 'target.md', doc('target'))
+  const c = build(a)
+  const mutations = [
+    (v) => { for (const r of Object.values(v.ordinaryLinks[0].provenance.locator).filter((r) => typeof r === 'object')) { r.start += 10000; r.end += 10000 } },
+    (v) => { const r = v.declaredRelations[0].provenance.locator.range; r.start += 10000; r.end += 10000 },
+    (v) => { const r = v.ordinaryLinks[0].provenance.locator.range; r.start = 0; r.end = 1 },
+    (v) => { const r = v.ordinaryLinks[0].provenance.locator.targetRange; r.byteStart = r.start - 1 },
+    (v) => { const loc = v.ordinaryLinks[0].provenance.locator; loc.targetRange.start = loc.range.start; loc.targetRange.byteStart = loc.range.byteStart + 1 },
+    (v) => { v.declaredRelations[0].provenance.locator.range = { start: 10, end: 12, byteStart: 20, byteEnd: 21 } },
+    (v) => { v.declaredRelations[0].provenance.locator.range = { start: 10, end: 11, byteStart: 20, byteEnd: 24 } },
+    // Each range is independently possible. Only the zero-unit gap between
+    // the containing range and its target makes the byte offset impossible.
+    (v) => { Object.assign(v.ordinaryLinks[0].provenance.locator, { range: { start: 2, end: 5, byteStart: 2, byteEnd: 9 }, targetRange: { start: 2, end: 4, byteStart: 3, byteEnd: 6 } }) },
+    (v) => { Object.assign(v.ordinaryLinks[0].provenance.locator, { range: { start: 2, end: 5, byteStart: 2, byteEnd: 9 }, targetRange: { start: 3, end: 5, byteStart: 3, byteEnd: 8 } }) },
+  ]
+  for (const mutate of mutations) {
+    const value = structuredClone(c)
+    mutate(value)
+    value.digest = digest(value)
+    assert.equal(validateRepositoryContribution(value).ok, false)
+  }
+  assert.equal(validateRepositoryContribution(c).ok, true)
+})
+
 test('a TypeScript consumer can import source DTOs and receives qualified-ref type checks', (t) => {
   const { root } = fixture(t)
   const consumer = path.join(root, 'consumer.mts')
@@ -249,4 +307,20 @@ test('pure topology binds cross-repository paths only through the supplied enrol
   assert.throws(() => resolveContributionTopology(supplied, { enrollment: [enrollment[0]] }), code('invalid-contribution-enrollment'))
   assert.throws(() => resolveContributionTopology([ca], { enrollment: [{ repoId: 'github:1001', root: '../outside' }] }), code('invalid-contribution-enrollment'))
   assert.deepEqual(resolveContributionTopology([], { enrollment: [] }), { nodes: [], ordinaryLinks: [], declaredRelations: [] })
+})
+
+test('uppercase Markdown source extensions retain local and supplied cross-repository links', (t) => {
+  const { a, b } = fixture(t)
+  fs.renameSync(path.join(a.path, 'record.md'), path.join(a.path, 'record.MD'))
+  write(a, 'record.MD', doc('same', '[local](target.md) [other](../beta/record.md) [[Local title]] [[Other title]]'))
+  write(a, 'target.md', doc('local').replace('Invented record', 'Local title'))
+  write(b, 'record.md', doc('same').replace('Invented record', 'Other title'))
+  const ca = build(a)
+  const cb = build(b)
+  const local = { repoId: 'github:1001', localId: 'local' }
+  const other = { repoId: 'github:1002', localId: 'same' }
+  assert.deepEqual(ca.ordinaryLinks.map((link) => link.target), [local, null, local, null])
+  const together = resolveContributionTopology([ca, cb], { enrollment: [{ repoId: 'github:1001', root: 'alpha' }, { repoId: 'github:1002', root: 'beta' }] })
+  assert.deepEqual(together.ordinaryLinks.map((link) => link.target), [local, other, local, other])
+  assert.equal(together.ordinaryLinks.every((link) => link.provenance.path === 'record.MD'), true)
 })

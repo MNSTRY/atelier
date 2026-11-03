@@ -97,13 +97,25 @@ function normalizeScope(scope = {}) {
 function readBytes(root, rel) {
   if (!sourcePath(rel)) refuse('invalid-source-path')
   let cursor = root
-  for (const segment of rel.split('/').slice(0, -1)) {
-    cursor = path.join(cursor, segment)
-    const stat = fs.lstatSync(cursor)
-    if (!stat.isDirectory() || stat.isSymbolicLink()) refuse('redirected-source-path')
-    rejectNestedRepository(cursor)
+  const segments = rel.split('/')
+  for (const [index, segment] of segments.entries()) {
+    const next = path.join(cursor, segment)
+    const stat = fs.lstatSync(next, { bigint: true })
+    // On Windows a short-name spelling can name the same metadata object
+    // without containing a literal .git segment. Bind every component,
+    // including a worktree's metadata file, before opening source bytes.
+    let metadata
+    try { metadata = fs.statSync(path.join(cursor, '.git'), { bigint: true }) } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+    if (metadata && stat.dev === metadata.dev && stat.ino === metadata.ino) refuse('invalid-source-path')
+    cursor = next
+    if (index < segments.length - 1) {
+      if (!stat.isDirectory() || stat.isSymbolicLink()) refuse('redirected-source-path')
+      rejectNestedRepository(cursor)
+    }
   }
-  const fd = openRegularFileNoFollow(path.join(root, rel))
+  const fd = openRegularFileNoFollow(cursor)
   try { return fs.readFileSync(fd) } finally { fs.closeSync(fd) }
 }
 
@@ -274,12 +286,16 @@ export function validateRepositoryContribution(value) {
       if (check(keys(file, ['path', 'rawDigest', 'byteLength']) && sourcePath(file.path) && digestPattern.test(file.rawDigest) && Number.isSafeInteger(file.byteLength) && file.byteLength >= 0 && !files.has(file.path), 'invalid-source-file')) files.set(file.path, file)
     }
     const validRef = (ref) => keys(ref, ['repoId', 'localId']) && ref.repoId === repository.repoId && text(ref.localId)
-    const range = (v, pin) => keys(v, ['start', 'end', 'byteStart', 'byteEnd']) && [v.start, v.end, v.byteStart, v.byteEnd].every(Number.isSafeInteger) && v.start >= 0 && v.start < v.end && v.byteStart >= 0 && v.byteStart < v.byteEnd && v.byteEnd <= pin.byteLength
+    // Exact UTF-8 needs one to three bytes per UTF-16 code unit (a surrogate
+    // pair needs four bytes for two units). These are necessary structural
+    // bounds; only the receiving host's pinned bytes can prove exact offsets.
+    const distance = (units, bytes) => units >= 0 && bytes >= units && bytes <= units * 3
+    const range = (v, pin) => keys(v, ['start', 'end', 'byteStart', 'byteEnd']) && [v.start, v.end, v.byteStart, v.byteEnd].every(Number.isSafeInteger) && v.start >= 0 && v.start < v.end && v.byteStart >= 0 && v.byteStart < v.byteEnd && v.byteEnd <= pin.byteLength && distance(v.start, v.byteStart) && distance(v.end, v.byteEnd) && distance(v.end - v.start, v.byteEnd - v.byteStart)
     const validSource = (s) => {
       if (!keys(s, ['repoId', 'path', 'revision', 'digest'], ['locator']) || s.repoId !== repository.repoId || s.revision !== snapshot.digest || !files.has(s.path) || s.digest !== files.get(s.path).rawDigest) return false
       if (!Object.hasOwn(s, 'locator')) return true
       const loc = s.locator
-      return keys(loc, [], ['pointer', 'range', 'targetRange', 'rangeDigest']) && Object.keys(loc).length > 0 && (!Object.hasOwn(loc, 'pointer') || (text(loc.pointer) && loc.pointer.startsWith('/'))) && (!Object.hasOwn(loc, 'range') || (range(loc.range, files.get(s.path)) && digestPattern.test(loc.rangeDigest))) && (!Object.hasOwn(loc, 'targetRange') || (range(loc.targetRange, files.get(s.path)) && loc.range && loc.targetRange.start >= loc.range.start && loc.targetRange.end <= loc.range.end && loc.targetRange.byteStart >= loc.range.byteStart && loc.targetRange.byteEnd <= loc.range.byteEnd)) && (!Object.hasOwn(loc, 'rangeDigest') || Object.hasOwn(loc, 'range'))
+      return keys(loc, [], ['pointer', 'range', 'targetRange', 'rangeDigest']) && Object.keys(loc).length > 0 && (!Object.hasOwn(loc, 'pointer') || (text(loc.pointer) && loc.pointer.startsWith('/'))) && (!Object.hasOwn(loc, 'range') || (range(loc.range, files.get(s.path)) && digestPattern.test(loc.rangeDigest))) && (!Object.hasOwn(loc, 'targetRange') || (range(loc.targetRange, files.get(s.path)) && loc.range && loc.targetRange.start >= loc.range.start && loc.targetRange.end <= loc.range.end && loc.targetRange.byteStart >= loc.range.byteStart && loc.targetRange.byteEnd <= loc.range.byteEnd && distance(loc.targetRange.start - loc.range.start, loc.targetRange.byteStart - loc.range.byteStart) && distance(loc.range.end - loc.targetRange.end, loc.range.byteEnd - loc.targetRange.byteEnd))) && (!Object.hasOwn(loc, 'rangeDigest') || Object.hasOwn(loc, 'range'))
     }
     if (!check(Array.isArray(value.nodes) && Array.isArray(value.ordinaryLinks) && Array.isArray(value.declaredRelations), 'invalid-source-records')) return { ok: false, errors }
     const nodeKeys = new Map()
