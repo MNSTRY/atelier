@@ -298,12 +298,12 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     }
     sheet.append(h('h3', { class: 'sheet-h', text: `Connections · ${links.length}` }), list)
     if (links.length > 40) sheet.append(h('p', { class: 'step-help', text: `${links.length - 40} more in Text view.` }))
-    sheet.append(h('div', { class: 'sheet-actions left' }, h('button', { class: 'quiet', type: 'button', onclick: () => onShowOnMap(n.id) }, 'Show on the constellation')))
+    sheet.append(h('div', { class: 'sheet-actions left' }, h('button', { class: 'quiet', type: 'button', onclick: () => onShowOnMap(n.id) }, 'Show on the map')))
   }
 
   function renderHead() {
     clear(head)
-    head.append(h('button', { class: 'back', type: 'button', id: 'wb-back', onclick: onBack }, '← Constellation'))
+    head.append(h('button', { class: 'back', type: 'button', id: 'wb-back', onclick: onBack }, '← Map'))
     const crumbs = h('nav', { class: 'trail', 'aria-label': 'Walked so far' })
     trail.forEach((t, i) => {
       if (i) crumbs.append(h('span', { class: 'sep', 'aria-hidden': 'true', text: '›' }))

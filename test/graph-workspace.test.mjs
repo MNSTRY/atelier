@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import {
   buildWorkspaceModel, zoneOf, validateZoneRule, edgeClass, neighbours,
   seedPositions, layoutWorkspace, normalizePositions, zoneGeometry,
-  planConstellation, aggregateZones, zoneSlice, rankRecords,
+  planMap, planConstellation, aggregateZones, zoneSlice, rankRecords, DEPRECATED_ROOMS,
   placeLabels, labelBudget, overlaps,
-  DEFAULT_RECIPES, composeRecipes, validateRecipe, availableRecipes, primaryActionsFor,
+  DEFAULT_RECIPES, composeRecipes, validateRecipe, availableRecipes, primaryActionsFor, LAYERS, ROOMS,
   DEFAULT_THEME, composeTheme, validateTheme, contrastRatio,
   conceptSteps, relationSteps, guideConcept, guideRelation, stepState, createDraftStore, memoryStorage, readiness,
   fingerprintsFrom, scanForFingerprints,
@@ -73,7 +73,7 @@ test('scale: tens of thousands of records aggregate into zones with honest count
   const big = generateCommons({ size: 30000, seed: 5 })
   const started = Date.now()
   const m = buildWorkspaceModel(big)
-  const plan = planConstellation(m)
+  const plan = planMap(m)
   assert.equal(plan.mode, 'zones')
   assert.equal(plan.reason, 'records-over-budget')
   const z = aggregateZones(m)
@@ -90,7 +90,7 @@ test('scale: tens of thousands of records aggregate into zones with honest count
   assert.ok(slice.slice.linksToOtherZones.every(b => b.zone !== zone.id && b.count > 0))
   assert.equal(rankRecords(m)[0].degree, Math.max(...m.nodes.map(n => n.degree)))
   assert.ok(Date.now() - started < 15000, 'aggregation stays interactive-scale')
-  assert.equal(planConstellation(model()).mode, 'records')
+  assert.equal(planMap(model()).mode, 'records')
 })
 
 test('labels: no overlap, reserved space respected, budget honoured, edges fall back to other slots', () => {
@@ -108,42 +108,42 @@ test('labels: no overlap, reserved space respected, budget honoured, edges fall 
   assert.ok(labelBudget(1440, 900, 1) >= 20 && labelBudget(1440, 900, 1) <= 30)
 })
 
-test('recipes: Atelier defaults, coach adjustments and owner choices compose with provenance', () => {
+test('recipes: Atelier defaults, distribution adjustments and owner choices compose with provenance', () => {
   const { recipes, hidden } = composeRecipes({
-    coach: [{ id: 'explore', label: 'Wander' }, { id: 'compare', label: 'Compare two areas', room: 'constellation', lens: 'zone', primary: 'pick', description: 'Two areas side by side.' }],
+    distribution: [{ id: 'explore', label: 'Wander' }, { id: 'compare', label: 'Compare two areas', room: 'map', lens: 'zone', primary: 'pick', description: 'Two areas side by side.' }],
     owner: [{ id: 'inspect', hidden: true }, { id: 'compare', description: 'My two folders, side by side.' }],
   })
   assert.deepEqual(hidden, ['inspect'])
   const explore = recipes.find(r => r.id === 'explore'), compare = recipes.find(r => r.id === 'compare')
-  assert.equal(explore.label, 'Wander'); assert.equal(explore.setBy.label, 'coach'); assert.equal(explore.setBy.room, 'atelier')
-  assert.equal(compare.setBy.room, 'coach'); assert.equal(compare.setBy.description, 'owner')
+  assert.equal(explore.label, 'Wander'); assert.equal(explore.setBy.label, 'distribution'); assert.equal(explore.setBy.room, 'atelier')
+  assert.equal(compare.setBy.room, 'distribution'); assert.equal(compare.setBy.description, 'owner')
   assert.throws(() => composeRecipes({ owner: [{ id: 'new-one', label: 'Incomplete' }] }), /owner recipe new-one/)
-  assert.throws(() => composeRecipes({ coach: [{ id: 'explore', room: 'garden' }] }), /room must be/)
-  assert.throws(() => composeRecipes({ coach: [{ id: 'bench', label: 'B', room: 'workbench', primary: 'walk', description: 'd' }] }), /needs a subject/)
+  assert.throws(() => composeRecipes({ distribution: [{ id: 'explore', room: 'garden' }] }), /room must be/)
+  assert.throws(() => composeRecipes({ distribution: [{ id: 'bench', label: 'B', room: 'workbench', primary: 'walk', description: 'd' }] }), /needs a subject/)
   assert.deepEqual(validateRecipe(DEFAULT_RECIPES[0]), [])
   const noPlan = { plan: null, nodes: [{ id: 'a' }] }
   assert.deepEqual(availableRecipes(composeRecipes().recipes, noPlan).map(r => r.id), ['explore', 'inspect'])
 })
 
 test('recipes: only combinations the shell honours are accepted or offered', () => {
-  const add = recipe => composeRecipes({ coach: [{ label: 'L', description: 'D', ...recipe }] })
-  assert.throws(() => add({ id: 'odd', room: 'constellation', primary: 'teleport' }), /primary must be one of/)
-  assert.throws(() => add({ id: 'odd', room: 'workbench', subject: 'record', lens: 'zone', primary: 'walk' }), /only a constellation recipe takes a lens/)
-  assert.throws(() => add({ id: 'odd', room: 'review', lens: 'concept', primary: 'review' }), /only a constellation recipe takes a lens/)
-  assert.throws(() => add({ id: 'odd', room: 'constellation', subject: 'record', primary: 'search' }), /only a workbench recipe takes a subject/)
-  assert.throws(() => composeRecipes({ owner: [{ id: 'refine', room: 'constellation' }] }), /only a workbench recipe takes a subject/)
+  const add = recipe => composeRecipes({ distribution: [{ label: 'L', description: 'D', ...recipe }] })
+  assert.throws(() => add({ id: 'odd', room: 'map', primary: 'teleport' }), /primary must be one of/)
+  assert.throws(() => add({ id: 'odd', room: 'workbench', subject: 'record', lens: 'zone', primary: 'walk' }), /only a map recipe takes a lens/)
+  assert.throws(() => add({ id: 'odd', room: 'review', lens: 'concept', primary: 'review' }), /only a map recipe takes a lens/)
+  assert.throws(() => add({ id: 'odd', room: 'map', subject: 'record', primary: 'search' }), /only a workbench recipe takes a subject/)
+  assert.throws(() => composeRecipes({ owner: [{ id: 'refine', room: 'map' }] }), /only a workbench recipe takes a subject/)
   // Every accepted action has a target in its room.
   assert.throws(() => composeRecipes({ owner: [{ id: 'explore', primary: 'pick' }] }), /primary pick is not available here; use search/)
   assert.throws(() => composeRecipes({ owner: [{ id: 'refine', primary: 'review' }] }), /primary review is not available here; use next-step/)
   assert.throws(() => composeRecipes({ owner: [{ id: 'inspect', primary: 'next-step' }] }), /use walk/)
   assert.throws(() => add({ id: 'odd', room: 'review', primary: 'search' }), /use review/)
-  assert.throws(() => add({ id: 'odd', room: 'constellation', lens: 'zone', primary: 'open-evidence' }), /use pick or search/)
+  assert.throws(() => add({ id: 'odd', room: 'map', lens: 'zone', primary: 'open-evidence' }), /use pick or search/)
   for (const r of DEFAULT_RECIPES) assert.ok(primaryActionsFor(r).includes(r.primary), r.id)
-  const { recipes } = composeRecipes({ coach: [
+  const { recipes } = composeRecipes({ distribution: [
     { id: 'check', label: 'Check', description: 'D', room: 'review', primary: 'review' },
     { id: 'bind', label: 'Bind', description: 'D', room: 'workbench', subject: 'relation', primary: 'next-step' },
-    { id: 'by-concept', label: 'By concept', description: 'D', room: 'constellation', lens: 'concept', primary: 'open-evidence' },
-    { id: 'by-zone', label: 'By area', description: 'D', room: 'constellation', lens: 'zone', primary: 'pick' },
+    { id: 'by-concept', label: 'By concept', description: 'D', room: 'map', lens: 'concept', primary: 'open-evidence' },
+    { id: 'by-zone', label: 'By area', description: 'D', room: 'map', lens: 'zone', primary: 'pick' },
   ] })
   const m = model()
   assert.deepEqual(availableRecipes(recipes, m).map(r => r.id), recipes.map(r => r.id), 'a full plan runs every recipe')
@@ -159,8 +159,8 @@ test('recipes: only combinations the shell honours are accepted or offered', () 
 test('theme: night is the default, overrides validate, unsafe or low-contrast values are refused', () => {
   assert.deepEqual(validateTheme(DEFAULT_THEME), [])
   assert.equal(DEFAULT_THEME.defaultScheme, 'dark')
-  const coach = composeTheme(DEFAULT_THEME, { id: 'coach-theme', schemes: { dark: { vars: { '--accent': '#a0e0c0' } } } })
-  assert.equal(coach.schemes.dark.vars['--accent'], '#a0e0c0')
+  const distribution = composeTheme(DEFAULT_THEME, { id: 'distribution-theme', schemes: { dark: { vars: { '--accent': '#a0e0c0' } } } })
+  assert.equal(distribution.schemes.dark.vars['--accent'], '#a0e0c0')
   assert.equal(DEFAULT_THEME.schemes.dark.vars['--accent'], '#9cc4ff', 'base untouched')
   assert.throws(() => composeTheme(DEFAULT_THEME, { schemes: { dark: { vars: { '--canvas': 'url(x)' } } } }), /rejected --canvas/)
   assert.throws(() => composeTheme(DEFAULT_THEME, { schemes: { dark: { graph: { label: '#1a1d24' } } } }), /label contrast/)
@@ -326,4 +326,17 @@ test('disclosure: fingerprints from a private graph are found in shareable text 
   assert.equal(leak.ok, false)
   assert.equal(leak.findings[0].path, 'b.md')
   assert.ok(!leak.findings[0].sample.includes(fixture.graph.nodes[3].id), 'sample is masked')
+})
+
+test('alpha.15 names keep working for one release: coach layer, constellation room, planConstellation', () => {
+  assert.equal(planConstellation, planMap)
+  assert.deepEqual(DEPRECATED_ROOMS, { constellation: 'map' })
+  const old = composeRecipes({ coach: [{ id: 'explore', label: 'Wander' }, { id: 'by-zone', label: 'By area', description: 'D', room: 'constellation', lens: 'zone', primary: 'pick' }] }).recipes
+  const explore = old.find(r => r.id === 'explore'), zone = old.find(r => r.id === 'by-zone')
+  assert.equal(explore.setBy.label, 'distribution', 'the coach layer is read as the distribution layer')
+  assert.equal(zone.room, 'map', 'a constellation recipe is read as a map recipe')
+  assert.deepEqual(validateRecipe({ id: 'x', label: 'X', description: 'D', room: 'constellation', primary: 'search' }), [])
+  assert.throws(() => composeRecipes({ coach: [], distribution: [] }), /deprecated name/)
+  assert.deepEqual(LAYERS, ['atelier', 'distribution', 'owner'])
+  assert.deepEqual(ROOMS, ['map', 'workbench', 'review'])
 })

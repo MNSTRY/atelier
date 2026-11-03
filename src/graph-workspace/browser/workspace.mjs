@@ -1,5 +1,5 @@
-// Default graph workspace shell: one graph, three rooms (constellation, workbench,
-// review), chosen by a work recipe. Coaches can use it as is, restyle it through a
+// Default graph workspace shell: one graph, three rooms (map, workbench,
+// review), chosen by a work recipe. Distributions can use it as is, restyle it through a
 // theme, change its recipes, or build their own shell from the same rooms.
 //
 //   const workspace = mountGraphWorkspace(element, {
@@ -15,7 +15,7 @@
 //
 // One workspace per document (it uses fixed element ids). The host decides what
 // the model contains; nothing here fetches, grants or saves to a source.
-import { createConstellation } from './constellation.mjs'
+import { createMap } from './map.mjs'
 import { createWorkbench } from './workbench.mjs'
 import { renderReview } from './review.mjs'
 import { injectGraphWorkspaceStyles } from './styles.mjs'
@@ -63,9 +63,9 @@ export function mountGraphWorkspace(root, options) {
   injectGraphWorkspaceStyles(root.ownerDocument)
 
   const byNode = new Map(model.nodes.map(n => [n.id, n]))
-  const state = { recipe: null, room: 'constellation', selected: null, lens: null, questionId: null, conceptId: null, zoneId: null, textView: !webgl, scheme: options.scheme ?? theme.defaultScheme, zonesOn: true, linksOn: true, labelBoost: 1, savedCamera: null }
+  const state = { recipe: null, room: 'map', selected: null, lens: null, questionId: null, conceptId: null, zoneId: null, textView: !webgl, scheme: options.scheme ?? theme.defaultScheme, zonesOn: true, linksOn: true, labelBoost: 1, savedCamera: null }
   const counters = { dives: 0 }
-  let palette = null, constellation = null
+  let palette = null, mapView = null
 
   // ── DOM ──
   const el = {}
@@ -74,7 +74,7 @@ export function mountGraphWorkspace(root, options) {
   root.classList.add('atelier-gw')
   const stage = h('div', { class: 'stage' })
   stage.append(
-    make('constellation', 'div', { class: 'constellation', role: 'img', 'aria-label': 'Constellation of every record you can read. Use search, the selection card or Text view to move through it by keyboard.' }),
+    make('map', 'div', { class: 'map constellation', role: 'img', 'aria-label': 'Map of every record you can read. Use search, the selection card or Text view to move through it by keyboard.' }),
     h('header', { class: 'top' },
       h('div', { class: 'menu-wrap', 'data-graph-reserve': '' },
         make('recipeBtn', 'button', { class: 'pill', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, h('span', { class: 'emblem', 'aria-hidden': 'true', text: profile.emblem ?? '◌' }), make('recipeLabel', 'span', { text: '' }), h('span', { class: 'caret', 'aria-hidden': 'true', text: '▾' })),
@@ -116,7 +116,7 @@ export function mountGraphWorkspace(root, options) {
 
   function applyAppearance() {
     palette = applyTheme(theme, state.scheme, root)
-    constellation?.setPalette(palette)
+    mapView?.setPalette(palette)
     el.schemeBtn.textContent = state.scheme === 'dark' ? 'Light appearance' : 'Dark appearance'
   }
   applyAppearance()
@@ -126,10 +126,10 @@ export function mountGraphWorkspace(root, options) {
 
   const font = getComputedStyle(root).getPropertyValue('--font-sans').trim() || 'system-ui'
   if (webgl) {
-    constellation = createConstellation({ container: el.constellation, model, palette, font, deps, onSelect: id => select(id), onOpen: id => openWorkbench({ kind: 'record', id }) })
-    if (intro) constellation.intro()
+    mapView = createMap({ container: el.map, model, palette, font, deps, onSelect: id => select(id), onOpen: id => openWorkbench({ kind: 'record', id }) })
+    if (intro) mapView.intro()
   }
-  const workbench = createWorkbench({ root: el.workbench, model, palette, store, vocab, onBack: backToConstellation, onReview: () => openReview({ from: 'workbench' }), onShowOnMap: id => backToConstellation().then(() => { select(id); constellation?.showNode(id) }) })
+  const workbench = createWorkbench({ root: el.workbench, model, palette, store, vocab, onBack: backToMap, onReview: () => openReview({ from: 'workbench' }), onShowOnMap: id => backToMap().then(() => { select(id); mapView?.showNode(id) }) })
   el.workbench.hidden = true
 
   // ── Recipes ──
@@ -142,7 +142,7 @@ export function mountGraphWorkspace(root, options) {
     root.dataset.recipe = recipe.id
     root.dataset.primary = recipe.primary
     closeMenus()
-    state.lens = recipe.room === 'constellation' ? recipe.lens : null
+    state.lens = recipe.room === 'map' ? recipe.lens : null
     renderLensCard()
     if (recipe.room === 'workbench') {
       // In the workbench the primary action is where focus lands (the top bar sits behind it).
@@ -152,17 +152,17 @@ export function mountGraphWorkspace(root, options) {
       const opened = openWorkbench(subject)
       if (mounted) opened.then(() => focusPrimary(recipe.primary))
     } else if (recipe.room === 'review') openReview({ from: 'recipe' })
-    else if (state.room !== 'constellation') backToConstellation()
+    else if (state.room !== 'map') backToMap()
     announce(`${recipe.label}. ${recipe.description}`)
   }
   function renderLensCard() {
     el.questionCard.hidden = !state.lens
     el.questionCard.dataset.lens = state.lens ?? ''
-    if (state.lens !== 'zone') constellation?.setFocusZone(null)
+    if (state.lens !== 'zone') mapView?.setFocusZone(null)
     if (state.lens === 'question') renderQuestionCard()
     else if (state.lens === 'concept') renderConceptLens()
     else if (state.lens === 'zone') renderZoneLens()
-    else { clear(el.questionCard); constellation?.setLens(null) }
+    else { clear(el.questionCard); mapView?.setLens(null) }
   }
   function renderConceptLens() {
     clear(el.questionCard)
@@ -170,7 +170,7 @@ export function mountGraphWorkspace(root, options) {
     const c = plan.concepts.find(x => x.id === state.conceptId) ?? plan.concepts[0]
     state.conceptId = c.id
     const ids = c.declaredBy.filter(id => byNode.has(id))
-    constellation?.setLens(ids)
+    mapView?.setLens(ids)
     el.questionCard.append(h('p', { class: 'eyebrow', text: `The ${vocab.concept} in view` }),
       h('select', { 'aria-label': vocab.concept, onchange: e => { state.conceptId = e.target.value; renderConceptLens() } }, plan.concepts.map(x => h('option', { value: x.id, selected: x.id === c.id, text: x.title }))),
       h('p', { class: 'q-lit', 'data-gw': 'lens-lit', text: ids.length ? `${fmt(ids.length)} ${ids.length === 1 ? vocab.record : vocab.records} declare it.` : 'No record you can read declares it yet.' }),
@@ -181,8 +181,8 @@ export function mountGraphWorkspace(root, options) {
     const z = model.zones.find(x => x.id === state.zoneId) ?? model.zones[0]
     if (!z) return
     state.zoneId = z.id
-    constellation?.setLens(null)
-    constellation?.setFocusZone(z.id)
+    mapView?.setLens(null)
+    mapView?.setFocusZone(z.id)
     el.questionCard.append(h('p', { class: 'eyebrow', text: `The ${vocab.zone} in view` }),
       h('select', { 'aria-label': vocab.zone, onchange: e => { state.zoneId = e.target.value; renderZoneLens() } }, model.zones.map(x => h('option', { value: x.id, selected: x.id === z.id, text: x.label }))),
       h('p', { class: 'q-lit', 'data-gw': 'lens-lit', text: `${fmt(z.count)} ${z.count === 1 ? vocab.record : vocab.records}. Others are dimmed, not removed.` }))
@@ -219,7 +219,7 @@ export function mountGraphWorkspace(root, options) {
     const q = plan.questions.find(x => x.id === state.questionId) ?? plan.questions[0]
     state.questionId = q.id
     const ids = new Set(questionLit())
-    constellation?.setLens([...ids])
+    mapView?.setLens([...ids])
     const zones = new Set([...ids].map(id => byNode.get(id).zoneLabel))
     el.questionCard.append(h('p', { class: 'eyebrow', text: 'The question on the table' }),
       h('select', { 'aria-label': 'Question', onchange: e => { state.questionId = e.target.value; renderQuestionCard() } }, plan.questions.map(x => h('option', { value: x.id, selected: x.id === q.id, text: x.question }))),
@@ -231,7 +231,7 @@ export function mountGraphWorkspace(root, options) {
   // ── Selection and rooms ──
   function select(id) {
     state.selected = id
-    constellation?.select(id)
+    mapView?.select(id)
     renderCard()
     if (id) announce(`Selected ${model.nodes.find(n => n.id === id)?.title}.`)
   }
@@ -253,20 +253,20 @@ export function mountGraphWorkspace(root, options) {
       h('p', { class: 'card-meta', text: `${n.degree} links · ${n.relationDegree} declared${n.concepts.length ? ' · declares ' + n.concepts.join(', ') : ''}` }),
       h('div', { class: 'card-actions' },
         h('button', { class: 'primary', type: 'button', 'data-gw': 'open-selected', onclick: () => openWorkbench({ kind: 'record', id: n.id }) }, 'Open in the workbench'),
-        constellation ? h('button', { class: 'quiet', type: 'button', onclick: () => constellation.showNode(n.id) }, 'Show on map') : null),
+        mapView ? h('button', { class: 'quiet', type: 'button', onclick: () => mapView.showNode(n.id) }, 'Show on map') : null),
       near.length ? h('details', { class: 'card-neighbours' }, h('summary', { text: `Walk to a neighbour (${near.length})` }),
         h('ul', {}, near.slice(0, 12).map(x => h('li', {}, h('button', { class: 'link-row', type: 'button', onclick: () => { select(x.id); root.querySelector('#card-title')?.focus() } }, model.nodes.find(m => m.id === x.id).title))))) : null)
   }
   async function openWorkbench(subject) {
     closeMenus()
     let from = null
-    if (state.room === 'constellation' && constellation) {
-      state.savedCamera = constellation.camera.getState()
+    if (state.room === 'map' && mapView) {
+      state.savedCamera = mapView.camera.getState()
       if (subject.kind === 'record') {
-        const p = constellation.nodeViewport(subject.id), r = el.constellation.getBoundingClientRect()
+        const p = mapView.nodeViewport(subject.id), r = el.map.getBoundingClientRect()
         from = p ? { x: r.left + p.x, y: r.top + p.y } : null
         root.classList.add('diving')
-        await constellation.dive(subject.id)
+        await mapView.dive(subject.id)
       }
     }
     counters.dives++
@@ -276,13 +276,13 @@ export function mountGraphWorkspace(root, options) {
     el.review.hidden = true
     workbench.open(subject, { from })
   }
-  async function backToConstellation() {
+  async function backToMap() {
     workbench.close()
     el.review.hidden = true
-    state.room = 'constellation'
-    root.dataset.room = 'constellation'
-    if (constellation && state.savedCamera) await constellation.restore(state.savedCamera)
-    constellation?.refresh()
+    state.room = 'map'
+    root.dataset.room = 'map'
+    if (mapView && state.savedCamera) await mapView.restore(state.savedCamera)
+    mapView?.refresh()
   }
   function openReview({ from = 'workbench' } = {}) {
     closeMenus()
@@ -292,8 +292,8 @@ export function mountGraphWorkspace(root, options) {
     const toWorkbench = () => { el.review.hidden = true; state.room = 'workbench'; root.dataset.room = 'workbench' }
     renderReview(el.review, {
       model: { ...model, systemId: profile.id ?? 'workspace' }, store,
-      backLabel: from === 'workbench' ? '← Back to the workbench' : '← Back to the constellation',
-      onBack: () => { if (from === 'workbench') { toWorkbench(); workbench.refresh() } else { el.review.hidden = true; backToConstellation() } },
+      backLabel: from === 'workbench' ? '← Back to the workbench' : '← Back to the map',
+      onBack: () => { if (from === 'workbench') { toWorkbench(); workbench.refresh() } else { el.review.hidden = true; backToMap() } },
       onOpen: s => { toWorkbench(); workbench.open(s) },
     })
   }
@@ -303,9 +303,9 @@ export function mountGraphWorkspace(root, options) {
     const q = query.trim().toLowerCase()
     const commands = [
       ...recipes.map(r => ({ kind: 'recipe', id: r.id, label: r.label, hint: r.description })),
-      ...(webgl ? [{ kind: 'command', id: 'text', label: state.textView ? 'Show the constellation' : 'Text view', hint: 'Every record as a structured list' }] : []),
+      ...(webgl ? [{ kind: 'command', id: 'text', label: state.textView ? 'Show the map' : 'Text view', hint: 'Every record as a structured list' }] : []),
       { kind: 'command', id: 'scheme', label: state.scheme === 'dark' ? 'Light appearance' : 'Dark appearance', hint: 'Switch appearance' },
-      ...(constellation ? [{ kind: 'command', id: 'fit', label: 'Fit the whole graph', hint: 'Zoom out to everything' }] : []),
+      ...(mapView ? [{ kind: 'command', id: 'fit', label: 'Fit the whole graph', hint: 'Zoom out to everything' }] : []),
     ]
     if (!q) return commands.slice(0, 6)
     const out = commands.filter(c => c.label.toLowerCase().includes(q))
@@ -331,10 +331,10 @@ export function mountGraphWorkspace(root, options) {
     else if (r.kind === 'concept') openWorkbench({ kind: 'concept', id: r.id })
     else if (r.kind === 'question') { state.questionId = r.id; const q = recipes.find(x => x.lens === 'question'); if (q) setRecipe(q.id) }
     else if (r.kind === 'zone') { state.zoneId = r.id; const z = recipes.find(x => x.lens === 'zone'); if (z) setRecipe(z.id) }
-    else if (r.kind === 'record') { if (state.room !== 'constellation') backToConstellation().then(() => select(r.id)); else select(r.id); root.querySelector('#card-title')?.focus() }
+    else if (r.kind === 'record') { if (state.room !== 'map') backToMap().then(() => select(r.id)); else select(r.id); root.querySelector('#card-title')?.focus() }
     else if (r.id === 'text') toggleText()
     else if (r.id === 'scheme') toggleScheme()
-    else if (r.id === 'fit') constellation?.fit()
+    else if (r.id === 'fit') mapView?.fit()
   }
 
   // ── Text view ──
@@ -366,7 +366,7 @@ export function mountGraphWorkspace(root, options) {
     state.textView = !state.textView
     root.classList.toggle('text-mode', state.textView)
     el.textToggle.setAttribute('aria-pressed', String(state.textView))
-    if (state.textView) el.textView.querySelector('input')?.focus(); else constellation?.refresh()
+    if (state.textView) el.textView.querySelector('input')?.focus(); else mapView?.refresh()
   }
   function toggleScheme() { state.scheme = state.scheme === 'dark' ? 'light' : 'dark'; applyAppearance(); renderTextView(); renderCard(); if (state.room === 'workbench') workbench.refresh() }
 
@@ -384,13 +384,13 @@ export function mountGraphWorkspace(root, options) {
   on(el.displayBtn, 'click', () => toggle(el.display, el.displayBtn))
   on(el.textToggle, 'click', toggleText)
   on(el.schemeBtn, 'click', toggleScheme)
-  on(el.zonesToggle, 'change', e => { state.zonesOn = e.target.checked; constellation?.setOption('zonesOn', state.zonesOn) })
-  on(el.linksToggle, 'change', e => { state.linksOn = e.target.checked; constellation?.setOption('linksOn', state.linksOn) })
-  on(el.labelsRange, 'input', e => { state.labelBoost = +e.target.value; constellation?.setOption('labelBoost', state.labelBoost) })
-  on(el.physicsToggle, 'change', e => { e.target.checked = !!constellation?.setPhysics(e.target.checked) })
-  on(el.fit, 'click', () => constellation?.fit())
-  on(el.zoomIn, 'click', () => constellation?.zoom(1.5))
-  on(el.zoomOut, 'click', () => constellation?.zoom(1 / 1.5))
+  on(el.zonesToggle, 'change', e => { state.zonesOn = e.target.checked; mapView?.setOption('zonesOn', state.zonesOn) })
+  on(el.linksToggle, 'change', e => { state.linksOn = e.target.checked; mapView?.setOption('linksOn', state.linksOn) })
+  on(el.labelsRange, 'input', e => { state.labelBoost = +e.target.value; mapView?.setOption('labelBoost', state.labelBoost) })
+  on(el.physicsToggle, 'change', e => { e.target.checked = !!mapView?.setPhysics(e.target.checked) })
+  on(el.fit, 'click', () => mapView?.fit())
+  on(el.zoomIn, 'click', () => mapView?.zoom(1.5))
+  on(el.zoomOut, 'click', () => mapView?.zoom(1 / 1.5))
   on(el.command, 'focus', renderCommand)
   on(el.command, 'input', renderCommand)
   on(el.command, 'keydown', e => {
@@ -410,9 +410,9 @@ export function mountGraphWorkspace(root, options) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); el.command.focus(); return }
     if (e.target.closest?.('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return
     if (e.key === '/') { e.preventDefault(); el.command.focus() }
-    else if (e.key === 'Escape') { if (!el.recipeMenu.hidden || !el.display.hidden) closeMenus(); else if (state.room === 'review') root.querySelector('#review-back')?.click(); else if (state.room === 'workbench') backToConstellation(); else select(null) }
+    else if (e.key === 'Escape') { if (!el.recipeMenu.hidden || !el.display.hidden) closeMenus(); else if (state.room === 'review') root.querySelector('#review-back')?.click(); else if (state.room === 'workbench') backToMap(); else select(null) }
     else if (e.key === 't') { e.preventDefault(); toggleText() }
-    else if (e.key === 'o' && state.selected && state.room === 'constellation') openWorkbench({ kind: 'record', id: state.selected })
+    else if (e.key === 'o' && state.selected && state.room === 'map') openWorkbench({ kind: 'record', id: state.selected })
   })
 
   let mounted = false
@@ -421,11 +421,11 @@ export function mountGraphWorkspace(root, options) {
   mounted = true
 
   return {
-    get state() { return { ...state, savedCamera: undefined, counters: { ...counters }, webgl, records: model.nodes.length, links: model.edges.length, workbench: workbench.subject, camera: constellation ? constellation.camera.getState() : null, draftStatus: store.status, draftPersistence: store.persistence } },
-    recipes, store, constellation, workbench,
-    select, openWorkbench, openReview, setRecipe, runPrimary, backToConstellation, toggleText,
+    get state() { return { ...state, savedCamera: undefined, counters: { ...counters }, webgl, records: model.nodes.length, links: model.edges.length, workbench: workbench.subject, camera: mapView ? mapView.camera.getState() : null, draftStatus: store.status, draftPersistence: store.persistence } },
+    recipes, store, map: mapView, constellation: mapView, workbench,
+    select, openWorkbench, openReview, setRecipe, runPrimary, backToMap, backToConstellation: backToMap, toggleText,
     setScheme(scheme) { state.scheme = scheme; applyAppearance() },
     readiness: () => readiness(model.plan, store, new Set(model.nodes.map(n => n.id))).status,
-    destroy() { for (const fn of cleanups.splice(0)) fn(); constellation?.kill(); clear(root); root.classList.remove('atelier-gw') },
+    destroy() { for (const fn of cleanups.splice(0)) fn(); mapView?.kill(); clear(root); root.classList.remove('atelier-gw') },
   }
 }

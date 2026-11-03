@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-alpha.16
+
+- Rename the graph workspace's room from constellation to **map** and its middle layer from coach to **distribution**. The runtime already holds *constellation* as an identity canonical (a grouping of people), and Atelier already defines the distribution tier. New names: `ROOMS` is `map`, `workbench`, `review`; `LAYERS` is `atelier`, `distribution`, `owner`; `planMap`, `createMap`, the shell handle's `map` and `backToMap`, `setBy: 'distribution'`; interface text says "map". The alpha.15 names keep working for this release and are removed in the next: `room: 'constellation'` (listed in the new `DEPRECATED_ROOMS`), `composeRecipes({ coach })` (giving both `coach` and `distribution` refuses), `planConstellation`, `createConstellation`, the handle's `constellation` and `backToConstellation`, and the element's `constellation` class.
+
 ## 0.2.0-alpha.15
 
 - Patch the fast-uri dependency and override from 3.1.8 to 3.1.9, the patched 3.x release for GHSA-w74x-v6f9-j3xg, GHSA-xhq7-xmqj-769h, GHSA-wjr9-j795-jxcr and GHSA-333x-w4r6-6crp (3.1.8 is in each affected range; whether Atelier's use was exploitable is not established). Ajv's own `^3.0.1` range resolves to the same copy, so a bare consumer installs 3.1.9 only, and `npm audit` reports no runtime advisory.

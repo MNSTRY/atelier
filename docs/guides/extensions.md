@@ -45,12 +45,12 @@ distributed in this package.
 
 The runtime parser is required after JSON Schema validation: it enforces unique IDs and cross-references, recovery scope/effect, current-schema readability, Unicode and total JSON bounds. Native Postgres operation results are capped at 60 KiB inside the transaction, leaving room for the original-operation recovery proof within the 64 KiB action output bound. Every failure after successful admission remains an uncertain operation; inspect its durable receipt before deciding what to do next.
 
-The candidate SDK version 0.2.0-alpha.15 is unpublished. Before its release,
-pack the reviewed Atelier checkout with `npm pack --ignore-scripts` and install
-the resulting local tarball in the generated project with
-`npm install /absolute/path/to/mnstry-atelier-0.2.0-alpha.15.tgz`. Then run
-`npm run typecheck` and reseal the reviewed project. Do not expect the unpublished
-version to install from the public registry. String length limits use Unicode
+The generated project pins the SDK to the Atelier version that generated it.
+When that version is published, `npm install` resolves it. From an unreleased
+checkout, pack the reviewed checkout with `npm pack --ignore-scripts` and install
+the resulting local tarball in the generated project by its absolute path. Then
+run `npm run typecheck` and reseal the reviewed project. An unpublished version
+does not install from the public registry. String length limits use Unicode
 code points, matching JSON Schema; ill-formed surrogate sequences remain refused.
 
 The source seal covers package.json, tsconfig.json, src/, present npm lockfiles,

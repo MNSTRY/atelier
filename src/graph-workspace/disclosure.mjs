@@ -1,4 +1,4 @@
-// Shippable-content gate for layered systems. When a coach or owner builds on top of
+// Shippable-content gate for layered systems. When a distribution or owner builds on top of
 // private workspaces, the shareable layer must not carry anything from them.
 // fingerprintsFrom() derives distinctive strings from a private knowledge graph and
 // plan (ids, paths, long titles, summary openings, plan wording, names);

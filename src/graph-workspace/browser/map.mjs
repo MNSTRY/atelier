@@ -2,7 +2,7 @@
 //   deps = { Sigma, Graph, EdgeArrowProgram, FA2Layout? }  (sigma 3, graphology,
 //   sigma/rendering's EdgeArrowProgram, graphology-layout-forceatlas2/worker).
 //
-// The constellation: every readable record, alive. Sigma (WebGL) draws nodes and
+// The map: every readable record, alive. Sigma (WebGL) draws nodes and
 // edges; two canvases around it draw zone glows (behind) and labels (in front).
 // Labels are placed by priority with collision checks, faded by zoom, and drawn
 // with a halo instead of a box. Hovering lights a neighbourhood; selecting keeps it.
@@ -14,7 +14,7 @@ const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 const hexToRgba = (hex, a) => { const n = parseInt(hex.slice(1, 7), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})` }
 const mix = (a, b, t) => { const p = parseInt(a.slice(1, 7), 16), q = parseInt(b.slice(1, 7), 16); const c = s => Math.round(((p >> s) & 255) * (1 - t) + ((q >> s) & 255) * t); return '#' + [16, 8, 0].map(s => c(s).toString(16).padStart(2, '0')).join('') }
 
-export function createConstellation({ container, model, palette, font = 'system-ui, sans-serif', deps, reserveSelector = '[data-graph-reserve]', onSelect = () => {}, onHover = () => {}, onOpen = () => {} }) {
+export function createMap({ container, model, palette, font = 'system-ui, sans-serif', deps, reserveSelector = '[data-graph-reserve]', onSelect = () => {}, onHover = () => {}, onOpen = () => {} }) {
   const { Sigma, Graph, EdgeArrowProgram, FA2Layout = null } = deps ?? {}
   if (typeof Sigma !== 'function' || typeof Graph !== 'function' || typeof EdgeArrowProgram !== 'function') throw new TypeError('Inject sigma 3 (Sigma, EdgeArrowProgram) and graphology (Graph)')
   if (model.nodes.some(n => !Number.isFinite(n.x) || !Number.isFinite(n.y))) throw new TypeError('Lay the model out first (layoutWorkspace or stored positions)')
@@ -367,3 +367,6 @@ export function createConstellation({ container, model, palette, font = 'system-
   }
   return api
 }
+
+/** Deprecated alpha.15 name of `createMap`, kept for one release. */
+export const createConstellation = createMap
