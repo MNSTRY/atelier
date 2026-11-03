@@ -1,6 +1,6 @@
 // Scale primitives for workspaces with tens of thousands of records.
 //
-// A constellation draws every readable record while that stays legible and fast.
+// The map draws every readable record while that stays legible and fast.
 // Beyond a budget, the whole is shown as zones (with honest counts and directed
 // bundles between them) and a person opens one zone at a time. Nothing here hides
 // a record silently: every bounded result states what it left out.
@@ -8,7 +8,7 @@
 export const DEFAULT_BUDGET = Object.freeze({ records: 12000, links: 60000 })
 
 /** Decide how the whole should be drawn for this model and budget. */
-export function planConstellation(model, budget = DEFAULT_BUDGET) {
+export function planMap(model, budget = DEFAULT_BUDGET) {
   const records = model.nodes.length, links = model.edges.length
   if (records <= budget.records && links <= budget.links) return { mode: 'records', records, links }
   return { mode: 'zones', records, links, reason: records > budget.records ? 'records-over-budget' : 'links-over-budget', budget: { ...budget } }
@@ -93,3 +93,6 @@ export function zoneSlice(model, zoneId, { limit = DEFAULT_BUDGET.records } = {}
     },
   }
 }
+
+/** Deprecated alpha.15 name of `planMap`, kept for one release. */
+export const planConstellation = planMap

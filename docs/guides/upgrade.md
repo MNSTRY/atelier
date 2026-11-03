@@ -9,6 +9,23 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.16
+
+This release renames two graph workspace names; nothing else changes and no
+stored record changes format.
+
+- The room `constellation` is now `map`, and the middle recipe and theme layer
+  `coach` is now `distribution`. Use `room: 'map'`,
+  `composeRecipes({ distribution })`, `planMap`, `createMap`, and the shell
+  handle's `map` and `backToMap`. Provenance now reads `setBy: 'distribution'`;
+  code that compared `setBy` values with `'coach'` must compare with
+  `'distribution'`.
+- The alpha.15 names still work in this release and are removed in the next:
+  `room: 'constellation'`, `composeRecipes({ coach })` (do not pass both),
+  `planConstellation`, `createConstellation`, `constellation`,
+  `backToConstellation` and the `.constellation` class. Styles that target
+  `.atelier-gw .constellation` should move to `.atelier-gw .map`.
+
 ## Upgrading to 0.2.0-alpha.15
 
 This release adds the graph workspace (`@mnstry/atelier/graph-workspace` and

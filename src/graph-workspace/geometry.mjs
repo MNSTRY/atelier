@@ -1,4 +1,4 @@
-// Presentation geometry for the constellation. Positions are presentation only:
+// Presentation geometry for the map. Positions are presentation only:
 // distance never asserts a relation. The force layout itself is injected so this
 // package carries no layout dependency; any ForceAtlas2-compatible function works.
 

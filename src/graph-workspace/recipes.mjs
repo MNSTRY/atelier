@@ -1,11 +1,14 @@
-// Work recipes, layered: Atelier ships defaults, a cohort coach adds or adjusts,
-// and the owner has the final say. A recipe is data that chooses the room, the lens
+// Work recipes, layered: Atelier ships defaults, a distribution (the tier that
+// adapts Atelier for a programme or cohort) adds or adjusts, and the owner has the
+// final say. A recipe is data that chooses the room, the lens
 // and the one primary action. Every resolved field records which layer set it.
 
-export const ROOMS = Object.freeze(['constellation', 'workbench', 'review'])
+export const ROOMS = Object.freeze(['map', 'workbench', 'review'])
+/** Names accepted for one release and read as their replacements. */
+export const DEPRECATED_ROOMS = Object.freeze({ constellation: 'map' })
 export const LENSES = Object.freeze([null, 'question', 'concept', 'zone'])
 export const SUBJECTS = Object.freeze([null, 'record', 'concept', 'relation'])
-export const LAYERS = Object.freeze(['atelier', 'coach', 'owner'])
+export const LAYERS = Object.freeze(['atelier', 'distribution', 'owner'])
 /** The single emphasised action of a recipe. The default shell implements each one. */
 export const PRIMARY_ACTIONS = Object.freeze(['search', 'open-evidence', 'next-step', 'walk', 'review', 'pick'])
 
@@ -19,14 +22,16 @@ export function primaryActionsFor({ room, lens = null, subject = null }) {
 }
 
 export const DEFAULT_RECIPES = Object.freeze([
-  { id: 'explore', label: 'Explore', room: 'constellation', lens: null, subject: null, primary: 'search', description: 'Wander the whole graph. Zones on, search ready.' },
-  { id: 'question', label: 'Answer a question', room: 'constellation', lens: 'question', subject: null, primary: 'open-evidence', description: 'Light the records that declare a question’s concepts.' },
+  { id: 'explore', label: 'Explore', room: 'map', lens: null, subject: null, primary: 'search', description: 'Wander the whole graph. Zones on, search ready.' },
+  { id: 'question', label: 'Answer a question', room: 'map', lens: 'question', subject: null, primary: 'open-evidence', description: 'Light the records that declare a question’s concepts.' },
   { id: 'refine', label: 'Refine a concept', room: 'workbench', lens: null, subject: 'concept', primary: 'next-step', description: 'One concept, one step at a time.' },
   { id: 'inspect', label: 'Inspect a record', room: 'workbench', lens: null, subject: 'record', primary: 'walk', description: 'A record and its closest links, with room to read.' },
 ].map(Object.freeze))
 
 const FIELDS = ['label', 'room', 'lens', 'subject', 'primary', 'description']
 const text = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max
+/** A room name as this release reads it: deprecated names map to their replacements. */
+export const currentRoom = room => (typeof room === 'string' && Object.hasOwn(DEPRECATED_ROOMS, room) ? DEPRECATED_ROOMS[room] : room)
 
 export function validateRecipe(recipe, { partial = false } = {}) {
   const problems = []
@@ -36,7 +41,7 @@ export function validateRecipe(recipe, { partial = false } = {}) {
   const need = !partial
   if ((need || 'label' in recipe) && !text(recipe.label, 60)) problems.push('label must be 1–60 characters')
   if ((need || 'description' in recipe) && !text(recipe.description, 200)) problems.push('description must be 1–200 characters')
-  if ((need || 'room' in recipe) && !ROOMS.includes(recipe.room)) problems.push(`room must be one of ${ROOMS.join(', ')}`)
+  if ((need || 'room' in recipe) && !ROOMS.includes(currentRoom(recipe.room))) problems.push(`room must be one of ${ROOMS.join(', ')}`)
   if ('lens' in recipe && !LENSES.includes(recipe.lens)) problems.push('unknown lens')
   if ('subject' in recipe && !SUBJECTS.includes(recipe.subject)) problems.push('unknown subject')
   if ((need || 'primary' in recipe) && !PRIMARY_ACTIONS.includes(recipe.primary)) problems.push(`primary must be one of ${PRIMARY_ACTIONS.join(', ')}`)
@@ -48,22 +53,29 @@ export function validateRecipe(recipe, { partial = false } = {}) {
  * Compose recipe layers. Each layer is a list; an entry with an existing id adjusts
  * it (partial), a new id adds a complete recipe, and `hidden: true` removes it from
  * what the owner sees. Later layers win. Throws on any invalid entry.
+ * `coach` is the alpha.15 name of the distribution layer, accepted for one release;
+ * the room `constellation` is likewise read as `map`.
  */
-export function composeRecipes({ atelier = DEFAULT_RECIPES, coach = [], owner = [] } = {}) {
+export function composeRecipes({ atelier = DEFAULT_RECIPES, distribution, coach, owner = [] } = {}) {
+  if (distribution !== undefined && coach !== undefined) throw new TypeError('Give the distribution layer once: `coach` is its deprecated name')
+  // Only an omitted layer defaults; anything supplied (null included) is validated below.
+  const middle = distribution !== undefined ? distribution : coach !== undefined ? coach : []
   const resolved = new Map()
   const provenance = new Map()
-  for (const [layer, list] of [['atelier', atelier], ['coach', coach], ['owner', owner]]) {
+  for (const [layer, list] of [['atelier', atelier], ['distribution', middle], ['owner', owner]]) {
     if (!Array.isArray(list)) throw new TypeError(`${layer} recipes must be a list`)
-    for (const entry of list) {
+    for (const raw of list) {
+      // Only plain recipe objects are normalised; anything else reaches validation unchanged.
+      const entry = raw && typeof raw === 'object' && !Array.isArray(raw) && 'room' in raw ? { ...raw, room: currentRoom(raw.room) } : raw
       const existing = resolved.get(entry?.id)
       const problems = validateRecipe(entry, { partial: !!existing })
       if (problems.length) throw new TypeError(`${layer} recipe ${entry?.id ?? '(no id)'}: ${problems.join('; ')}`)
       const next = { lens: null, subject: null, hidden: false, ...(existing ?? {}), ...entry }
-      // Only combinations a shell can honour: lenses belong to the constellation,
+      // Only combinations a shell can honour: lenses belong to the map,
       // subjects to the workbench, and the review room takes neither.
       if (next.room === 'workbench' && !next.subject) throw new TypeError(`${layer} recipe ${entry.id}: a workbench recipe needs a subject`)
       if (next.room !== 'workbench' && next.subject) throw new TypeError(`${layer} recipe ${entry.id}: only a workbench recipe takes a subject`)
-      if (next.room !== 'constellation' && next.lens) throw new TypeError(`${layer} recipe ${entry.id}: only a constellation recipe takes a lens`)
+      if (next.room !== 'map' && next.lens) throw new TypeError(`${layer} recipe ${entry.id}: only a map recipe takes a lens`)
       const actions = primaryActionsFor(next)
       if (!actions.includes(next.primary)) throw new TypeError(`${layer} recipe ${entry.id}: primary ${next.primary} is not available here; use ${actions.join(' or ')}`)
       resolved.set(entry.id, next)

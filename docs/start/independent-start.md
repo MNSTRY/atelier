@@ -8,8 +8,8 @@ commands below run locally.
 ## Find the source and choose a release
 
 The maintained public source is [MNSTRY/atelier](https://github.com/MNSTRY/atelier),
-on `main`. In the 20 October 2026 source/release snapshot, its package manifest
-describes the `0.2.0-alpha.15` candidate. A version in source is not a publication receipt.
+on `main`. Its package manifest names the version being prepared; a version in
+source is not a publication receipt.
 The example below pins the published `0.2.0-alpha.14` alpha release. Registry
 `latest` and `alpha` are separate channels; check them before choosing an upgrade:
 

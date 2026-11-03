@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const enabled = process.env.ATELIER_GRAPH_WORKSPACE_BROWSER_PROOF === '1'
 const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
 
-test('graph workspace rooms: constellation, workbench, review, recipes, themes and fallbacks', { skip: !enabled, timeout: 240000 }, async () => {
+test('graph workspace rooms: map, workbench, review, recipes, themes and fallbacks', { skip: !enabled, timeout: 240000 }, async () => {
   const { chromium } = await import('playwright')
   const { build } = await import('esbuild')
   const output = path.resolve(process.env.ATELIER_GRAPH_WORKSPACE_PROOF_OUTPUT ?? path.join(os.tmpdir(), 'atelier-graph-workspace-proof'))
@@ -25,7 +25,7 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
       import forceAtlas2 from 'graphology-layout-forceatlas2'
       import FA2Layout from 'graphology-layout-forceatlas2/worker'
       import { buildWorkspaceModel, layoutWorkspace, composeRecipes, composeTheme, DEFAULT_THEME } from './src/graph-workspace/index.mjs'
-      import { mountGraphWorkspace } from './src/graph-workspace/browser/index.mjs'
+      import { mountGraphWorkspace, createConstellation, injectGraphWorkspaceStyles, applyTheme } from './src/graph-workspace/browser/index.mjs'
       import { generateCommons } from './test/helpers/graph-workspace-commons.mjs'
       const params = new URLSearchParams(location.search)
       const fixture = generateCommons({ size: Number(params.get('size') ?? 900), seed: 11 })
@@ -37,23 +37,39 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
       if (params.get('empty') === '1') { fixture.graph.nodes = []; fixture.graph.edges = [] }
       const model = buildWorkspaceModel(fixture)
       layoutWorkspace(model, { Graph, forceAtlas2, iterations: 300 })
-      const coach = params.get('coach') === '1'
+      const layered = params.get('layered') === '1'
       const every = params.get('recipes') === 'all'
+      const legacy = params.get('recipes') === 'legacy'
       const extra = [
         { id: 'check', label: 'Check the proposal', description: 'Review what is drafted.', room: 'review', primary: 'review' },
         { id: 'bind', label: 'Refine a relation', description: 'One relation at a time.', room: 'workbench', subject: 'relation', primary: 'next-step' },
-        { id: 'by-concept', label: 'Follow a concept', description: 'Light its declaring notes.', room: 'constellation', lens: 'concept', primary: 'open-evidence' },
-        { id: 'by-zone', label: 'One folder', description: 'Dim everything else.', room: 'constellation', lens: 'zone', primary: 'pick' },
+        { id: 'by-concept', label: 'Follow a concept', description: 'Light its declaring notes.', room: 'map', lens: 'concept', primary: 'open-evidence' },
+        { id: 'by-zone', label: 'One folder', description: 'Dim everything else.', room: 'map', lens: 'zone', primary: 'pick' },
       ]
+      if (params.get('standalone') === '1') {
+        // A custom alpha.15 shell: createConstellation into a container marked only .constellation.
+        const host = document.getElementById('root')
+        host.classList.add('atelier-gw')
+        injectGraphWorkspaceStyles(document)
+        const palette = applyTheme(DEFAULT_THEME, 'dark', host)
+        const el = document.createElement('div')
+        el.className = 'constellation'
+        host.append(el)
+        window.model = model
+        window.room = createConstellation({ container: el, model, palette, deps: { Sigma, Graph, EdgeArrowProgram, FA2Layout } })
+        document.body.dataset.ready = 'true'
+      } else {
       window.model = model
       window.gw = mountGraphWorkspace(document.getElementById('root'), {
         model, deps: { Sigma, Graph, EdgeArrowProgram, FA2Layout }, intro: false,
         webgl: params.get('webgl') === 'off' ? false : undefined,
         profile: { id: params.get('workspace') ?? 'commons', name: 'Invented commons', vocabulary: { record: 'note', records: 'notes', zone: 'folder' } },
-        recipes: every ? composeRecipes({ coach: extra }).recipes : coach ? composeRecipes({ coach: [{ id: 'explore', label: 'Wander the shore' }], owner: [{ id: 'inspect', hidden: true }] }).recipes : undefined,
-        theme: coach ? composeTheme(DEFAULT_THEME, { id: 'coach', schemes: { dark: { vars: { '--accent': '#a0e0c0' } } } }) : DEFAULT_THEME,
+        // legacy: complete alpha.15 recipes handed straight to the shell, never composed.
+        recipes: legacy ? [{ id: 'explore', label: 'Explore', description: 'All of it.', room: 'constellation', lens: null, subject: null, primary: 'search', hidden: false }, { id: 'old-zone', label: 'One folder', description: 'Dim everything else.', room: 'constellation', lens: 'zone', subject: null, primary: 'pick', hidden: false }, { id: 'old-concept', label: 'Follow a concept', description: 'Light its notes.', room: 'constellation', lens: 'concept', subject: null, primary: 'open-evidence', hidden: false }] : every ? composeRecipes({ distribution: extra }).recipes : layered ? composeRecipes({ distribution: [{ id: 'explore', label: 'Wander the shore' }], owner: [{ id: 'inspect', hidden: true }] }).recipes : undefined,
+        theme: layered ? composeTheme(DEFAULT_THEME, { id: 'distribution', schemes: { dark: { vars: { '--accent': '#a0e0c0' } } } }) : DEFAULT_THEME,
       })
       document.body.dataset.ready = 'true'
+      }
     ` },
     bundle: true, format: 'iife', platform: 'browser', write: false, logLevel: 'silent',
   })
@@ -72,15 +88,16 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     return { p, context }
   }
   const labelsOk = async p => p.evaluate(() => {
-    const c = window.gw.constellation, host = document.querySelector('.constellation').getBoundingClientRect()
+    const c = window.gw.map, host = document.querySelector('.map').getBoundingClientRect()
     const labels = c.labels(), zones = c.zoneLabels()
     const chrome = [...document.querySelectorAll('[data-graph-reserve]')].filter(e => !e.hidden).map(e => { const r = e.getBoundingClientRect(); return { left: r.left - host.left, top: r.top - host.top, right: r.right - host.left, bottom: r.bottom - host.top } }).filter(r => r.right > r.left)
     return { labels, zones, chrome }
   })
   try {
-    // Constellation: every record drawn, labels and zone names never collide or sit under chrome.
+    // Map: every record drawn, labels and zone names never collide or sit under chrome.
     let { p, context } = await open()
-    const counts = await p.evaluate(() => ({ drawn: window.gw.constellation.graph.order, records: window.model.nodes.length }))
+    const counts = await p.evaluate(() => ({ drawn: window.gw.map.graph.order, records: window.model.nodes.length }))
+    assert.equal(await p.evaluate(() => window.gw.constellation === window.gw.map && window.gw.backToConstellation === window.gw.backToMap), true, 'alpha.15 handle names alias the map for one release')
     assert.equal(counts.drawn, counts.records)
     const l = await labelsOk(p)
     const all = [...l.labels, ...l.zones]
@@ -89,7 +106,7 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     assert.ok(l.labels.every(x => !l.chrome.some(c => overlaps(c, x))), 'label under chrome')
     assert.ok(l.zones.length >= 3, 'zone names at fit')
     assert.ok(l.zones.every(x => !l.chrome.some(c => overlaps(c, x))), 'zone name under chrome')
-    await p.screenshot({ path: path.join(output, 'constellation.png') })
+    await p.screenshot({ path: path.join(output, 'map.png') })
     // Selection does not move the camera; the workbench opens and returns to the same view.
     const id = await p.evaluate(() => [...window.model.nodes].sort((a, b) => b.degree - a.degree)[20].id)
     const before = await p.evaluate(() => window.gw.state.camera)
@@ -139,13 +156,13 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     await p.goto(pathToFileURL(page).href)
     await p.waitForFunction(() => document.body.dataset.ready === 'true')
     // Text view lists every record.
-    await p.evaluate(() => window.gw.backToConstellation())
+    await p.evaluate(() => window.gw.backToMap())
     await p.keyboard.press('t')
     await p.waitForTimeout(300)
     assert.equal(await p.evaluate(() => document.querySelectorAll('.text-view .tv-item[data-id]').length), counts.records)
     await context.close()
-    // Coach and owner layers change words and theme without code.
-    ;({ p, context } = await open('?coach=1'))
+    // Distribution and owner layers change words and theme without code.
+    ;({ p, context } = await open('?layered=1'))
     const layered = await p.evaluate(() => ({ label: document.querySelector('.top .pill span:nth-child(2)').textContent, accent: getComputedStyle(document.getElementById('root')).getPropertyValue('--accent').trim(), recipes: window.gw.recipes.map(r => r.id) }))
     assert.equal(layered.label, 'Wander the shore')
     assert.equal(layered.accent, '#a0e0c0')
@@ -156,19 +173,19 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     const run = async id => { await p.evaluate(r => window.gw.setRecipe(r), id); await p.waitForTimeout(1300); return p.evaluate(() => ({ room: window.gw.state.room, subject: window.gw.state.workbench, lens: document.querySelector('[data-gw="lens-card"]').dataset.lens, hidden: document.querySelector('[data-gw="lens-card"]').hidden, primary: document.querySelector('[data-gw="primary"]').textContent })) }
     let r = await run('check')
     assert.equal(r.room, 'review'); assert.equal(r.primary, 'Review the proposal')
-    assert.match(await p.textContent('#review-back'), /constellation/)
+    assert.match(await p.textContent('#review-back'), /map/)
     await p.click('#review-back'); await p.waitForTimeout(700)
-    assert.equal(await p.evaluate(() => window.gw.state.room), 'constellation')
+    assert.equal(await p.evaluate(() => window.gw.state.room), 'map')
     r = await run('bind')
     assert.equal(r.room, 'workbench'); assert.equal(r.subject.kind, 'relation'); assert.equal(r.primary, 'Next step')
     assert.equal(await p.evaluate(() => document.activeElement?.id), 'step-input')
     r = await run('by-concept')
-    assert.equal(r.room, 'constellation'); assert.equal(r.lens, 'concept'); assert.equal(r.hidden, false)
+    assert.equal(r.room, 'map'); assert.equal(r.lens, 'concept'); assert.equal(r.hidden, false)
     const lit = await p.evaluate(() => { const c = window.model.plan.concepts[0]; return c.declaredBy.length })
     assert.match(await p.textContent('[data-gw="lens-lit"]'), lit ? new RegExp(String(lit)) : /No record/)
     if (lit) { await p.click('[data-gw="primary"]'); await p.waitForTimeout(1100); r = await p.evaluate(() => window.gw.state); assert.equal(r.room, 'workbench'); assert.equal(r.workbench.kind, 'record') }
     r = await run('by-zone')
-    assert.equal(r.room, 'constellation'); assert.equal(r.lens, 'zone'); assert.equal(r.primary, 'Choose')
+    assert.equal(r.room, 'map'); assert.equal(r.lens, 'zone'); assert.equal(r.primary, 'Choose')
     await p.click('[data-gw="primary"]')
     assert.equal(await p.evaluate(() => document.activeElement?.tagName), 'SELECT')
     await p.screenshot({ path: path.join(output, 'zone-lens.png') })
@@ -179,11 +196,25 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     assert.ok(await p.evaluate(() => document.activeElement?.classList.contains('wb-neighbour')), 'focus survives a resize relayout')
     await p.setViewportSize({ width: 1440, height: 900 })
     r = await run('explore')
-    assert.equal(r.room, 'constellation'); assert.equal(r.hidden, true); assert.equal(r.primary, 'Search')
+    assert.equal(r.room, 'map'); assert.equal(r.hidden, true); assert.equal(r.primary, 'Search')
     await p.click('[data-gw="primary"]')
     assert.equal(await p.evaluate(() => document.activeElement?.id), 'gw-command')
     r = await run('question')
     assert.equal(r.lens, 'question'); assert.equal(r.primary, 'Open the evidence')
+    await context.close()
+    // A custom alpha.15 shell with a legacy-only container keeps the room's layout.
+    ;({ p, context } = await open('?standalone=1'))
+    const legacy = await p.evaluate(() => { const el = document.querySelector('.constellation'); const r = el.getBoundingClientRect(); return { classes: el.className, position: getComputedStyle(el).position, width: r.width, height: r.height, layers: el.children.length, sigma: getComputedStyle(el.querySelector('.layer-sigma')).position } })
+    assert.match(legacy.classes, /\bmap\b/); assert.equal(legacy.position, 'absolute'); assert.ok(legacy.width > 1000 && legacy.height > 700, JSON.stringify(legacy)); assert.equal(legacy.layers, 3)
+    await context.close()
+    // Uncomposed alpha.15 recipes still get their lenses and primary-action targets.
+    ;({ p, context } = await open('?recipes=legacy'))
+    r = await run('old-zone')
+    assert.equal(r.room, 'map'); assert.equal(r.lens, 'zone'); assert.equal(r.primary, 'Choose')
+    await p.click('[data-gw="primary"]')
+    assert.equal(await p.evaluate(() => document.activeElement?.tagName), 'SELECT', 'a legacy zone recipe keeps its zone selector')
+    r = await run('old-concept')
+    assert.equal(r.room, 'map'); assert.equal(r.lens, 'concept'); assert.equal(r.primary, 'Open the evidence')
     await context.close()
     // An empty readable graph offers only recipes whose primary action has a target.
     ;({ p, context } = await open('?recipes=all&empty=1'))

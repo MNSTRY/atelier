@@ -20,7 +20,7 @@ test('all native SQL profiles generate and validate offline without optional dep
     assert.ok(backend.includes(profile.startsWith('drizzle')?'@mnstry/atelier/extensions/drizzle':'@mnstry/atelier/extensions/prisma'))
     if(profile.startsWith('drizzle'))assert.equal(pkg.dependencies['drizzle-orm'],'0.44.5')
     else assert.equal(pkg.dependencies['@prisma/client'],'7.10.0')
-    assert.equal(pkg.dependencies['@mnstry/atelier'],'0.2.0-alpha.15')
+    assert.equal(pkg.dependencies['@mnstry/atelier'],JSON.parse(await readFile(new URL('../package.json',import.meta.url))).version)
   }
 })
 

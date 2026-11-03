@@ -1,5 +1,5 @@
 // Graph-workspace themes: resolved token data, never stylesheets.
-// Atelier ships two neutral defaults, `night` (the default) and `paper`. A coach or
+// Atelier ships two neutral defaults, `night` (the default) and `paper`. A distribution or
 // owner theme overrides values by name; the result is validated, including text
 // contrast, before any room applies it as CSS custom properties.
 
@@ -126,7 +126,7 @@ export function validateTheme(theme) {
   return problems
 }
 
-/** Override a base theme by layer (coach, then owner). Each layer is validated before it is applied. */
+/** Override a base theme by layer (distribution, then owner). Each layer is validated before it is applied. */
 export function composeTheme(base = DEFAULT_THEME, ...layers) {
   const baseProblems = validateTheme(base)
   if (baseProblems.length) throw new TypeError('Base theme refused: ' + baseProblems.join('; '))
