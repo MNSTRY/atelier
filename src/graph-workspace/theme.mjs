@@ -33,34 +33,92 @@ export const DEFAULT_THEME = Object.freeze({
   schemes: Object.freeze({ dark: night, light: paper }),
 })
 
-const unsafe = v => typeof v !== 'string' || v.length > 240 || /[;{}<>\\@]|url\(|expression|javascript:/i.test(v)
-const hex = v => /^#[0-9a-f]{6}$/i.test(v)
+// Every token has one type. Only colours, lengths, durations, an easing and font
+// family names are accepted, so no theme value can load a resource or inject CSS.
+const HEX = /^#[0-9a-f]{6}$/i
+const RGBA = /^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d{1,3})\s*\)$/i
+const COLOR = v => HEX.test(v)
+const SOFT_COLOR = v => HEX.test(v) || RGBA.test(v)
+const FONT = v => /^[A-Za-z0-9 "',.-]{1,160}$/.test(v) && !/["']{2}/.test(v)
+const LENGTH = v => /^\d{1,2}(?:\.\d{1,2})?px$/.test(v)
+const SHADOW = v => v === 'none' || v.split(/,(?![^()]*\))/).every(part => /^\s*(?:(?:0|-?\d{1,3}(?:\.\d{1,2})?px)\s+){2,4}(?:rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d{1,3})\s*\)|#[0-9a-f]{6})\s*$/i.test(part))
+const DURATION = v => /^\d{1,4}ms$/.test(v)
+const EASE = v => /^(?:ease|linear|ease-in|ease-out|ease-in-out|cubic-bezier\(\s*-?\d(?:\.\d{1,3})?\s*,\s*-?\d(?:\.\d{1,3})?\s*,\s*-?\d(?:\.\d{1,3})?\s*,\s*-?\d(?:\.\d{1,3})?\s*\))$/.test(v)
+export const TOKEN_TYPES = Object.freeze({
+  '--canvas': COLOR, '--surface': COLOR, '--surface-2': COLOR, '--surface-glass': SOFT_COLOR,
+  '--ink': COLOR, '--ink-2': COLOR, '--ink-3': COLOR, '--line': SOFT_COLOR, '--line-strong': SOFT_COLOR,
+  '--accent': COLOR, '--accent-ink': COLOR, '--focus': COLOR, '--warn': COLOR, '--danger': COLOR, '--ok': COLOR,
+  '--font-sans': FONT, '--font-display': FONT, '--radius': LENGTH, '--radius-lg': LENGTH, '--shadow': SHADOW, '--motion': DURATION, '--ease': EASE,
+})
+const LAYER_FIELDS = ['id', 'version', 'defaultScheme', 'schemes']
+const SCHEME_FIELDS = ['vars', 'graph']
+// Text and the surfaces it is drawn on in the rooms, with the minimum ratio for its size.
+const TEXT_PAIRS = [
+  ['--ink', '--canvas', 7], ['--ink', '--surface', 7], ['--ink', '--surface-2', 7],
+  ['--ink-2', '--canvas', 4.5], ['--ink-2', '--surface', 4.5], ['--ink-2', '--surface-2', 4.5],
+  ['--ink-3', '--canvas', 4.5], ['--ink-3', '--surface', 4.5], ['--ink-3', '--surface-2', 4.5],
+  ['--accent-ink', '--accent', 4.5], ['--accent', '--canvas', 4.5], ['--accent', '--surface', 4.5],
+  ['--warn', '--surface', 4.5], ['--danger', '--surface', 4.5], ['--ok', '--surface', 4.5],
+]
 
-export function validateTheme(theme) {
+function layerProblems(layer, { partial }) {
   const problems = []
-  if (theme?.schema !== 'atelier.graph-workspace-theme@v1') problems.push('schema must be atelier.graph-workspace-theme@v1')
-  if (!['dark', 'light'].includes(theme?.defaultScheme)) problems.push('defaultScheme must be dark or light')
-  for (const scheme of ['dark', 'light']) {
-    const s = theme?.schemes?.[scheme]
-    if (!s) { problems.push(`missing ${scheme} scheme`); continue }
-    for (const k of CSS_VARS) if (!(k in (s.vars ?? {}))) problems.push(`${scheme}: missing ${k}`)
-    for (const [k, v] of Object.entries(s.vars ?? {})) if (!/^--[\w-]+$/.test(k) || unsafe(v)) problems.push(`${scheme}: rejected ${k}`)
-    for (const k of GRAPH) if (!hex(s.graph?.[k] ?? '')) problems.push(`${scheme}: graph.${k} must be #rrggbb`)
-    if (!Array.isArray(s.graph?.zones) || s.graph.zones.length < 4 || !s.graph.zones.every(hex)) problems.push(`${scheme}: graph.zones needs at least four #rrggbb colours`)
-  }
-  if (!problems.length) for (const scheme of ['dark', 'light']) {
-    const g = theme.schemes[scheme].graph
-    if (contrastRatio(g.label, g.canvas) < 7) problems.push(`${scheme}: label contrast on the canvas is below 7:1`)
-    const weakest = Math.min(...g.zones.map(z => contrastRatio(z, g.canvas)))
-    if (weakest < 3) problems.push(`${scheme}: a zone colour is below 3:1 on the canvas (zone names are large text)`)
+  if (!layer || typeof layer !== 'object' || Array.isArray(layer)) return ['theme layer must be an object']
+  for (const key of Object.keys(layer)) if (!LAYER_FIELDS.includes(key) && !(key === 'schema' && !partial)) problems.push(`unknown theme field ${key}`)
+  if ('id' in layer && !/^[a-z][a-z0-9-]{0,47}$/.test(layer.id ?? '')) problems.push('id must be a short lowercase slug')
+  if ('version' in layer && !/^[\w.-]{1,32}$/.test(layer.version ?? '')) problems.push('version must be a short label')
+  if ('defaultScheme' in layer && !['dark', 'light'].includes(layer.defaultScheme)) problems.push('defaultScheme must be dark or light')
+  if ('schemes' in layer) {
+    if (!layer.schemes || typeof layer.schemes !== 'object' || Array.isArray(layer.schemes)) problems.push('schemes must be an object')
+    else for (const [scheme, value] of Object.entries(layer.schemes)) {
+      if (!['dark', 'light'].includes(scheme)) { problems.push(`unknown scheme ${scheme}`); continue }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) { problems.push(`${scheme}: must be an object`); continue }
+      for (const key of Object.keys(value)) if (!SCHEME_FIELDS.includes(key)) problems.push(`${scheme}: unknown field ${key}`)
+      for (const [k, v] of Object.entries(value.vars ?? {})) {
+        if (!Object.hasOwn(TOKEN_TYPES, k)) problems.push(`${scheme}: unknown token ${k}`)
+        else if (typeof v !== 'string' || !TOKEN_TYPES[k](v)) problems.push(`${scheme}: rejected ${k}`)
+      }
+      for (const [k, v] of Object.entries(value.graph ?? {})) {
+        if (k === 'zones') { if (!Array.isArray(v) || v.length < 4 || v.length > 16 || !v.every(z => typeof z === 'string' && HEX.test(z))) problems.push(`${scheme}: graph.zones needs 4–16 #rrggbb colours`) }
+        else if (!GRAPH.includes(k)) problems.push(`${scheme}: unknown graph key ${k}`)
+        else if (typeof v !== 'string' || !HEX.test(v)) problems.push(`${scheme}: graph.${k} must be #rrggbb`)
+      }
+    }
   }
   return problems
 }
 
-/** Override a base theme by layer (coach, then owner). Unknown keys are refused by validation. */
+export function validateTheme(theme) {
+  const problems = []
+  if (theme?.schema !== 'atelier.graph-workspace-theme@v1') problems.push('schema must be atelier.graph-workspace-theme@v1')
+  problems.push(...layerProblems(theme, { partial: false }))
+  if (!['dark', 'light'].includes(theme?.defaultScheme)) problems.push('defaultScheme must be dark or light')
+  for (const scheme of ['dark', 'light']) {
+    const s = theme?.schemes?.[scheme]
+    if (!s) { problems.push(`missing ${scheme} scheme`); continue }
+    for (const k of Object.keys(TOKEN_TYPES)) if (!(k in (s.vars ?? {}))) problems.push(`${scheme}: missing ${k}`)
+    for (const k of GRAPH) if (!(k in (s.graph ?? {}))) problems.push(`${scheme}: missing graph.${k}`)
+    if (!Array.isArray(s.graph?.zones)) problems.push(`${scheme}: missing graph.zones`)
+  }
+  if (problems.length) return [...new Set(problems)]
+  for (const scheme of ['dark', 'light']) {
+    const { vars, graph } = theme.schemes[scheme]
+    if (vars['--canvas'].toLowerCase() !== graph.canvas.toLowerCase()) problems.push(`${scheme}: --canvas and graph.canvas must be the same colour`)
+    for (const [fg, bg, min] of TEXT_PAIRS) if (contrastRatio(vars[fg], vars[bg]) < min) problems.push(`${scheme}: ${fg} on ${bg} is below ${min}:1`)
+    if (contrastRatio(graph.label, graph.canvas) < 7) problems.push(`${scheme}: label contrast on the canvas is below 7:1`)
+    if (Math.min(...graph.zones.map(z => contrastRatio(z, graph.canvas))) < 3) problems.push(`${scheme}: a zone colour is below 3:1 on the canvas (zone names are large text)`)
+  }
+  return problems
+}
+
+/** Override a base theme by layer (coach, then owner). Each layer is validated before it is applied. */
 export function composeTheme(base = DEFAULT_THEME, ...layers) {
+  const baseProblems = validateTheme(base)
+  if (baseProblems.length) throw new TypeError('Base theme refused: ' + baseProblems.join('; '))
   const out = structuredClone(base)
-  for (const layer of layers.filter(Boolean)) {
+  layers.filter(Boolean).forEach((layer, index) => {
+    const problems = layerProblems(layer, { partial: true })
+    if (problems.length) throw new TypeError(`Theme layer ${index + 1} refused: ${problems.join('; ')}`)
     if (layer.id) out.id = layer.id
     if (layer.version) out.version = layer.version
     if (layer.defaultScheme) out.defaultScheme = layer.defaultScheme
@@ -70,7 +128,7 @@ export function composeTheme(base = DEFAULT_THEME, ...layers) {
       Object.assign(out.schemes[scheme].vars, s.vars ?? {})
       Object.assign(out.schemes[scheme].graph, s.graph ?? {})
     }
-  }
+  })
   const problems = validateTheme(out)
   if (problems.length) throw new TypeError('Theme refused: ' + problems.join('; '))
   return out

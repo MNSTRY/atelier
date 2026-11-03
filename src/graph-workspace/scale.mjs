@@ -44,35 +44,51 @@ export function rankRecords(model) {
 }
 
 /**
- * A bounded sub-model for one zone. Members are kept by rank up to `limit`;
- * links leaving the zone are summarised per destination zone, not drawn.
+ * A bounded sub-model for one zone. Members are kept by rank up to `limit`.
+ * Every link touching the zone is accounted for exactly once:
+ *   drawn (both ends kept) + omittedInsideZone + toOtherZones + omittedToOtherZones = links touching the zone.
+ * Plan concept declarations are projected onto the kept records, with omissions counted.
  */
 export function zoneSlice(model, zoneId, { limit = DEFAULT_BUDGET.records } = {}) {
   const members = rankRecords(model).filter(n => n.zone === zoneId)
   const kept = members.slice(0, limit)
   const keep = new Set(kept.map(n => n.id))
+  const inZone = new Set(members.map(n => n.id))
   const zoneOfId = new Map(model.nodes.map(n => [n.id, n.zone]))
   const edges = []
   const boundary = new Map()
-  let omittedLinks = 0
+  let omittedInsideZone = 0, omittedToOtherZones = 0, touching = 0
   for (const e of model.edges) {
-    const s = keep.has(e.source), t = keep.has(e.target)
-    if (s && t) { edges.push(e); continue }
-    if (s || t) {
-      const other = zoneOfId.get(s ? e.target : e.source)
-      if (other !== zoneId) boundary.set(other, (boundary.get(other) ?? 0) + 1)
-      else omittedLinks++
-    }
+    const s = inZone.has(e.source), t = inZone.has(e.target)
+    if (!s && !t) continue
+    touching++
+    if (keep.has(e.source) && keep.has(e.target)) { edges.push(e); continue }
+    if (s && t) { omittedInsideZone++; continue }
+    const memberEnd = s ? e.source : e.target
+    if (!keep.has(memberEnd)) { omittedToOtherZones++; continue }
+    const other = zoneOfId.get(s ? e.target : e.source)
+    boundary.set(other, (boundary.get(other) ?? 0) + 1)
   }
-  const zones = model.zones.filter(z => z.id === zoneId).map(z => ({ ...z, count: kept.length, index: z.index }))
+  const toOtherZones = [...boundary.values()].reduce((a, b) => a + b, 0)
+  const byClass = { link: 0, containment: 0, relation: 0 }
+  for (const e of edges) byClass[e.kind]++
+  const plan = model.plan ? {
+    ...model.plan,
+    concepts: model.plan.concepts.map(c => {
+      const declaredBy = c.declaredBy.filter(id => keep.has(id))
+      return { ...c, declaredBy, omittedDeclarations: c.declaredBy.length - declaredBy.length }
+    }),
+  } : null
   return {
     ...model,
     nodes: kept.map(n => ({ ...n })),
     edges,
-    zones,
-    coverage: { ...model.coverage, records: kept.length, links: edges.length },
+    zones: model.zones.filter(z => z.id === zoneId).map(z => ({ ...z, count: kept.length })),
+    plan,
+    coverage: { records: kept.length, links: edges.length, byClass, linksOutsideReadableSet: model.coverage.linksOutsideReadableSet },
     slice: {
-      zone: zoneId, membersInZone: members.length, omittedRecords: members.length - kept.length, omittedLinksInsideZone: omittedLinks,
+      zone: zoneId, membersInZone: members.length, omittedRecords: members.length - kept.length,
+      linksTouchingZone: touching, omittedLinksInsideZone: omittedInsideZone, omittedLinksToOtherZones: omittedToOtherZones, linksToOtherZonesCount: toOtherZones,
       linksToOtherZones: [...boundary.entries()].map(([zone, count]) => ({ zone, count })).sort((a, b) => b.count - a.count),
     },
   }

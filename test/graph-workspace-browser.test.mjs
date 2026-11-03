@@ -32,12 +32,19 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
       const model = buildWorkspaceModel(fixture)
       layoutWorkspace(model, { Graph, forceAtlas2, iterations: 300 })
       const coach = params.get('coach') === '1'
+      const every = params.get('recipes') === 'all'
+      const extra = [
+        { id: 'check', label: 'Check the proposal', description: 'Review what is drafted.', room: 'review', primary: 'review' },
+        { id: 'bind', label: 'Refine a relation', description: 'One relation at a time.', room: 'workbench', subject: 'relation', primary: 'next-step' },
+        { id: 'by-concept', label: 'Follow a concept', description: 'Light its declaring notes.', room: 'constellation', lens: 'concept', primary: 'open-evidence' },
+        { id: 'by-zone', label: 'One folder', description: 'Dim everything else.', room: 'constellation', lens: 'zone', primary: 'pick' },
+      ]
       window.model = model
       window.gw = mountGraphWorkspace(document.getElementById('root'), {
         model, deps: { Sigma, Graph, EdgeArrowProgram, FA2Layout }, intro: false,
         webgl: params.get('webgl') === 'off' ? false : undefined,
-        profile: { id: 'commons', name: 'Invented commons', vocabulary: { record: 'note', records: 'notes', zone: 'folder' } },
-        recipes: coach ? composeRecipes({ coach: [{ id: 'explore', label: 'Wander the shore' }], owner: [{ id: 'inspect', hidden: true }] }).recipes : undefined,
+        profile: { id: params.get('workspace') ?? 'commons', name: 'Invented commons', vocabulary: { record: 'note', records: 'notes', zone: 'folder' } },
+        recipes: every ? composeRecipes({ coach: extra }).recipes : coach ? composeRecipes({ coach: [{ id: 'explore', label: 'Wander the shore' }], owner: [{ id: 'inspect', hidden: true }] }).recipes : undefined,
         theme: coach ? composeTheme(DEFAULT_THEME, { id: 'coach', schemes: { dark: { vars: { '--accent': '#a0e0c0' } } } }) : DEFAULT_THEME,
       })
       document.body.dataset.ready = 'true'
@@ -74,6 +81,8 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     assert.ok(l.labels.length >= 6, 'labels at fit')
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) assert.ok(!overlaps(all[i], all[j]), 'label overlap')
     assert.ok(l.labels.every(x => !l.chrome.some(c => overlaps(c, x))), 'label under chrome')
+    assert.ok(l.zones.length >= 3, 'zone names at fit')
+    assert.ok(l.zones.every(x => !l.chrome.some(c => overlaps(c, x))), 'zone name under chrome')
     await p.screenshot({ path: path.join(output, 'constellation.png') })
     // Selection does not move the camera; the workbench opens and returns to the same view.
     const id = await p.evaluate(() => [...window.model.nodes].sort((a, b) => b.degree - a.degree)[20].id)
@@ -114,6 +123,15 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     await p.evaluate(() => window.gw.setRecipe('refine'))
     await p.waitForTimeout(500)
     assert.match(await p.inputValue('#step-input'), /distinct from a decision/)
+    assert.equal(await p.evaluate(() => window.gw.state.draftPersistence), 'browser')
+    // Another workspace in the same browser never sees this draft.
+    await p.goto(pathToFileURL(page).href + '?workspace=elsewhere')
+    await p.waitForFunction(() => document.body.dataset.ready === 'true')
+    await p.evaluate(() => window.gw.setRecipe('refine'))
+    await p.waitForTimeout(500)
+    assert.doesNotMatch(await p.inputValue('#step-input'), /distinct from a decision/)
+    await p.goto(pathToFileURL(page).href)
+    await p.waitForFunction(() => document.body.dataset.ready === 'true')
     // Text view lists every record.
     await p.evaluate(() => window.gw.backToConstellation())
     await p.keyboard.press('t')
@@ -126,6 +144,40 @@ test('graph workspace rooms: constellation, workbench, review, recipes, themes a
     assert.equal(layered.label, 'Wander the shore')
     assert.equal(layered.accent, '#a0e0c0')
     assert.ok(!layered.recipes.includes('inspect'))
+    await context.close()
+    // Every room, subject, lens and primary action a recipe can name is honoured.
+    ;({ p, context } = await open('?recipes=all'))
+    const run = async id => { await p.evaluate(r => window.gw.setRecipe(r), id); await p.waitForTimeout(1300); return p.evaluate(() => ({ room: window.gw.state.room, subject: window.gw.state.workbench, lens: document.querySelector('[data-gw="lens-card"]').dataset.lens, hidden: document.querySelector('[data-gw="lens-card"]').hidden, primary: document.querySelector('[data-gw="primary"]').textContent })) }
+    let r = await run('check')
+    assert.equal(r.room, 'review'); assert.equal(r.primary, 'Review the proposal')
+    assert.match(await p.textContent('#review-back'), /constellation/)
+    await p.click('#review-back'); await p.waitForTimeout(700)
+    assert.equal(await p.evaluate(() => window.gw.state.room), 'constellation')
+    r = await run('bind')
+    assert.equal(r.room, 'workbench'); assert.equal(r.subject.kind, 'relation'); assert.equal(r.primary, 'Next step')
+    assert.equal(await p.evaluate(() => document.activeElement?.id), 'step-input')
+    r = await run('by-concept')
+    assert.equal(r.room, 'constellation'); assert.equal(r.lens, 'concept'); assert.equal(r.hidden, false)
+    const lit = await p.evaluate(() => { const c = window.model.plan.concepts[0]; return c.declaredBy.length })
+    assert.match(await p.textContent('[data-gw="lens-lit"]'), lit ? new RegExp(String(lit)) : /No record/)
+    if (lit) { await p.click('[data-gw="primary"]'); await p.waitForTimeout(1100); r = await p.evaluate(() => window.gw.state); assert.equal(r.room, 'workbench'); assert.equal(r.workbench.kind, 'record') }
+    r = await run('by-zone')
+    assert.equal(r.room, 'constellation'); assert.equal(r.lens, 'zone'); assert.equal(r.primary, 'Choose')
+    await p.click('[data-gw="primary"]')
+    assert.equal(await p.evaluate(() => document.activeElement?.tagName), 'SELECT')
+    await p.screenshot({ path: path.join(output, 'zone-lens.png') })
+    r = await run('inspect')
+    assert.equal(r.room, 'workbench'); assert.equal(r.subject.kind, 'record'); assert.equal(r.primary, 'Walk to a neighbour')
+    assert.ok(await p.evaluate(() => document.activeElement?.classList.contains('wb-neighbour')), 'walk lands on the first neighbour and survives the relayout')
+    await p.setViewportSize({ width: 1200, height: 860 }); await p.waitForTimeout(300)
+    assert.ok(await p.evaluate(() => document.activeElement?.classList.contains('wb-neighbour')), 'focus survives a resize relayout')
+    await p.setViewportSize({ width: 1440, height: 900 })
+    r = await run('explore')
+    assert.equal(r.room, 'constellation'); assert.equal(r.hidden, true); assert.equal(r.primary, 'Search')
+    await p.click('[data-gw="primary"]')
+    assert.equal(await p.evaluate(() => document.activeElement?.id), 'gw-command')
+    r = await run('question')
+    assert.equal(r.lens, 'question'); assert.equal(r.primary, 'Open the evidence')
     await context.close()
     // Without WebGL the same tasks remain through Text view and the workbench.
     ;({ p, context } = await open('?webgl=off'))

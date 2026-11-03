@@ -6,6 +6,8 @@ export const ROOMS = Object.freeze(['constellation', 'workbench', 'review'])
 export const LENSES = Object.freeze([null, 'question', 'concept', 'zone'])
 export const SUBJECTS = Object.freeze([null, 'record', 'concept', 'relation'])
 export const LAYERS = Object.freeze(['atelier', 'coach', 'owner'])
+/** The single emphasised action of a recipe. The default shell implements each one. */
+export const PRIMARY_ACTIONS = Object.freeze(['search', 'open-evidence', 'next-step', 'walk', 'review', 'pick'])
 
 export const DEFAULT_RECIPES = Object.freeze([
   { id: 'explore', label: 'Explore', room: 'constellation', lens: null, subject: null, primary: 'search', description: 'Wander the whole graph. Zones on, search ready.' },
@@ -28,7 +30,7 @@ export function validateRecipe(recipe, { partial = false } = {}) {
   if ((need || 'room' in recipe) && !ROOMS.includes(recipe.room)) problems.push(`room must be one of ${ROOMS.join(', ')}`)
   if ('lens' in recipe && !LENSES.includes(recipe.lens)) problems.push('unknown lens')
   if ('subject' in recipe && !SUBJECTS.includes(recipe.subject)) problems.push('unknown subject')
-  if ((need || 'primary' in recipe) && !/^[a-z][a-z0-9-]{0,31}$/.test(recipe.primary ?? '')) problems.push('primary must name one action')
+  if ((need || 'primary' in recipe) && !PRIMARY_ACTIONS.includes(recipe.primary)) problems.push(`primary must be one of ${PRIMARY_ACTIONS.join(', ')}`)
   if ('hidden' in recipe && typeof recipe.hidden !== 'boolean') problems.push('hidden must be true or false')
   return problems
 }
@@ -48,7 +50,11 @@ export function composeRecipes({ atelier = DEFAULT_RECIPES, coach = [], owner = 
       const problems = validateRecipe(entry, { partial: !!existing })
       if (problems.length) throw new TypeError(`${layer} recipe ${entry?.id ?? '(no id)'}: ${problems.join('; ')}`)
       const next = { lens: null, subject: null, hidden: false, ...(existing ?? {}), ...entry }
+      // Only combinations a shell can honour: lenses belong to the constellation,
+      // subjects to the workbench, and the review room takes neither.
       if (next.room === 'workbench' && !next.subject) throw new TypeError(`${layer} recipe ${entry.id}: a workbench recipe needs a subject`)
+      if (next.room !== 'workbench' && next.subject) throw new TypeError(`${layer} recipe ${entry.id}: only a workbench recipe takes a subject`)
+      if (next.room !== 'constellation' && next.lens) throw new TypeError(`${layer} recipe ${entry.id}: only a constellation recipe takes a lens`)
       resolved.set(entry.id, next)
       const fields = provenance.get(entry.id) ?? {}
       for (const key of Object.keys(entry)) if (key !== 'id') fields[key] = layer
@@ -62,7 +68,9 @@ export function composeRecipes({ atelier = DEFAULT_RECIPES, coach = [], owner = 
 
 /** Recipes a workspace can actually run: concept work needs a plan with concepts. */
 export function availableRecipes(recipes, model) {
-  const hasConcepts = !!model.plan?.concepts.length
-  const hasQuestions = !!model.plan?.questions.length
-  return recipes.filter(r => (r.subject !== 'concept' && r.subject !== 'relation' || hasConcepts) && (r.lens !== 'question' || hasQuestions))
+  const concepts = !!model.plan?.concepts.length, relations = !!model.plan?.relations.length, questions = !!model.plan?.questions.length
+  return recipes.filter(r =>
+    (r.subject !== 'concept' || concepts) && (r.subject !== 'relation' || relations) &&
+    (r.lens !== 'question' || questions) && (r.lens !== 'concept' || concepts) &&
+    (r.room !== 'review' || concepts) && (r.subject !== 'record' || model.nodes.length > 0))
 }

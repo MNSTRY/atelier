@@ -5,8 +5,13 @@
 //   const workspace = mountGraphWorkspace(element, {
 //     model,                    // buildWorkspaceModel(...) with positions (layoutWorkspace)
 //     deps,                     // { Sigma, Graph, EdgeArrowProgram, FA2Layout? }
-//     recipes, theme, profile, storage, draftKey,
+//     recipes, theme, profile,
+//     storage, draftIdentity,   // optional: where drafts persist and whose they are
 //   })
+//
+// Drafts stay in this tab unless the host names an identity: `draftIdentity`
+// ({ workspace, reader?, ... }) or `profile.id`. With an identity and no storage
+// they persist in this browser; with a host storage port they persist there.
 //
 // One workspace per document (it uses fixed element ids). The host decides what
 // the model contains; nothing here fetches, grants or saves to a source.
@@ -32,11 +37,23 @@ export function applyTheme(theme, scheme, target) {
   return { ...s.graph, zones: [...s.graph.zones], mode: scheme }
 }
 
+const PRIMARY_LABELS = { search: 'Search', 'open-evidence': 'Open the evidence', 'next-step': 'Next step', walk: 'Walk to a neighbour', review: 'Review the proposal', pick: 'Choose' }
+
+/** Where drafts live. Persistent storage needs an identity so two workspaces never share drafts. */
+function draftStore(options, profile) {
+  const identity = options.draftIdentity ?? (profile.id ? { workspace: String(profile.id) } : null)
+  if (options.storage && !identity) throw new TypeError('A draft storage port needs draftIdentity or profile.id')
+  let storage = options.storage, persistence = options.storage ? (options.persistence ?? 'host') : 'browser'
+  if (!storage && identity) { try { storage = window.localStorage; storage.length } catch { storage = null } }
+  if (!storage || !identity) { storage = memoryStorage(); persistence = 'tab' }
+  const id = identity ?? { workspace: 'this-tab' }
+  const key = options.draftKey ?? 'atelier-graph-workspace:draft:' + encodeURIComponent(JSON.stringify(Object.keys(id).sort().map(k => [k, id[k]])))
+  return createDraftStore({ storage, key, identity: id, persistence })
+}
+
 export function mountGraphWorkspace(root, options) {
   const {
     model, deps = null, theme = DEFAULT_THEME, profile = {}, initialRecipe = null, intro = true,
-    storage = (() => { try { return window.localStorage } catch { return memoryStorage() } })(),
-    draftKey = `atelier-graph-workspace:draft:${profile.id ?? 'workspace'}:${model.plan?.concepts.length ?? 0}-${model.nodes.length}`,
     webgl = hasWebGL() && !!deps,
   } = options
   const recipesAll = options.recipes ?? composeRecipes().recipes
@@ -45,7 +62,8 @@ export function mountGraphWorkspace(root, options) {
   const vocab = { record: 'record', records: 'records', zone: 'zone', concept: 'concept', model: 'Concepts', ...(profile.vocabulary ?? {}) }
   injectGraphWorkspaceStyles(root.ownerDocument)
 
-  const state = { recipe: null, room: 'constellation', selected: null, questionId: null, textView: !webgl, scheme: options.scheme ?? theme.defaultScheme, zonesOn: true, linksOn: true, labelBoost: 1, savedCamera: null }
+  const byNode = new Map(model.nodes.map(n => [n.id, n]))
+  const state = { recipe: null, room: 'constellation', selected: null, lens: null, questionId: null, conceptId: null, zoneId: null, textView: !webgl, scheme: options.scheme ?? theme.defaultScheme, zonesOn: true, linksOn: true, labelBoost: 1, savedCamera: null }
   const counters = { dives: 0 }
   let palette = null, constellation = null
 
@@ -60,7 +78,8 @@ export function mountGraphWorkspace(root, options) {
     h('header', { class: 'top' },
       h('div', { class: 'menu-wrap', 'data-graph-reserve': '' },
         make('recipeBtn', 'button', { class: 'pill', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, h('span', { class: 'emblem', 'aria-hidden': 'true', text: profile.emblem ?? '◌' }), make('recipeLabel', 'span', { text: '' }), h('span', { class: 'caret', 'aria-hidden': 'true', text: '▾' })),
-        make('recipeMenu', 'div', { class: 'menu', role: 'menu', 'aria-label': 'What are you doing?', hidden: true })),
+        make('recipeMenu', 'div', { class: 'menu', role: 'menu', 'aria-label': 'What are you doing?', hidden: true }),
+        make('primaryBtn', 'button', { class: 'pill primary-action', type: 'button', 'data-gw': 'primary' }, '')),
       make('commandWrap', 'div', { class: 'command-wrap', role: 'search', 'data-graph-reserve': '' },
         h('label', { class: 'sr-only', for: 'gw-command', text: 'Search or type a command' }),
         make('command', 'input', { id: 'gw-command', type: 'search', placeholder: 'Search or type a command', autocomplete: 'off', 'aria-autocomplete': 'list' }),
@@ -81,7 +100,7 @@ export function mountGraphWorkspace(root, options) {
     h('div', { class: 'zoom', role: 'group', 'aria-label': 'Zoom', 'data-graph-reserve': '' },
       make('zoomIn', 'button', { type: 'button', 'aria-label': 'Zoom in' }, '+'), make('zoomOut', 'button', { type: 'button', 'aria-label': 'Zoom out' }, '−'), make('fit', 'button', { type: 'button', 'aria-label': 'Fit the whole graph' }, '⤢')),
     make('card', 'section', { class: 'card', 'aria-labelledby': 'card-title', hidden: true, 'data-graph-reserve': '' }),
-    make('questionCard', 'section', { class: 'question-card', hidden: true, 'data-graph-reserve': '' }),
+    make('questionCard', 'section', { class: 'question-card', 'data-gw': 'lens-card', hidden: true, 'data-graph-reserve': '' }),
     make('textView', 'section', { class: 'text-view', 'aria-label': 'Text view' }),
     make('workbench', 'section', { class: 'workbench', 'aria-label': 'Workbench', hidden: true }),
     make('review', 'section', { class: 'review-room', 'aria-label': 'Review', hidden: true }),
@@ -90,7 +109,7 @@ export function mountGraphWorkspace(root, options) {
   root.append(stage)
   if (!webgl) root.classList.add('text-mode', 'no-webgl')
 
-  const store = createDraftStore({ storage, key: draftKey })
+  const store = draftStore(options, profile)
   const announce = text => { el.live.textContent = text }
   let toastTimer = null
   const toast = text => { el.toast.textContent = text; el.toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.toast.hidden = true }, 3200) }
@@ -110,7 +129,7 @@ export function mountGraphWorkspace(root, options) {
     constellation = createConstellation({ container: el.constellation, model, palette, font, deps, onSelect: id => select(id), onOpen: id => openWorkbench({ kind: 'record', id }) })
     if (intro) constellation.intro()
   }
-  const workbench = createWorkbench({ root: el.workbench, model, palette, store, vocab, onBack: backToConstellation, onReview: openReview, onShowOnMap: id => backToConstellation().then(() => { select(id); constellation?.showNode(id) }) })
+  const workbench = createWorkbench({ root: el.workbench, model, palette, store, vocab, onBack: backToConstellation, onReview: () => openReview({ from: 'workbench' }), onShowOnMap: id => backToConstellation().then(() => { select(id); constellation?.showNode(id) }) })
   el.workbench.hidden = true
 
   // ── Recipes ──
@@ -119,23 +138,89 @@ export function mountGraphWorkspace(root, options) {
     if (!recipe) return
     state.recipe = recipe.id
     el.recipeLabel.textContent = recipe.label
+    el.primaryBtn.textContent = PRIMARY_LABELS[recipe.primary]
     root.dataset.recipe = recipe.id
+    root.dataset.primary = recipe.primary
     closeMenus()
-    el.questionCard.hidden = recipe.lens !== 'question'
-    if (recipe.lens === 'question') { state.questionId = state.questionId ?? model.plan.questions[0].id; renderQuestionCard() } else constellation?.setLens(null)
+    state.lens = recipe.room === 'constellation' ? recipe.lens : null
+    renderLensCard()
     if (recipe.room === 'workbench') {
-      if (recipe.subject === 'concept') openWorkbench({ kind: 'concept', id: model.plan.concepts[0].id })
-      else openWorkbench({ kind: 'record', id: state.selected ?? [...model.nodes].sort((a, b) => b.relationDegree - a.relationDegree || b.degree - a.degree)[0].id })
-    } else if (state.room !== 'constellation') backToConstellation()
+      // In the workbench the primary action is where focus lands (the top bar sits behind it).
+      const subject = recipe.subject === 'concept' ? { kind: 'concept', id: model.plan.concepts[0].id }
+        : recipe.subject === 'relation' ? { kind: 'relation', id: model.plan.relations[0].id }
+        : { kind: 'record', id: state.selected ?? [...model.nodes].sort((a, b) => b.relationDegree - a.relationDegree || b.degree - a.degree)[0].id }
+      const opened = openWorkbench(subject)
+      if (mounted) opened.then(() => focusPrimary(recipe.primary))
+    } else if (recipe.room === 'review') openReview({ from: 'recipe' })
+    else if (state.room !== 'constellation') backToConstellation()
     announce(`${recipe.label}. ${recipe.description}`)
+  }
+  function renderLensCard() {
+    el.questionCard.hidden = !state.lens
+    el.questionCard.dataset.lens = state.lens ?? ''
+    if (state.lens !== 'zone') constellation?.setFocusZone(null)
+    if (state.lens === 'question') renderQuestionCard()
+    else if (state.lens === 'concept') renderConceptLens()
+    else if (state.lens === 'zone') renderZoneLens()
+    else { clear(el.questionCard); constellation?.setLens(null) }
+  }
+  function renderConceptLens() {
+    clear(el.questionCard)
+    const plan = model.plan
+    const c = plan.concepts.find(x => x.id === state.conceptId) ?? plan.concepts[0]
+    state.conceptId = c.id
+    const ids = c.declaredBy.filter(id => byNode.has(id))
+    constellation?.setLens(ids)
+    el.questionCard.append(h('p', { class: 'eyebrow', text: `The ${vocab.concept} in view` }),
+      h('select', { 'aria-label': vocab.concept, onchange: e => { state.conceptId = e.target.value; renderConceptLens() } }, plan.concepts.map(x => h('option', { value: x.id, selected: x.id === c.id, text: x.title }))),
+      h('p', { class: 'q-lit', 'data-gw': 'lens-lit', text: ids.length ? `${fmt(ids.length)} ${ids.length === 1 ? vocab.record : vocab.records} declare it.` : 'No record you can read declares it yet.' }),
+      h('button', { class: 'secondary small', type: 'button', onclick: () => openWorkbench({ kind: 'concept', id: c.id }) }, `Refine “${c.title}”`))
+  }
+  function renderZoneLens() {
+    clear(el.questionCard)
+    const z = model.zones.find(x => x.id === state.zoneId) ?? model.zones[0]
+    if (!z) return
+    state.zoneId = z.id
+    constellation?.setLens(null)
+    constellation?.setFocusZone(z.id)
+    el.questionCard.append(h('p', { class: 'eyebrow', text: `The ${vocab.zone} in view` }),
+      h('select', { 'aria-label': vocab.zone, onchange: e => { state.zoneId = e.target.value; renderZoneLens() } }, model.zones.map(x => h('option', { value: x.id, selected: x.id === z.id, text: x.label }))),
+      h('p', { class: 'q-lit', 'data-gw': 'lens-lit', text: `${fmt(z.count)} ${z.count === 1 ? vocab.record : vocab.records}. Others are dimmed, not removed.` }))
+  }
+  function runPrimary() {
+    const recipe = byRecipe.get(state.recipe)
+    if (!recipe) return
+    const a = recipe.primary
+    if (a === 'search') el.command.focus()
+    else if (a === 'pick') el.questionCard.querySelector('select')?.focus()
+    else if (a === 'review') openReview({ from: state.room === 'workbench' ? 'workbench' : 'recipe' })
+    else if (a === 'open-evidence') {
+      const lit = state.lens === 'question' ? questionLit() : state.lens === 'concept' ? (model.plan.concepts.find(c => c.id === state.conceptId)?.declaredBy ?? []).filter(id => byNode.has(id)) : []
+      const first = state.selected && lit.includes(state.selected) ? state.selected : lit[0]
+      if (first) openWorkbench({ kind: 'record', id: first }); else toast('Nothing lit to open yet.')
+    } else if (a === 'next-step' || a === 'walk') {
+      if (state.room === 'workbench') focusPrimary(a)
+      else if (state.selected) openWorkbench({ kind: 'record', id: state.selected }).then(() => focusPrimary(a))
+      else setRecipe(recipe.id)
+    }
+  }
+  function focusPrimary(action) {
+    if (action === 'walk') el.workbench.querySelector('.wb-neighbour')?.focus()
+    else if (action === 'next-step') el.workbench.querySelector('.wb-sheet textarea, .wb-sheet input, .wb-sheet button.primary')?.focus()
+  }
+  function questionLit() {
+    const plan = model.plan
+    const q = plan.questions.find(x => x.id === state.questionId) ?? plan.questions[0]
+    return [...new Set(q.concepts.flatMap(cid => plan.concepts.find(c => c.id === cid)?.declaredBy ?? []))].filter(id => byNode.has(id))
   }
   function renderQuestionCard() {
     clear(el.questionCard)
     const plan = model.plan
     const q = plan.questions.find(x => x.id === state.questionId) ?? plan.questions[0]
-    const ids = new Set(q.concepts.flatMap(cid => plan.concepts.find(c => c.id === cid)?.declaredBy ?? []))
+    state.questionId = q.id
+    const ids = new Set(questionLit())
     constellation?.setLens([...ids])
-    const zones = new Set([...ids].map(id => model.nodes.find(n => n.id === id)?.zoneLabel))
+    const zones = new Set([...ids].map(id => byNode.get(id).zoneLabel))
     el.questionCard.append(h('p', { class: 'eyebrow', text: 'The question on the table' }),
       h('select', { 'aria-label': 'Question', onchange: e => { state.questionId = e.target.value; renderQuestionCard() } }, plan.questions.map(x => h('option', { value: x.id, selected: x.id === q.id, text: x.question }))),
       h('p', { class: 'q-lit', 'data-gw': 'question-lit', text: ids.size ? `${fmt(ids.size)} ${ids.size === 1 ? vocab.record : vocab.records} declare its concepts, across ${zones.size} ${vocab.zone}${zones.size === 1 ? '' : 's'}.` : 'No record declares its concepts yet. That is an honest unknown, not an empty answer.' }),
@@ -199,11 +284,18 @@ export function mountGraphWorkspace(root, options) {
     if (constellation && state.savedCamera) await constellation.restore(state.savedCamera)
     constellation?.refresh()
   }
-  function openReview() {
+  function openReview({ from = 'workbench' } = {}) {
+    closeMenus()
+    if (state.room === 'workbench' && from !== 'workbench') workbench.close()
     state.room = 'review'
     root.dataset.room = 'review'
-    const back = () => { el.review.hidden = true; state.room = 'workbench'; root.dataset.room = 'workbench' }
-    renderReview(el.review, { model: { ...model, systemId: profile.id ?? 'workspace' }, store, onBack: () => { back(); workbench.refresh() }, onOpen: s => { back(); workbench.open(s) } })
+    const toWorkbench = () => { el.review.hidden = true; state.room = 'workbench'; root.dataset.room = 'workbench' }
+    renderReview(el.review, {
+      model: { ...model, systemId: profile.id ?? 'workspace' }, store,
+      backLabel: from === 'workbench' ? '← Back to the workbench' : '← Back to the constellation',
+      onBack: () => { if (from === 'workbench') { toWorkbench(); workbench.refresh() } else { el.review.hidden = true; backToConstellation() } },
+      onOpen: s => { toWorkbench(); workbench.open(s) },
+    })
   }
 
   // ── Command bar ──
@@ -238,6 +330,7 @@ export function mountGraphWorkspace(root, options) {
     if (r.kind === 'recipe') setRecipe(r.id)
     else if (r.kind === 'concept') openWorkbench({ kind: 'concept', id: r.id })
     else if (r.kind === 'question') { state.questionId = r.id; const q = recipes.find(x => x.lens === 'question'); if (q) setRecipe(q.id) }
+    else if (r.kind === 'zone') { state.zoneId = r.id; const z = recipes.find(x => x.lens === 'zone'); if (z) setRecipe(z.id) }
     else if (r.kind === 'record') { if (state.room !== 'constellation') backToConstellation().then(() => select(r.id)); else select(r.id); root.querySelector('#card-title')?.focus() }
     else if (r.id === 'text') toggleText()
     else if (r.id === 'scheme') toggleScheme()
@@ -287,6 +380,7 @@ export function mountGraphWorkspace(root, options) {
   const on = (target, type, fn, opts) => { target.addEventListener(type, fn, opts); cleanups.push(() => target.removeEventListener(type, fn, opts)) }
   const cleanups = []
   on(el.recipeBtn, 'click', () => { renderRecipeMenu(); toggle(el.recipeMenu, el.recipeBtn) })
+  on(el.primaryBtn, 'click', runPrimary)
   on(el.displayBtn, 'click', () => toggle(el.display, el.displayBtn))
   on(el.textToggle, 'click', toggleText)
   on(el.schemeBtn, 'click', toggleScheme)
@@ -321,13 +415,15 @@ export function mountGraphWorkspace(root, options) {
     else if (e.key === 'o' && state.selected && state.room === 'constellation') openWorkbench({ kind: 'record', id: state.selected })
   })
 
+  let mounted = false
   renderTextView()
   setRecipe(byRecipe.has(initialRecipe) ? initialRecipe : recipes[0]?.id)
+  mounted = true
 
   return {
-    get state() { return { ...state, savedCamera: undefined, counters: { ...counters }, webgl, records: model.nodes.length, links: model.edges.length, workbench: workbench.subject, camera: constellation ? constellation.camera.getState() : null, draftStatus: store.status } },
+    get state() { return { ...state, savedCamera: undefined, counters: { ...counters }, webgl, records: model.nodes.length, links: model.edges.length, workbench: workbench.subject, camera: constellation ? constellation.camera.getState() : null, draftStatus: store.status, draftPersistence: store.persistence } },
     recipes, store, constellation, workbench,
-    select, openWorkbench, setRecipe, backToConstellation, toggleText,
+    select, openWorkbench, openReview, setRecipe, runPrimary, backToConstellation, toggleText,
     setScheme(scheme) { state.scheme = scheme; applyAppearance() },
     readiness: () => readiness(model.plan, store, new Set(model.nodes.map(n => n.id))).status,
     destroy() { for (const fn of cleanups.splice(0)) fn(); constellation?.kill(); clear(root); root.classList.remove('atelier-gw') },

@@ -53,7 +53,7 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     }
     if (s.kind === 'concept') {
       const rel = plan.relations.filter(r => r.from === s.id || r.to === s.id).map(r => ({ kind: 'concept', id: r.from === s.id ? r.to : r.from, predicate: r.predicate, dir: r.from === s.id ? 'out' : 'in', structural: true, relation: r.id }))
-      const declared = (conceptById.get(s.id)?.declaredBy ?? []).map(id => ({ kind: 'record', id, predicate: 'declares', dir: 'in', structural: true }))
+      const declared = (conceptById.get(s.id)?.declaredBy ?? []).filter(id => byId.has(id)).map(id => ({ kind: 'record', id, predicate: 'declares', dir: 'in', structural: true }))
       return { shown: [...rel, ...declared].slice(0, 10), total: rel.length + declared.length }
     }
     const r = plan.relations.find(x => x.id === s.id)
@@ -65,12 +65,13 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     const n = isConcept ? null : byId.get(item.id)
     const c = isConcept ? conceptById.get(item.id) : null
     const cited = !isConcept && Object.values(store.data.concepts).some(d => d.evidence.some(b => b.id === item.id))
-    const proposed = isConcept && store.data.concepts[item.id] && (store.data.concepts[item.id].definition !== c.definition || store.data.concepts[item.id].identityRule !== c.identityRule)
+    const draft = isConcept ? store.conceptDraft(item.id) : undefined
+    const proposed = isConcept && draft && (draft.definition !== c.definition || draft.identityRule !== c.identityRule)
     const el = h('button', { class: `wb-card wb-${role} ${isConcept ? 'is-concept' : 'is-record'}`, type: 'button', dataset: { kind: item.kind, id: item.id },
       'aria-label': isConcept ? `${c.title}, concept` : `${n.title}, ${vocab.record} in ${n.zoneLabel}` },
       h('span', { class: 'wb-kind' }, h('i', { class: isConcept ? 'dot-concept' : 'dot', style: isConcept ? '' : `background:${zoneColor(n.zone)}` }), isConcept ? 'Concept' : n.zoneLabel),
       h('span', { class: 'wb-title', text: isConcept ? c.title : n.title }),
-      h('span', { class: 'wb-summary', text: isConcept ? (store.data.concepts[item.id]?.definition || c.definition || '') : n.summary }),
+      h('span', { class: 'wb-summary', text: isConcept ? (draft?.definition || c.definition || '') : n.summary }),
       h('span', { class: 'wb-meta' }, isConcept ? `${c.declaredBy.length} declaring ${c.declaredBy.length === 1 ? vocab.record : vocab.records}` : `${n.type}${n.status ? ' · ' + n.status : ''} · ${n.degree} links`,
         cited ? h('b', { class: 'tag tag-cited', text: 'Cited' }) : null, proposed ? h('b', { class: 'tag tag-proposed', text: 'Proposed' }) : null))
     if (role === 'neighbour') el.addEventListener('click', () => walk({ kind: item.kind, id: item.id }, el))
@@ -80,6 +81,9 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
   function layoutGraph(animate) {
     const w = graphHost.clientWidth, hgt = graphHost.clientHeight
     const { shown, total, relation } = neighboursOf(subject)
+    // A relayout (resize, citation) rebuilds the cards; keep keyboard focus where it was.
+    const active = cardLayer.contains(document.activeElement) ? document.activeElement : null
+    const refocus = active && { kind: active.dataset.kind, id: active.dataset.id, role: active.classList.contains('wb-center') ? 'center' : 'neighbour' }
     clear(cardLayer)
     while (edgeSvg.firstChild) edgeSvg.firstChild.remove()
     const center = card({ kind: subject.kind === 'relation' ? 'concept' : subject.kind, id: subject.kind === 'relation' ? relation.from : subject.id }, 'center')
@@ -127,6 +131,7 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     }
     if (total > rects.size - 1) cardLayer.append(h('p', { class: 'wb-more', text: `${total - (rects.size - 1)} more connections are listed in the sheet and in Text view.` }))
     lastLayout = { cards: [...rects.entries()].map(([id, r]) => ({ id, ...r })), shown: rects.size - 1, total, narrow }
+    if (refocus) [...cardLayer.querySelectorAll(`.wb-${refocus.role}`)].find(x => x.dataset.kind === refocus.kind && x.dataset.id === refocus.id)?.focus({ preventScroll: true })
     if (animate && subject.from && !reduced()) {
       const r = rects.get('center')
       const dx = subject.from.x - (r.x + r.w / 2) - graphHost.getBoundingClientRect().left, dy = subject.from.y - (r.y + r.h / 2) - graphHost.getBoundingClientRect().top
@@ -225,7 +230,7 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
   function focusStep() { sheet.querySelector('#step-input, .step-body .cite')?.focus() }
   function layoutCardsText() {
     const c = cardLayer.querySelector('.wb-center.is-concept .wb-summary')
-    if (c && subject.kind === 'concept') c.textContent = store.data.concepts[subject.id]?.definition ?? ''
+    if (c && subject.kind === 'concept') c.textContent = store.conceptDraft(subject.id)?.definition ?? ''
   }
 
   function evidenceStep(concept, d) {
@@ -234,9 +239,9 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
     for (const b of d.evidence) cited.append(h('li', {}, h('span', { text: visible.has(b.id) ? byId.get(b.id).title : 'A record outside what you can read' }),
       h('button', { class: 'link', type: 'button', onclick: () => { d.evidence = d.evidence.filter(x => x.id !== b.id); store.changed(); renderSheet() } }, 'Remove')))
     wrap.append(h('p', { class: 'label', text: d.evidence.length ? 'Cited' : 'Nothing cited yet' }), cited)
-    const cite = id => { if (!d.evidence.some(b => b.id === id)) { d.evidence.push({ id, title: byId.get(id).title, citedAt: new Date().toISOString() }); store.changed(); renderSheet(); layoutGraph(false) } }
+    const cite = id => { if (!byId.has(id)) return; if (!d.evidence.some(b => b.id === id)) { d.evidence.push({ id, title: byId.get(id).title, citedAt: new Date().toISOString() }); store.changed(); renderSheet(); layoutGraph(false) } }
     const suggest = (title, ids, note) => {
-      const list = ids.filter(id => !d.evidence.some(b => b.id === id)).slice(0, 6)
+      const list = ids.filter(id => byId.has(id) && !d.evidence.some(b => b.id === id)).slice(0, 6)
       if (!list.length) return
       wrap.append(h('p', { class: 'label', text: title }), note ? h('p', { class: 'step-help', text: note }) : null)
       const ul = h('ul', { class: 'suggest' })
@@ -298,7 +303,8 @@ export function createWorkbench({ root, model, palette, store, vocab, onBack, on
       crumbs.append(i === trail.length - 1 ? h('span', { class: 'crumb current', 'aria-current': 'page', text: label }) : h('button', { class: 'crumb', type: 'button', onclick: () => { trail = trail.slice(0, i + 1); subject = { ...t }; step = 0; render(false) } }, label))
     })
     const status = h('span', { class: 'save-status', id: 'save-status', role: 'status' })
-    const paint = st => { status.dataset.state = st; status.textContent = { saving: 'Saving in this browser…', saved: 'Saved in this browser only', restored: 'Draft restored from this browser', empty: 'Nothing drafted yet', unavailable: 'Browser storage unavailable — draft lives in this tab' }[st] ?? st }
+    const where = { tab: 'in this tab only', browser: 'in this browser only', host: 'to the workspace host' }[store.persistence] ?? 'in this tab only'
+    const paint = st => { status.dataset.state = st; status.textContent = { saving: `Saving ${where}\u2026`, saved: `Saved ${where}`, restored: `Draft restored, saved ${where}`, empty: 'Nothing drafted yet', unavailable: 'Storage unavailable \u2014 the draft lives in this tab' }[st] ?? st }
     paint(store.status)
     unsubscribe?.()
     unsubscribe = store.onStatus(paint)

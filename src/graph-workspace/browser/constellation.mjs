@@ -166,7 +166,11 @@ export function createConstellation({ container, model, palette, font = 'system-
     ctx.globalAlpha = 1
   }
   let zoneLabelRects = []
-  function drawZoneNames(ctx) {
+  function reservedRects() {
+    const host = container.getBoundingClientRect()
+    return [...document.querySelectorAll(reserveSelector)].filter(el => !el.hidden).map(el => { const r = el.getBoundingClientRect(); return { left: r.left - host.left, top: r.top - host.top, right: r.right - host.left, bottom: r.bottom - host.top } }).filter(r => r.right > r.left)
+  }
+  function drawZoneNames(ctx, chrome) {
     const ratio = camera.ratio
     const dim = !!(activeSet() || state.lit)
     // Zone names: strongest when zoomed out, gone when close.
@@ -187,6 +191,7 @@ export function createConstellation({ container, model, palette, font = 'system-
       if (p.y < 70 || p.y > vh - 20) continue
       const rect = { left: p.x - width / 2 - 6, right: p.x + width / 2 + 6, top: p.y - size, bottom: p.y + size }
       if (zoneLabelRects.some(r => overlaps(r, rect, 4))) continue
+      if (chrome.some(r => overlaps(r, rect, 4))) continue
       zoneLabelRects.push({ ...rect, zone: zone.id })
       ctx.letterSpacing = '0.14em'
       ctx.lineWidth = 5
@@ -202,7 +207,9 @@ export function createConstellation({ container, model, palette, font = 'system-
   function drawLabels() {
     const { ctx, w, h } = sizeCanvas(labelCanvas)
     const ratio = camera.ratio
-    drawZoneNames(ctx)
+    // Chrome claims its space first: no zone name or label under the host's controls.
+    const chrome = reservedRects()
+    drawZoneNames(ctx, chrome)
     ctx.letterSpacing = '0px'
     ctx.textAlign = 'left'
     const set = activeSet()
@@ -227,9 +234,6 @@ export function createConstellation({ container, model, palette, font = 'system-
       if (priority < threshold) continue
       candidates.push({ id, node, p, priority, r: renderer.scaleSize(display.size) })
     }
-    // Chrome claims its space first: no label under the host's controls.
-    const host = container.getBoundingClientRect()
-    const chrome = [...document.querySelectorAll(reserveSelector)].map(el => { const r = el.getBoundingClientRect(); return { left: r.left - host.left, top: r.top - host.top, right: r.right - host.left, bottom: r.bottom - host.top } }).filter(r => r.right > r.left)
     const style = c => { const emphasis = c.id === focus || c.id === state.selected; return { emphasis, size: emphasis ? 14 : c.priority > 0.75 || set ? 12.5 : 11.5, weight: emphasis ? 650 : c.priority > 0.6 ? 560 : 450 } }
     const prepared = candidates.map(c => { const st = style(c); let text = c.node.title; if (text.length > 42 && !st.emphasis) text = text.slice(0, 40).trimEnd() + '\u2026'; return { id: c.id, x: c.p.x, y: c.p.y, r: c.r, priority: c.priority, text, size: st.size, emphasis: st.emphasis, weight: st.weight } })
     const weightOf = new Map(prepared.map(c => [c.id, c]))
