@@ -25,7 +25,7 @@ test('graph workspace rooms: map, workbench, review, recipes, themes and fallbac
       import forceAtlas2 from 'graphology-layout-forceatlas2'
       import FA2Layout from 'graphology-layout-forceatlas2/worker'
       import { buildWorkspaceModel, layoutWorkspace, composeRecipes, composeTheme, DEFAULT_THEME } from './src/graph-workspace/index.mjs'
-      import { mountGraphWorkspace } from './src/graph-workspace/browser/index.mjs'
+      import { mountGraphWorkspace, createConstellation, injectGraphWorkspaceStyles, applyTheme } from './src/graph-workspace/browser/index.mjs'
       import { generateCommons } from './test/helpers/graph-workspace-commons.mjs'
       const params = new URLSearchParams(location.search)
       const fixture = generateCommons({ size: Number(params.get('size') ?? 900), seed: 11 })
@@ -46,6 +46,19 @@ test('graph workspace rooms: map, workbench, review, recipes, themes and fallbac
         { id: 'by-concept', label: 'Follow a concept', description: 'Light its declaring notes.', room: 'map', lens: 'concept', primary: 'open-evidence' },
         { id: 'by-zone', label: 'One folder', description: 'Dim everything else.', room: 'map', lens: 'zone', primary: 'pick' },
       ]
+      if (params.get('standalone') === '1') {
+        // A custom alpha.15 shell: createConstellation into a container marked only .constellation.
+        const host = document.getElementById('root')
+        host.classList.add('atelier-gw')
+        injectGraphWorkspaceStyles(document)
+        const palette = applyTheme(DEFAULT_THEME, 'dark', host)
+        const el = document.createElement('div')
+        el.className = 'constellation'
+        host.append(el)
+        window.model = model
+        window.room = createConstellation({ container: el, model, palette, deps: { Sigma, Graph, EdgeArrowProgram, FA2Layout } })
+        document.body.dataset.ready = 'true'
+      } else {
       window.model = model
       window.gw = mountGraphWorkspace(document.getElementById('root'), {
         model, deps: { Sigma, Graph, EdgeArrowProgram, FA2Layout }, intro: false,
@@ -56,6 +69,7 @@ test('graph workspace rooms: map, workbench, review, recipes, themes and fallbac
         theme: layered ? composeTheme(DEFAULT_THEME, { id: 'distribution', schemes: { dark: { vars: { '--accent': '#a0e0c0' } } } }) : DEFAULT_THEME,
       })
       document.body.dataset.ready = 'true'
+      }
     ` },
     bundle: true, format: 'iife', platform: 'browser', write: false, logLevel: 'silent',
   })
@@ -187,6 +201,11 @@ test('graph workspace rooms: map, workbench, review, recipes, themes and fallbac
     assert.equal(await p.evaluate(() => document.activeElement?.id), 'gw-command')
     r = await run('question')
     assert.equal(r.lens, 'question'); assert.equal(r.primary, 'Open the evidence')
+    await context.close()
+    // A custom alpha.15 shell with a legacy-only container keeps the room's layout.
+    ;({ p, context } = await open('?standalone=1'))
+    const legacy = await p.evaluate(() => { const el = document.querySelector('.constellation'); const r = el.getBoundingClientRect(); return { classes: el.className, position: getComputedStyle(el).position, width: r.width, height: r.height, layers: el.children.length, sigma: getComputedStyle(el.querySelector('.layer-sigma')).position } })
+    assert.match(legacy.classes, /\bmap\b/); assert.equal(legacy.position, 'absolute'); assert.ok(legacy.width > 1000 && legacy.height > 700, JSON.stringify(legacy)); assert.equal(legacy.layers, 3)
     await context.close()
     // Uncomposed alpha.15 recipes still get their lenses and primary-action targets.
     ;({ p, context } = await open('?recipes=legacy'))

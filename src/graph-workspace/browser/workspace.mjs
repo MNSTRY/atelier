@@ -58,7 +58,7 @@ export function mountGraphWorkspace(root, options) {
   } = options
   // Recipes may arrive already composed (possibly by alpha.15 code): read their
   // room names as this release does, keeping everything else, provenance included.
-  const recipesAll = (options.recipes ?? composeRecipes().recipes).map(r => (r && typeof r === 'object' && 'room' in r ? { ...r, room: currentRoom(r.room) } : r))
+  const recipesAll = (options.recipes ?? composeRecipes().recipes).map(r => (r && typeof r === 'object' && !Array.isArray(r) && 'room' in r ? { ...r, room: currentRoom(r.room) } : r))
   const recipes = availableRecipes(recipesAll, model)
   const byRecipe = new Map(recipes.map(r => [r.id, r]))
   const vocab = { record: 'record', records: 'records', zone: 'zone', concept: 'concept', model: 'Concepts', ...(profile.vocabulary ?? {}) }

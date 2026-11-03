@@ -65,7 +65,8 @@ export function composeRecipes({ atelier = DEFAULT_RECIPES, distribution, coach,
   for (const [layer, list] of [['atelier', atelier], ['distribution', middle], ['owner', owner]]) {
     if (!Array.isArray(list)) throw new TypeError(`${layer} recipes must be a list`)
     for (const raw of list) {
-      const entry = raw && typeof raw === 'object' && 'room' in raw ? { ...raw, room: currentRoom(raw.room) } : raw
+      // Only plain recipe objects are normalised; anything else reaches validation unchanged.
+      const entry = raw && typeof raw === 'object' && !Array.isArray(raw) && 'room' in raw ? { ...raw, room: currentRoom(raw.room) } : raw
       const existing = resolved.get(entry?.id)
       const problems = validateRecipe(entry, { partial: !!existing })
       if (problems.length) throw new TypeError(`${layer} recipe ${entry?.id ?? '(no id)'}: ${problems.join('; ')}`)

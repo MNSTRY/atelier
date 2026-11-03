@@ -39,6 +39,8 @@ export function createMap({ container, model, palette, font = 'system-ui, sans-s
   labelCanvas.setAttribute('aria-hidden', 'true')
   const sigmaHost = document.createElement('div')
   sigmaHost.className = 'layer-sigma'
+  // The room styles target .map; a container marked only .constellation (alpha.15) gets both.
+  container.classList.add('map')
   container.replaceChildren(zoneCanvas, sigmaHost, labelCanvas)
 
   // Node sizes are in screen pixels; a small viewport needs proportionally smaller dots.
