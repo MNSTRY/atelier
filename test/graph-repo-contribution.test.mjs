@@ -172,9 +172,12 @@ test('a root metadata entry that disappears after observation refuses before any
 test('Windows metadata short-name input aliases refuse when the filesystem supplies one', { skip: process.platform !== 'win32' }, (t) => {
   const { a } = fixture(t)
   const metadata = path.join(a.path, '.git')
-  const short = execFileSync('cmd.exe', ['/d', '/s', '/c', `for %I in ("${metadata}") do @echo %~sI`], { encoding: 'utf8' }).trim()
+  // cmd.exe does not read Node's backslash-escaped quoting, so the command line
+  // is passed verbatim; /s strips only the outer pair of quotes.
+  const short = execFileSync('cmd.exe', ['/d', '/s', '/c', `"for %I in ("${metadata}") do @echo %~sI"`], { encoding: 'utf8', windowsVerbatimArguments: true }).trim()
   const alias = path.basename(short)
   if (alias.toLowerCase() === '.git') { t.skip('filesystem does not supply a distinct metadata short name'); return }
+  assert.ok(fs.existsSync(path.join(a.path, alias)), `short-name lookup returned ${JSON.stringify(short)}`)
   assert.equal(fs.statSync(path.join(a.path, alias), { bigint: true }).ino, fs.statSync(metadata, { bigint: true }).ino)
   assert.throws(() => build(a, { inputPaths: { config: `${alias}/config` } }), code('invalid-source-path'))
 })
