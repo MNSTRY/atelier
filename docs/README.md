@@ -77,6 +77,7 @@ The [responsibility architecture](reference/architecture.md) and versioned contr
 - [Assurance controls and evidence map](maintainers/assurance-controls.md)
 - [Describing the Atelier](maintainers/describing-the-atelier.md)
 - [Release engineering](maintainers/release-engineering.md)
+- [ADR 0001: Graph depth and ontology authoring](maintainers/decisions/0001-graph-depth-and-ontology-authoring.md)
 
 ## Knowledge Health
 
