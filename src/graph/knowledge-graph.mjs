@@ -1054,7 +1054,7 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
 
   for (const repo of enrolled) {
     for (const [rel, node] of repo.nodesByPath) {
-      if (!rel.endsWith('.md') || !isLinkTargetEligible(node)) continue
+      if (!isMarkdownPath(rel) || !isLinkTargetEligible(node)) continue
       const { occurrences, utf8Exact } = scanned?.get(node) ?? scanMarkdownSource(fs.readFileSync(path.join(repo.root, rel)))
       const finding = (code, occurrence, detail, extra = {}) =>
         diagnostics.push({
