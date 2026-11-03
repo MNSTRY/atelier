@@ -100,6 +100,48 @@ test('trusted owner verification is required even with a valid contribution hash
   assert.deepEqual(graph.diagnostics.map(d => [d.repoId, d.code]), [[A, 'authorized-source-unavailable']])
 })
 
+for (const length of [40, 64]) {
+  test(`exact ${length}-character Git object IDs retain source snapshot pins`, async () => {
+    const f = fixture([A]), snapshot = f.data.get(A).snapshot
+    snapshot.head = 'a'.repeat(length); snapshot.tree = 'b'.repeat(length)
+    f.repin()
+    const { graph } = await f.access.loadAuthorizedGraph({})
+    assert.equal(graph.completeness, 'complete')
+    assert.deepEqual(graph.counts, { nodes: 1, edges: 1, evidence: 1 })
+    assert.equal(graph.sourceSnapshot.repositories[0].head, snapshot.head)
+    assert.equal(graph.sourceSnapshot.repositories[0].tree, snapshot.tree)
+    assert.equal(graph.sourceSnapshot.repositories[0].digest, snapshot.digest)
+    assert.equal(graph.nodes[0].sourceRef.revision, snapshot.digest)
+    assert.deepEqual(f.verified, [A])
+  })
+}
+
+test('malformed Git object IDs refuse access before contribution loading', async () => {
+  const invalid = ['', ...[39, 41, 63, 65].map(length => 'a'.repeat(length)),
+    'a'.repeat(39) + 'g', 'a'.repeat(63) + 'g', 'A'.repeat(40), 'A'.repeat(64),
+    'a'.repeat(40) + '\n', 'a'.repeat(64) + '\n']
+  for (const field of ['head', 'tree']) for (const value of invalid) {
+    const f = fixture([A])
+    f.changeDecision(d => { d.repositories[0][field] = value })
+    await assert.rejects(f.access.loadAuthorizedGraph({}), GraphAccessRefusal)
+    assert.deepEqual(f.loaded, [])
+  }
+})
+
+test('SHA-256 Git object IDs preserve exact snapshot and contribution digest binding', async () => {
+  for (const field of ['head', 'tree', 'snapshotDigest', 'contributionDigest']) {
+    const f = fixture([A]), snapshot = f.data.get(A).snapshot
+    snapshot.head = 'a'.repeat(64); snapshot.tree = 'b'.repeat(64)
+    f.repin()
+    f.changeDecision(d => { d.repositories[0][field] = field.endsWith('Digest') ? digest('different') : 'c'.repeat(64) })
+    const { graph } = await f.access.loadAuthorizedGraph({})
+    assert.equal(graph.completeness, 'incomplete')
+    assert.deepEqual(graph.counts, { nodes: 0, edges: 0, evidence: 0 })
+    assert.deepEqual(graph.sourceSnapshot.repositories, [])
+    assert.deepEqual(graph.diagnostics.map(d => [d.repoId, d.code]), [[A, 'authorized-source-unavailable']])
+  }
+})
+
 for (const field of ['ownerRef', 'scope', 'head', 'tree', 'snapshotDigest', 'contributionDigest']) {
   test(`mismatched ${field} excludes the entire contribution`, async () => {
     const f = fixture([A])

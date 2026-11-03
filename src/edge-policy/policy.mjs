@@ -13,6 +13,14 @@ function validPolicy(p) {
     typeof p.version === 'string' && p.version.length > 0 && typeof p.allowProposerReview === 'boolean' && typeof p.allowSharedSteward === 'boolean'
 }
 
+// Content-bound occurrence identity only; this does not establish access,
+// source currency or eligibility. Keep caller-owned records untouched.
+export function edgeEvidenceOccurrences(record) {
+  const { edgeId } = edgeIdentity(record)
+  const occurrence = (id, source) => ({ id: `evidence:${edgeDigest({ edgeId, occurrenceId: id, source }).slice(7)}`, occurrenceId: id, source: structuredClone(source) })
+  return immutable([occurrence('origin', record.origin), ...record.supports.map((s) => occurrence(`support:${s.id}`, s.source))])
+}
+
 // Host functions are trusted integration ports. No record-supplied identity,
 // eligible flag, audience or local asserted review substitutes for these ports.
 // The host must hold one coherent current snapshot across an evaluation.
@@ -28,9 +36,8 @@ export async function evaluateEdge(input, host) {
     demand(validPolicy(policy), 'policy-unavailable')
     const policyDigest = edgeDigest(policy)
     demand(typeof host.bindingId === 'string' && host.bindingId.length > 0, 'snapshot-binding-unavailable')
-    const occurrence = (id, source) => ({ id: `evidence:${edgeDigest({ edgeId: identity.edgeId, occurrenceId: id, source }).slice(7)}`, occurrenceId: id, source })
     const base = { ...identity, family: record.family, policyDigest, verification: { checkedAt: host.now, bindingId: host.bindingId }, reviewRefs: [], triple: { subject: record.subject, predicate: record.predicate, object: record.object },
-      supportRefs: [occurrence('origin', record.origin), ...record.supports.map((s) => occurrence(`support:${s.id}`, s.source))], qualifications: record.qualifications,
+      supportRefs: edgeEvidenceOccurrences(record), qualifications: record.qualifications,
       sourceChange: record.sourceChange, history: events }
     const result = (value) => seal({ ...base, ...value })
     if (record.policyDigest !== policyDigest) return result(fail('suspended', 'policy-changed'))

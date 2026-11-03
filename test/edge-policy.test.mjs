@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPair, signDocument } from '../src/attestation/sign.mjs'
 import { EDGE_RECORD_SCHEMA, EDGE_DECISION_SCHEMA, bytesDigest, edgeDigest, edgeIdentity, validateEdgeRecord } from '../src/edge-policy/contract.mjs'
-import { evaluateEdge, groupEligibleEdges, displayEligibleEdge } from '../src/edge-policy/policy.mjs'
+import { evaluateEdge, groupEligibleEdges, displayEligibleEdge, edgeEvidenceOccurrences } from '../src/edge-policy/policy.mjs'
 
 const now = '2026-01-02T12:00:00.000Z'
 function fixture({ family = 'reviewed-assertion', crossRepo = true, supportId = 'support:one', policy: policyPatch = {} } = {}) {
@@ -196,4 +196,64 @@ test('grouping refuses decisions bound to different reader/source snapshots', as
   const first = await a.evaluate(), second = await b.evaluate()
   assert.equal(first.eligible, true); assert.equal(second.eligible, true)
   assert.throws(() => groupEligibleEdges([first, second]), /mixed edge decision bindings/)
+})
+
+test('evidence occurrence helper preserves exact evaluator identities, source refs and support order', async () => {
+  const f = fixture()
+  f.record.supports.push({ id: 'support:later', source: { ...structuredClone(f.source), path: 'notes/alternate.md' } },
+    { id: 'support:earlier', source: structuredClone(f.source) })
+  f.accept()
+  const before = JSON.stringify({ record: f.record, events: f.events })
+  const occurrences = edgeEvidenceOccurrences(f.record)
+  assert.deepEqual(occurrences.map((s) => s.occurrenceId), ['origin', 'support:support:one', 'support:support:later', 'support:support:earlier'])
+  assert.deepEqual(occurrences.map((s) => s.source), [f.record.origin, ...f.record.supports.map((s) => s.source)])
+  assert.equal(new Set(occurrences.map((s) => s.id)).size, 4)
+  assert.equal(Object.isFrozen(f.record.origin), false)
+  assert.equal(Object.isFrozen(f.record.supports[1].source), false)
+  assert.throws(() => { occurrences[1].source.path = 'notes/changed.md' }, TypeError)
+  assert.throws(() => { occurrences.reverse() }, TypeError)
+  const decision = await f.evaluate()
+  assert.equal(decision.eligible, true)
+  assert.deepEqual(decision.supportRefs, occurrences)
+  assert.deepEqual(displayEligibleEdge(decision).supportRefs, occurrences.map((s) => s.id))
+  assert.equal(displayEligibleEdge({ ...decision }), null)
+  assert.equal(JSON.stringify({ record: f.record, events: f.events }), before)
+  assert.equal(decision.recordDigest, edgeDigest(f.record))
+})
+
+test('every evidence occurrence remains bound to the complete record', async (t) => {
+  for (const [name, change] of [
+    ['predicate', (r) => { r.predicate = 'contradicts' }],
+    ['qualification', (r) => { r.qualifications.push('Applies only to an invented second case.') }],
+    ['endpoint', (r) => { r.object.localId = 'record:other' }],
+    ['home readership', (r) => { r.home.readership = 'readers:other' }],
+    ['support identity', (r) => { r.supports[0].id = 'support:other' }],
+    ['support source', (r) => { r.supports[0].source.path = 'notes/other.md' }],
+    ['support order', (r) => { r.supports.reverse() }],
+  ]) await t.test(name, async () => {
+    const f = fixture({ family: 'source-declaration', crossRepo: false })
+    f.record.supports.push({ id: 'support:another', source: structuredClone(f.source) })
+    const original = edgeEvidenceOccurrences(f.record)
+    change(f.record)
+    f.sealHead()
+    const changed = edgeEvidenceOccurrences(f.record)
+    assert.equal(changed.some((s) => original.some((old) => old.id === s.id)), false)
+    const decision = await f.evaluate()
+    assert.equal(decision.eligible, true)
+    assert.deepEqual(decision.supportRefs, changed)
+  })
+})
+
+test('evidence occurrence helper refuses malformed complete records', async (t) => {
+  const f = fixture()
+  for (const [name, invalid] of [
+    ['missing record', null], ['empty record', {}],
+    ['extra field', { ...f.record, eligible: true }],
+    ['missing qualifications', Object.fromEntries(Object.entries(f.record).filter(([key]) => key !== 'qualifications'))],
+    ['invalid endpoint', { ...f.record, subject: { repoId: 'repo:one', localId: '' } }],
+    ['invalid family', { ...f.record, family: 'unknown' }],
+    ['invalid home', { ...f.record, home: { ...f.record.home, path: '../outside.json' } }],
+    ['invalid source', { ...f.record, origin: { ...f.source, locator: { byteStart: -1, byteEnd: 1 } } }],
+    ['duplicate support identity', { ...f.record, supports: [...f.record.supports, structuredClone(f.record.supports[0])] }],
+  ]) await t.test(name, () => assert.throws(() => edgeEvidenceOccurrences(invalid), { name: 'TypeError', message: 'invalid edge record' }))
 })

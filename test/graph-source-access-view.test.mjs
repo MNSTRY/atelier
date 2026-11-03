@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { createGraphAccess, digestAccessCandidate } from '../src/graph-access/index.mjs'
+import { adaptRepositoryContribution } from '../src/graph-access/source-adapter.mjs'
 import { buildRepositoryContribution, validateRepositoryContribution } from '../src/graph/repo-contribution.mjs'
 import { digestJson } from '../src/graph-view/contracts.mjs'
 import { createGraphViewReader, parseGraphView } from '../src/graph-view/index.mjs'
@@ -48,39 +49,7 @@ test('source, access and view preserve cited bytes and refuse stale or revoked d
     let current = true
     assert.equal(validateRepositoryContribution(native).ok, true)
 
-    const normalized = () => {
-      const links = native.ordinaryLinks.filter(link => link.target)
-      const evidence = links.map((link, index) => ({
-        evidenceId: 'synthetic-link-evidence-' + index,
-        sourceRef: link.provenance,
-        verification: 'verified-source',
-      }))
-      const edges = links.map((link, index) => ({
-        edgeId: 'synthetic-link-' + index,
-        source: link.source,
-        target: link.target,
-        sourceRef: link.provenance,
-        supportRefs: [evidence[index].evidenceId],
-      }))
-      return {
-        repository: { repoId: native.repository.repoId, ownerRef: 'synthetic-owner' },
-        snapshot: native.snapshot,
-        inputs: native.inputs,
-        nodes: native.nodes.map(node => ({
-          ref: node.ref,
-          sourceKind: node.kgType,
-          title: node.title,
-          summary: node.summary,
-          classification: node.classification,
-          lifecycle: node.lifecycle,
-          tags: node.tags,
-          sourceRef: node.source,
-          displayEligible: true,
-        })),
-        edges,
-        evidence,
-      }
-    }
+    const normalized = () => adaptRepositoryContribution(native, { ownerRef: 'synthetic-owner' })
 
     const now = () => Date.parse('2030-01-01T00:00:00Z')
     const access = createGraphAccess({
@@ -103,12 +72,12 @@ test('source, access and view preserve cited bytes and refuse stale or revoked d
       }),
       loadContribution: async () => normalized(),
       verifyContribution: async () => validateRepositoryContribution(native).ok,
-      evaluateEdge: async edge => ({
+      evaluateEdge: async edge => edge.family !== 'hyperlink' || edge.predicate !== 'links_to' ? { eligible: false } : ({
         edgeId: edge.edgeId,
         source: edge.source,
         target: edge.target,
-        predicate: 'links_to',
-        family: 'hyperlink',
+        predicate: edge.predicate,
+        family: edge.family,
         acceptanceState: 'active',
         eligible: true,
         assurance: 'navigation',

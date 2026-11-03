@@ -7,7 +7,7 @@ const hash = value => createHash('sha256').update(canonicalize(value)).digest('h
 const sourceDigest = value => `sha256:${hash(value)}`
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
-const revision = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)
+const revision = value => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)
 const string = (value, max = 512) => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f]/u.test(value)
 const equal = (a, b) => canonicalize(a) === canonicalize(b)
 const key = ref => canonicalize([ref.repoId, ref.localId])
