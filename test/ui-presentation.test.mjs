@@ -263,3 +263,8 @@ test('standalone pane metadata embeds without shape conversion', () => {
   assert.deepEqual(validatePanePresentation(model.panes[0]), [])
   assert.deepEqual(validatePresentation(model), [])
 })
+test('the browser binding leaves host page scroll and layout to the host', () => {
+  const source = fs.readFileSync(new URL('../src/ui/presentation/browser.mjs', import.meta.url), 'utf8')
+  const forbidden = [/documentElement/, /\.body\b/, /\.style\.(?:overflow|padding|margin)/, /scrollbar/i, /\bscroll(?:To|By)\(/, /scroll(?:Top|Left)\s*=/]
+  for (const pattern of forbidden) assert(!pattern.test(source), `browser binding must not change host page scroll or layout: ${pattern}`)
+})

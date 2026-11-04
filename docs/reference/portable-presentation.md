@@ -119,6 +119,15 @@ request port because native has no browser default. A web host with unsaved work
 must omit item hrefs until safe navigation is available through its existing
 route/draft authority; this module does not install an unsaved-work route guard.
 Do not infer identical web/native navigation interception from shared labels.
+
+The confirmation is a native modal `<dialog>`. The binding never changes the
+host document's overflow, padding or scroll position, so opening it cannot
+shift the page. A host that also locks page scrolling while it is open owns that
+lock and must not let it shift the layout: measure the scrollbar it is about to
+hide (`innerWidth - documentElement.clientWidth`, zero for overlay scrollbars),
+add that width to the body's existing end padding, expose it as a custom
+property for fixed or sticky elements, and restore both when the last lock is
+released. Count locks so one closing overlay cannot release another.
 Media resolves only local paths; hosts must prevent
 those routes from redirecting outside their intended boundary. The model is not
 a network-security boundary for a consumer's asset server.
