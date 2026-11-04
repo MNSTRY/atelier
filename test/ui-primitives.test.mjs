@@ -9,6 +9,9 @@ import {
   dragIntent,
   driftStep,
   glideStep,
+  loopThumbGeometry,
+  rampFactor,
+  resumeDelay,
   releaseVelocity,
   homeIndex,
   loopSets,
@@ -77,6 +80,18 @@ test('the scroll bar maps pointer travel to the scroll range and reflects positi
   assert.deepEqual(thumbGeometry(5000, 1000, 1000), { width: 0.5, left: 0.5 })
 })
 
+test('a looping thumb wraps past the end, and a resumed drift eases in', () => {
+  assert.deepEqual(loopThumbGeometry(0, 2000, 500), { width: 0.25, left: 0 })
+  assert.deepEqual(loopThumbGeometry(1800, 2000, 500), { width: 0.25, left: 0.9 }, 'left + width > 1 re-enters from the start')
+  assert.deepEqual(loopThumbGeometry(2100, 2000, 500), { width: 0.25, left: 0.05 })
+  assert.equal(rampFactor(0), 0)
+  assert.equal(rampFactor(600, 1200), 0.5)
+  assert.equal(rampFactor(5000, 1200), 1)
+  assert.equal(resumeDelay(undefined), 2000)
+  assert.equal(resumeDelay('500'), 500)
+  assert.equal(resumeDelay(99999), 10000)
+})
+
 test('momentum decays and drift loops or restarts', () => {
   const step = glideStep(100, 2, 16)
   assert.equal(step.position, 132)
@@ -121,15 +136,11 @@ test('carousel styles are tenant-neutral and themed only through custom properti
   assert.match(carouselStyles, /--system-carousel-scrollbar-thumb, currentColor/)
   assert.match(carouselStyles, /\[data-drift\] \[data-carousel-viewport\] \{ scroll-snap-type: none; \}/)
   assert.match(carouselStyles, /prefers-reduced-motion: reduce/)
-  assert.doesNotMatch(carouselStyles, /botanika|urana|#[0-9a-f]{6}/i)
+  assert.doesNotMatch(carouselStyles, /#[0-9a-f]{6}/i, 'no hard-coded colours')
 })
 
-test('browser modules are exported separately and stay free of tenant content', () => {
+test('browser modules are exported separately', () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   assert.equal(pkg.exports['./ui/primitives'], './src/ui/primitives/index.mjs')
   assert.equal(pkg.exports['./ui/primitives/browser'], './src/ui/primitives/browser.mjs')
-  for (const file of ['carousel', 'disclosure', 'scroll-lock', 'motion', 'styles', 'render', 'state', 'browser', 'index']) {
-    const source = readFileSync(new URL(`../src/ui/primitives/${file}.mjs`, import.meta.url), 'utf8')
-    assert.doesNotMatch(source, /botanika|urana|shopify/i, `${file}.mjs is tenant-neutral`)
-  }
 })

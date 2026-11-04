@@ -10,10 +10,10 @@ without script, and theming only through `--system-*` custom properties.
 | `@mnstry/atelier/ui/primitives` | Node and browsers | Pure state functions, `carouselStyles`, `renderCarouselControls` |
 | `@mnstry/atelier/ui/primitives/browser` | Browsers | `enhanceCarousels`, `enhanceDisclosures`, `lockScroll` and `unlockScroll`, the motion owner |
 
-The carousel brings together the Urana Heart site's carousel (seamless loops,
-drag intent, focus safety, page dots and thumbnails, live status, height that
-follows the slide, receding neighbours, still rows) and Botanika's additions (a
-draggable scroll bar, momentum for multi-card strips, autoplay, a pause control).
+The carousel covers slideshows and multi-card strips: seamless loops, drag
+intent, focus safety, page dots and thumbnails, live status, height that follows
+the slide, receding neighbours, still rows, a draggable scroll bar, momentum,
+autoplay and a pause control.
 
 ## Carousel
 
@@ -52,6 +52,7 @@ track's children; if any child carries `data-slide`, only those count.
 | `data-peek` | present | Centre-aligned slides; neighbours recede (`--d` from 0 to 1) and clicking one centres it; a still row when every card fits at `data-row-min` (default 400px) |
 | `data-fit` | `current` | The viewport height follows the slide in view, blending as slides pass |
 | `data-autoplay` | `off` (default), `discrete`, `smooth` | Advance one page every `data-interval` ms (at least 2500), or drift continuously at `data-speed` px/s |
+| `data-resume` | ms, default 2000 | How long autoplay waits after the reader lets go before easing back in |
 
 ### Behaviour
 
@@ -65,11 +66,22 @@ track's children; if any child carries `data-slide`, only those count.
 - **Arrows, pages and keys:** Previous, Next, page buttons, and Left, Right,
   Home and End on the carousel. Reader-initiated moves are announced politely in
   `[data-status]`; autoplay moves are not.
-- **Autoplay** never runs under reduced motion. It holds while the pointer is
-  over the carousel, while focus is inside it, during a touch, wheel, drag or
-  scrub, while the tab is hidden and while the carousel is off screen. The
-  rendered toggle pauses and resumes it. `data-autoplay-state` reads `playing`,
-  `held`, `paused` or `off`.
+- **Autoplay** never runs under reduced motion. It keeps running under the
+  pointer, and holds for a press (any click, tap or drag), keyboard focus inside
+  the carousel, a wheel, an expanded slide, a hidden tab or the carousel being
+  off screen. It resumes `data-resume` ms after the reader lets go, and a smooth
+  drift eases back to speed over about a second. The rendered toggle pauses and
+  resumes it. `data-autoplay-state` reads `playing`, `held`, `paused` or `off`.
+- **Throws and resting places:** in a drifting strip, a thrown strip coasts to a
+  stop where it stops; nothing pulls it back to a card or to where it was. A
+  scrub, or a slide brought to the centre, also stays where the reader left it
+  until an arrow or a drag moves it again.
+- **Expanded slides:** opening a `<details>` inside a slide (a quick view, for
+  example) brings that slide to the centre and holds autoplay until every
+  expanded panel in the strip is closed again.
+- **Looping scroll bar:** in a loop the thumb is a window over one period. As the
+  strip drifts, the thumb leaves the right end and re-enters on the left.
+  Dragging the thumb to the right end shows the last slide at the right edge.
 - **Focus:** before a slide becomes inert, focus moves to its page button or
   another control, so it is never lost.
 
