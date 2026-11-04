@@ -127,7 +127,7 @@ lock and must not let it shift the layout: measure the scrollbar it is about to
 hide (`innerWidth - documentElement.clientWidth`, zero for overlay scrollbars),
 add that width to the body's existing end padding, expose it as a custom
 property for fixed or sticky elements, and restore both when the last lock is
-released. Count locks so one closing overlay cannot release another.
+released. Count locks so one closing overlay cannot release another. `lockScroll` and `unlockScroll` in [UI primitives](ui-primitives.md) implement this lock.
 Media resolves only local paths; hosts must prevent
 those routes from redirecting outside their intended boundary. The model is not
 a network-security boundary for a consumer's asset server.
