@@ -66,11 +66,13 @@ track's children; if any child carries `data-slide`, only those count.
 - **Arrows, pages and keys:** Previous, Next, page buttons, and Left, Right,
   Home and End on the carousel. Reader-initiated moves are announced politely in
   `[data-status]`; autoplay moves are not.
-- **Autoplay** never runs under reduced motion. It keeps running under the
-  pointer, and holds for a press (any click, tap or drag), keyboard focus inside
-  the carousel, a wheel, an expanded slide, a hidden tab or the carousel being
-  off screen. It resumes `data-resume` ms after the reader lets go, and a smooth
-  drift eases back to speed over about a second. The rendered toggle pauses and
+- **Autoplay** never runs under reduced motion. Otherwise it runs from load,
+  on screen or off, and only the reader's own action on the carousel holds it: a
+  mouse press or drag, a tap or a sideways swipe, a sideways wheel or trackpad
+  gesture, keyboard focus inside the carousel, or an expanded slide. Scrolling
+  the page past it (a vertical wheel or swipe that happens to start on it) and
+  the pointer resting on it do not. It resumes `data-resume` ms after the reader
+  lets go, and a smooth drift eases back to speed over about a second. The rendered toggle pauses and
   resumes it. `data-autoplay-state` reads `playing`, `held`, `paused` or `off`.
 - **Throws and resting places:** in a drifting strip, a thrown strip coasts to a
   stop where it stops; nothing pulls it back to a card or to where it was. A

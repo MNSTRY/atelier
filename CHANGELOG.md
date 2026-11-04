@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-alpha.20
+
+- Carousel autoplay runs from load and is held only by the reader's own action on the carousel. It no longer stops off screen (so a strip is already moving when it scrolls into view, instead of starting from rest), and scrolling the page no longer holds it: a vertical wheel over it, or a vertical swipe that starts on it, is page scrolling. A sideways wheel or trackpad gesture, a sideways swipe, a tap, a mouse press or drag, keyboard focus and an expanded slide still hold it, and it resumes `data-resume` ms later as before.
+
 ## 0.2.0-alpha.19
 
 - In multi-card strips (`data-select="visible"`), loop copies are no longer inert. A looping strip shows copies whenever its end wraps into view, and a drifting one does so constantly, so clicks on those cards fell through to the strip. Copies now stay clickable, with every control out of the tab order and the copy hidden from assistive technology; links in a copy go where the original goes. Slideshows keep inert copies.

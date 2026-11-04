@@ -85,10 +85,9 @@ function createAutoplay({ root, toggle, autoplay }, { advance, startDrift, stopD
   const pause = resumeDelay(root.dataset.resume)
   const timers = new Map()
   let userPaused = root.dataset.autoplayPaused !== undefined
-  let onScreen = true
   let timer = 0
   const enabled = () => autoplay.mode !== 'off' && animationAllowed() && canRun()
-  const running = () => enabled() && !userPaused && !reasons.size && onScreen
+  const running = () => enabled() && !userPaused && !reasons.size
   const stop = () => { clearTimeout(timer); timer = 0; stopDrift() }
   const start = () => {
     stop()
@@ -111,21 +110,44 @@ function createAutoplay({ root, toggle, autoplay }, { advance, startDrift, stopD
     if (delay) timers.set(reason, setTimeout(go, delay)); else go()
   }
   if (autoplay.mode !== 'off') {
-    // Autoplay keeps running under the pointer. It holds for a press (any click,
-    // tap or drag), keyboard focus, a wheel, an expanded slide, a hidden tab or
-    // off screen, and resumes gently `data-resume` ms (default 2000) after the
-    // reader lets go.
+    // Autoplay runs from load, on screen or off, and only the reader's own action
+    // on the carousel holds it: a mouse press or drag, a tap or a sideways swipe,
+    // a sideways wheel, keyboard focus or an expanded slide. Scrolling the page
+    // past it (a vertical wheel or swipe that starts on it) and the pointer
+    // resting on it do not. It resumes gently `data-resume` ms (default 2000)
+    // after the reader lets go.
     toggle?.addEventListener('click', () => { userPaused = !userPaused; start(); sync() })
-    root.addEventListener('pointerdown', event => { if (!toggle?.contains(event.target)) hold('press') })
-    const lift = () => release('press', pause)
+    const own = event => !toggle?.contains(event.target)
+    root.addEventListener('pointerdown', event => { if (event.pointerType !== 'touch' && own(event)) hold('press') })
+    const lift = event => { if (event.pointerType !== 'touch') release('press', pause) }
     root.addEventListener('pointerup', lift)
     root.addEventListener('pointercancel', lift)
-    root.addEventListener('focusin', event => { if (!toggle?.contains(event.target) && event.target.matches?.(':focus-visible')) hold('focus') })
+    // Touch: decide from the first clear movement. A vertical swipe is page scrolling.
+    let touch = null
+    root.addEventListener('touchstart', event => { touch = own(event) && event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY, axis: '' } : null }, { passive: true })
+    root.addEventListener('touchmove', event => {
+      if (!touch || touch.axis) return
+      const dx = event.touches[0].clientX - touch.x, dy = event.touches[0].clientY - touch.y
+      if (Math.hypot(dx, dy) < 8) return
+      touch.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+      if (touch.axis === 'x') hold('press')
+    }, { passive: true })
+    const untouch = () => {
+      if (!touch) return
+      if (!touch.axis) hold('press') // a tap
+      if (touch.axis !== 'y') release('press', pause)
+      touch = null
+    }
+    root.addEventListener('touchend', untouch, { passive: true })
+    root.addEventListener('touchcancel', untouch, { passive: true })
+    root.addEventListener('focusin', event => { if (own(event) && event.target.matches?.(':focus-visible')) hold('focus') })
     root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget)) release('focus', pause) })
     let wheelTimer = 0
-    root.addEventListener('wheel', () => { hold('wheel'); clearTimeout(wheelTimer); wheelTimer = setTimeout(() => release('wheel'), pause) }, { passive: true })
+    root.addEventListener('wheel', event => {
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return
+      hold('wheel'); clearTimeout(wheelTimer); wheelTimer = setTimeout(() => release('wheel'), pause)
+    }, { passive: true })
     onMotionChange(() => { start(); sync() })
-    if ('IntersectionObserver' in window) new IntersectionObserver(entries => { onScreen = entries.some(entry => entry.isIntersecting); start(); sync() }, { threshold: 0.25 }).observe(root)
   }
   return { start, stop, hold, release, sync, pause, restart: () => { if (autoplay.mode === 'discrete') start() }, smooth: autoplay.mode === 'smooth', active: running }
 }
