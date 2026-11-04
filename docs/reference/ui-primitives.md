@@ -48,7 +48,7 @@ track's children; if any child carries `data-slide`, only those count.
 | `data-carousel` | `track` (default), `fade` | Scrolling strip, or slides crossfading in one grid cell |
 | `data-select` | `current` (default), `visible` | `current` makes every slide except the current one inert (slideshows); `visible` keeps every card on screen interactive (product strips) |
 | `data-step` | `item`, `page` | What an arrow moves. Defaults to `page` for `visible` and `item` for `current`. A loop barely longer than a page steps by the hidden remainder |
-| `data-loop` | present | Seamless loop over inert clones; arrows never stop |
+| `data-loop` | present | Seamless loop over clones hidden from assistive technology; arrows never stop |
 | `data-peek` | present | Centre-aligned slides; neighbours recede (`--d` from 0 to 1) and clicking one centres it; a still row when every card fits at `data-row-min` (default 400px) |
 | `data-fit` | `current` | The viewport height follows the slide in view, blending as slides pass |
 | `data-autoplay` | `off` (default), `discrete`, `smooth` | Advance one page every `data-interval` ms (at least 2500), or drift continuously at `data-speed` px/s |
@@ -78,7 +78,12 @@ track's children; if any child carries `data-slide`, only those count.
   until an arrow or a drag moves it again.
 - **Expanded slides:** opening a `<details>` inside a slide (a quick view, for
   example) brings that slide to the centre and holds autoplay until every
-  expanded panel in the strip is closed again.
+  expanded panel in the strip is closed again. The loop does not renumber while
+  anything is open, so the open slide never turns into a closed copy.
+- **Loop copies:** in `visible` strips the copies that fill a loop stay
+  clickable (their controls are out of the tab order and the copy is hidden from
+  assistive technology). Opening a `<details>` in a copy moves the strip onto
+  the identical real slide and opens it there. Slideshows keep copies inert.
 - **Looping scroll bar:** in a loop the thumb is a window over one period. As the
   strip drifts, the thumb leaves the right end and re-enters on the left.
   Dragging the thumb to the right end shows the last slide at the right edge.
