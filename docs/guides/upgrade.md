@@ -9,6 +9,14 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.20
+
+Carousel autoplay now runs from load whether or not the carousel is on screen,
+and page scrolling no longer holds it: a vertical wheel or swipe that starts on
+the carousel is treated as scrolling the page. Sideways wheels and swipes,
+presses, taps, keyboard focus and expanded slides still hold it. No markup or
+stored record changes.
+
 ## Upgrading to 0.2.0-alpha.19
 
 In `data-select="visible"` carousels, loop copies are no longer inert: they
