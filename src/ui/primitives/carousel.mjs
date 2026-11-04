@@ -11,14 +11,13 @@
  * and discrete or smooth autoplay with a pause control.
  */
 import {
-  arrowStep, autoplayConfig, dragIntent, driftStep, glideStep, homeIndex, loopSets, nearestCopy, releaseVelocity,
+  arrowStep, autoplayConfig, dragIntent, driftStep, glideStep, homeIndex, loopSets, loopThumbGeometry, nearestCopy, rampFactor, releaseVelocity, resumeDelay,
   pageSize, recede, rowFit, scrubPosition, slideWindow, swipeStep, thumbGeometry, wrap,
 } from './state.mjs'
 import { animationAllowed, onMotionChange } from './motion.mjs'
 
 const q = (root, selectors) => root.querySelector(selectors)
 const qa = (root, selectors) => [...root.querySelectorAll(selectors)]
-const finePointer = () => matchMedia('(hover: hover) and (pointer: fine)').matches
 
 // Move keyboard focus before its slide becomes inert or hidden.
 function focusAvailable(candidates, reveal = false) {
@@ -83,6 +82,8 @@ export function enhanceCarousel(root) {
 
 function createAutoplay({ root, toggle, autoplay }, { advance, startDrift, stopDrift, canRun }) {
   const reasons = new Set()
+  const pause = resumeDelay(root.dataset.resume)
+  const timers = new Map()
   let userPaused = root.dataset.autoplayPaused !== undefined
   let onScreen = true
   let timer = 0
@@ -102,45 +103,54 @@ function createAutoplay({ root, toggle, autoplay }, { advance, startDrift, stopD
     toggle.setAttribute('aria-label', userPaused ? 'Play automatic scrolling' : 'Pause automatic scrolling')
     toggle.dataset.state = userPaused ? 'paused' : 'playing'
   }
-  const hold = reason => { reasons.add(reason); stop(); sync() }
+  // A later hold for the same reason cancels a pending release.
+  const hold = reason => { clearTimeout(timers.get(reason)); timers.delete(reason); reasons.add(reason); stop(); sync() }
   const release = (reason, delay = 0) => {
-    const go = () => { reasons.delete(reason); start(); sync() }
-    delay ? setTimeout(go, delay) : go()
+    clearTimeout(timers.get(reason))
+    const go = () => { timers.delete(reason); reasons.delete(reason); start(); sync() }
+    if (delay) timers.set(reason, setTimeout(go, delay)); else go()
   }
   if (autoplay.mode !== 'off') {
+    // Autoplay keeps running under the pointer. It holds for a press (any click,
+    // tap or drag), keyboard focus, a wheel, an expanded slide, a hidden tab or
+    // off screen, and resumes gently `data-resume` ms (default 2000) after the
+    // reader lets go.
     toggle?.addEventListener('click', () => { userPaused = !userPaused; start(); sync() })
-    root.addEventListener('mouseenter', () => { if (finePointer()) hold('hover') })
-    root.addEventListener('mouseleave', () => release('hover'))
-    root.addEventListener('focusin', event => { if (!toggle?.contains(event.target)) hold('focus') })
-    root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget)) release('focus') })
-    root.addEventListener('pointerdown', event => { if (event.pointerType !== 'mouse') hold('touch') })
-    const lift = event => { if (event.pointerType !== 'mouse') release('touch', 2500) }
+    root.addEventListener('pointerdown', event => { if (!toggle?.contains(event.target)) hold('press') })
+    const lift = () => release('press', pause)
     root.addEventListener('pointerup', lift)
     root.addEventListener('pointercancel', lift)
+    root.addEventListener('focusin', event => { if (!toggle?.contains(event.target) && event.target.matches?.(':focus-visible')) hold('focus') })
+    root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget)) release('focus', pause) })
     let wheelTimer = 0
-    root.addEventListener('wheel', () => { hold('wheel'); clearTimeout(wheelTimer); wheelTimer = setTimeout(() => release('wheel'), 2500) }, { passive: true })
+    root.addEventListener('wheel', () => { hold('wheel'); clearTimeout(wheelTimer); wheelTimer = setTimeout(() => release('wheel'), pause) }, { passive: true })
     onMotionChange(() => { start(); sync() })
     if ('IntersectionObserver' in window) new IntersectionObserver(entries => { onScreen = entries.some(entry => entry.isIntersecting); start(); sync() }, { threshold: 0.25 }).observe(root)
   }
-  return { start, stop, hold, release, sync, restart: () => { if (autoplay.mode === 'discrete') start() }, smooth: autoplay.mode === 'smooth', active: running }
+  return { start, stop, hold, release, sync, pause, restart: () => { if (autoplay.mode === 'discrete') start() }, smooth: autoplay.mode === 'smooth', active: running }
 }
 
 /* ------------------------------------------------------------- scroll bar */
 
 function bindScrollbar({ root, scrollbar }, { geometry, scrubTo, begin, end }) {
-  const thumb = scrollbar?.querySelector('span, [data-scrollbar-thumb]')
-  if (!scrollbar || !thumb) return () => {}
+  if (!scrollbar) return () => {}
+  // Two thumb segments: in a loop, the part of the window past the end is drawn
+  // again from the start, so the thumb leaves on the right and re-enters on the left.
+  const thumbs = [...scrollbar.querySelectorAll(':scope > span, [data-scrollbar-thumb]')]
+  if (!thumbs.length) return () => {}
+  while (thumbs.length < 2) { const extra = document.createElement('span'); scrollbar.append(extra); thumbs.push(extra) }
   scrollbar.addEventListener('pointerdown', event => {
     if (event.button > 0) return
     event.preventDefault()
     const rail = scrollbar.getBoundingClientRect()
-    const box = thumb.getBoundingClientRect()
-    const onThumb = event.clientX >= box.left && event.clientX <= box.right
-    const grab = onThumb ? event.clientX - box.left : box.width / 2
+    const box = thumbs[0].getBoundingClientRect()
+    const width = Math.min(box.width, rail.width)
+    const onThumb = event.clientX >= box.left && event.clientX <= Math.min(box.right, rail.right)
+    const grab = onThumb ? event.clientX - box.left : width / 2
     scrollbar.setPointerCapture(event.pointerId)
     root.dataset.scrubbing = ''
     begin()
-    const move = x => scrubTo(scrubPosition(x, rail.left, rail.width, box.width, grab, geometry().range))
+    const move = x => scrubTo(scrubPosition(x, rail.left, rail.width, width, grab, geometry().range))
     move(event.clientX)
     const onMove = moveEvent => move(moveEvent.clientX)
     const onUp = () => { scrollbar.removeEventListener('pointermove', onMove); delete root.dataset.scrubbing; end() }
@@ -149,10 +159,14 @@ function bindScrollbar({ root, scrollbar }, { geometry, scrubTo, begin, end }) {
     scrollbar.addEventListener('pointercancel', onUp, { once: true })
   })
   return () => {
-    const { position, range, viewport } = geometry()
-    const { width, left } = thumbGeometry(position, range, viewport)
-    thumb.style.width = `${width * 100}%`
-    thumb.style.left = `${left * 100}%`
+    const { position, range, viewport, period } = geometry()
+    // In a loop the thumb spans the part of the period not covered by the scroll range, so it
+    // reaches the right end exactly when the last slide does, and wraps only beyond that.
+    const { width, left } = period ? loopThumbGeometry(position, period, period - range) : thumbGeometry(position, range, viewport)
+    thumbs[0].style.width = thumbs[1].style.width = `${width * 100}%`
+    thumbs[0].style.left = `${left * 100}%`
+    thumbs[1].style.left = `${(left - 1) * 100}%`
+    thumbs[1].hidden = !period
     scrollbar.hidden = range <= 1
   }
 }
@@ -174,6 +188,8 @@ function initTrack(parts) {
   let items = slides
   let step = 0, current = -1, target = null, announce = false, row = false, timer = 0, realigned = false
   let home = 0, intent = false, drifting = false, gliding = 0, scrubbing = false
+  // free: the reader left the strip between cards (a scrub, a throw, a centred slide); nothing pulls it back.
+  let free = false
   let heights = [], padY = 0, padTop = 0
   let drag = null, suppressClick = false
 
@@ -214,10 +230,18 @@ function initTrack(parts) {
     heights = slides.map(slide => slide.offsetHeight)
   }
 
+  // The scroll position at which the last real slide sits at the viewport's inner end edge
+  // (measured, so side insets and gaps are respected), relative to the start of the loop.
+  const loopEnd = () => {
+    const last = slides.at(-1)
+    const box = viewport.getBoundingClientRect(), edge = parseFloat(getComputedStyle(viewport).scrollPaddingRight) || 0
+    const end = viewport.scrollLeft + last.getBoundingClientRect().right - (box.right - edge)
+    return Math.max(0, wrap(end - first() * step, n * step) || 0)
+  }
   const geometry = () => {
     if (sets) {
       const period = n * step
-      return { position: wrap(viewport.scrollLeft - first() * step, period), range: Math.max(0, period - viewport.clientWidth), viewport: viewport.clientWidth }
+      return { position: wrap(viewport.scrollLeft - first() * step, period), range: loopEnd(), viewport: viewport.clientWidth, period }
     }
     return { position: viewport.scrollLeft, range: Math.max(0, viewport.scrollWidth - viewport.clientWidth), viewport: viewport.clientWidth }
   }
@@ -225,7 +249,7 @@ function initTrack(parts) {
     geometry,
     scrubTo: offset => { viewport.scrollLeft = (sets ? first() * step : 0) + offset },
     begin: () => { stopGlide(); scrubbing = true; intent = true; viewport.style.scrollSnapType = 'none'; player.hold('scrub') },
-    end: () => { scrubbing = false; intent = true; settleSoon(); player.release('scrub') },
+    end: () => { scrubbing = false; free = true; settleSoon(); player.release('scrub', player.pause) },
   })
 
   const paint = () => {
@@ -247,11 +271,26 @@ function initTrack(parts) {
     if (count) count.textContent = `${(c % n) + 1} / ${n}`
   }
 
+  // Keep a looping strip inside the real slides by moving whole periods over identical clones (invisible).
+  const loopBase = () => first() * step
+  const normalizeTo = position => (sets && step ? loopBase() + wrap(position - loopBase(), n * step) : position)
+  const normalize = () => {
+    const position = viewport.scrollLeft, wrapped = normalizeTo(position)
+    if (Math.abs(wrapped - position) > 0.5) viewport.scrollTo({ left: wrapped, behavior: 'instant' })
+  }
+
   // Once still: step back onto the real slide showing the same content (identical, so invisible).
   const settle = () => {
     if (row || !step || drag || gliding || scrubbing) return
     if (drifting) return
-    if (player.smooth && player.active()) return
+    // Drifting strips and free positions stay exactly where the reader left them.
+    if (player.smooth || free) {
+      normalize()
+      home = sets ? wrap(Math.round(position()) - first(), n) : Math.round(position())
+      intent = false; target = null; realigned = false
+      paint()
+      return
+    }
     if (!intent) {
       if (!player.smooth) viewport.style.removeProperty('scroll-snap-type')
       const goal = (first() + home) * step
@@ -279,6 +318,7 @@ function initTrack(parts) {
     if (row || !step) return
     stopGlide()
     intent = true
+    free = false
     let base = target ?? Math.round(position())
     if (sets) {
       const equivalent = homeIndex(base, n, sets)
@@ -339,17 +379,24 @@ function initTrack(parts) {
   }
 
   // Momentum for multi-card strips; slideshows step one slide per swipe instead.
-  function stopGlide() { cancelAnimationFrame(gliding); gliding = 0 }
+  // A drifting strip coasts longer and stops where it stops; others settle on a card.
+  function stopGlide() { if (gliding) { cancelAnimationFrame(gliding); gliding = 0; player.release('glide', player.pause) } }
   const glide = velocity => {
-    if (!animationAllowed() || Math.abs(velocity) < 0.05) { settle(); return }
+    const coast = player.smooth
+    if (!animationAllowed() || Math.abs(velocity) < 0.05) { if (coast) free = true; settle(); return }
+    player.hold('glide')
     let last = performance.now(), pos = viewport.scrollLeft
     const frame = now => {
-      const next = glideStep(pos, velocity, now - last)
-      last = now; pos = next.position; velocity = next.velocity
+      const next = glideStep(pos, velocity, now - last, coast ? 0.975 : 0.94)
+      last = now; velocity = next.velocity
+      pos = normalizeTo(next.position)
       viewport.scrollLeft = pos
       const atEdge = !sets && (pos <= 0 || pos >= viewport.scrollWidth - viewport.clientWidth)
-      if (Math.abs(velocity) > 0.03 && !atEdge) gliding = requestAnimationFrame(frame)
-      else { gliding = 0; settle() }
+      if (Math.abs(velocity) > (coast ? 0.01 : 0.03) && !atEdge) { gliding = requestAnimationFrame(frame); return }
+      gliding = 0
+      if (coast) free = true
+      settle()
+      player.release('glide', player.pause)
     }
     gliding = requestAnimationFrame(frame)
   }
@@ -362,11 +409,14 @@ function initTrack(parts) {
     startDrift: () => {
       drifting = true
       viewport.style.scrollSnapType = 'none'
-      let pos = viewport.scrollLeft, last = 0
+      let pos = viewport.scrollLeft, last = 0, began = 0
       const frame = now => {
+        if (!began) began = now
         if (last) {
-          if (sets) pos = first() * step + driftStep(pos - first() * step, parts.autoplay.speed, now - last, n * step)
-          else pos = driftStep(pos, parts.autoplay.speed, now - last, 0, viewport.scrollWidth - viewport.clientWidth)
+          // Ease back in after a pause instead of jumping to full speed.
+          const speed = parts.autoplay.speed * rampFactor(now - began, 1200)
+          if (sets) pos = first() * step + driftStep(pos - first() * step, speed, now - last, n * step)
+          else pos = driftStep(pos, speed, now - last, 0, viewport.scrollWidth - viewport.clientWidth)
           viewport.scrollLeft = pos
         }
         last = now
@@ -377,10 +427,31 @@ function initTrack(parts) {
     stopDrift: () => {
       if (!driftFrame) return
       cancelAnimationFrame(driftFrame); driftFrame = 0; drifting = false
+      free = true
       home = ((Math.round(position()) - first()) % n + n) % n
     },
   })
   if (player.smooth) root.dataset.drift = ''
+
+  // Something expanded inside a slide (a quick view, a details panel): centre that slide and hold
+  // autoplay until everything inside the strip is closed again.
+  const expanded = () => slides.some(slide => slide.querySelector('details[open]'))
+  root.addEventListener('toggle', event => {
+    const details = event.target
+    if (!(details instanceof HTMLDetailsElement) || !track.contains(details) || details.closest('[data-clone]')) return
+    if (details.open) {
+      player.hold('expanded')
+      stopGlide()
+      const slide = slides.find(item => item.contains(details))
+      if (!slide || row || !step) return
+      free = true
+      viewport.style.scrollSnapType = 'none'
+      const box = viewport.getBoundingClientRect(), card = slide.getBoundingClientRect()
+      viewport.scrollBy({ left: card.left + card.width / 2 - (box.left + box.width / 2), behavior: animationAllowed() ? 'smooth' : 'instant' })
+    } else if (!expanded()) {
+      player.release('expanded', player.pause)
+    }
+  }, true)
 
   viewport.addEventListener('scroll', () => {
     requestAnimationFrame(paint)
@@ -421,7 +492,10 @@ function initTrack(parts) {
       }
     }
     if (drag.state === 'horizontal') {
-      viewport.scrollLeft = drag.left - dx
+      let to = drag.left - dx
+      const wrapped = normalizeTo(to)
+      drag.left += wrapped - to; to = wrapped
+      viewport.scrollLeft = to
       drag.samples.push({ x: event.clientX, t: event.timeStamp })
       if (drag.samples.length > 6) drag.samples.shift()
     }
@@ -432,12 +506,14 @@ function initTrack(parts) {
     drag = null; delete root.dataset.dragging
     if (state !== 'horizontal') return
     suppressClick = true
-    player.release('drag')
+    free = false
     if (visibleMode || player.smooth) {
       const a = samples[0], b = samples.at(-1)
       glide(cancelled ? 0 : releaseVelocity(b.x - a.x, b.t - a.t))
+      player.release('drag', player.pause)
       return
     }
+    player.release('drag', player.pause)
     const start = Math.round(left / step), near = Math.round(position())
     const flick = cancelled ? 0 : swipeStep(event.clientX - x, event.clientY - y, event.timeStamp - t)
     let to = near === start ? start + flick : near

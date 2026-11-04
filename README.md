@@ -1,6 +1,6 @@
 # MNSTRY Atelier
 
-`0.2.0-alpha.17` adds shared [UI primitives](docs/reference/ui-primitives.md): one carousel, disclosure, scroll lock and motion layer for Atelier-built sites. `0.2.0-alpha.16` renames the [graph workspace](docs/guides/graph-workspace.md)'s room to the map and its middle layer to distribution, keeping the alpha.15 names for one release. `0.2.0-alpha.15` added the workspace (a map of every readable record, a focused authoring workbench and a review room, built from primitives distributions and owners can compose), renderer-neutral graph views and an [extension SDK and Postgres project workflow](docs/guides/extensions.md). Native host qualification remains a separate gate.
+`0.2.0-alpha.18` refines carousel motion (gentle resume, coasting throws, centred expanded slides, a looping scroll bar). `0.2.0-alpha.17` adds shared [UI primitives](docs/reference/ui-primitives.md): one carousel, disclosure, scroll lock and motion layer for Atelier-built sites. `0.2.0-alpha.16` renames the [graph workspace](docs/guides/graph-workspace.md)'s room to the map and its middle layer to distribution, keeping the alpha.15 names for one release. `0.2.0-alpha.15` added the workspace (a map of every readable record, a focused authoring workbench and a review room, built from primitives distributions and owners can compose), renderer-neutral graph views and an [extension SDK and Postgres project workflow](docs/guides/extensions.md). Native host qualification remains a separate gate.
 
 **Turn a repository into a living, governed system.**
 

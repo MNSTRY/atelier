@@ -91,6 +91,29 @@ export function thumbGeometry(position, range, viewport) {
   return { width, left }
 }
 
+/**
+ * Thumb for a looping strip: one window over a repeating period. `left` can run
+ * past 1; the part beyond the end is drawn again from the start, so the thumb
+ * leaves the right end and re-enters on the left as the loop continues.
+ */
+export function loopThumbGeometry(position, period, viewport) {
+  if (!(period > 0)) return { width: 1, left: 0 }
+  return { width: Math.min(1, viewport / period), left: wrap(position, period) / period }
+}
+
+/** Speed factor for a drift easing back in after a pause: 0 to 1 over `duration` ms (smoothstep). */
+export function rampFactor(elapsed, duration = 1200) {
+  if (!(duration > 0)) return 1
+  const t = Math.min(1, Math.max(0, elapsed / duration))
+  return t * t * (3 - 2 * t)
+}
+
+/** Delay before autoplay resumes after a reader's interaction. */
+export function resumeDelay(value) {
+  const ms = Number(value)
+  return Number.isFinite(ms) ? Math.min(10000, Math.max(0, ms)) : 2000
+}
+
 /** Momentum after a mouse drag: velocity in px/ms, decaying per 16ms frame. */
 export const MAX_GLIDE_VELOCITY = 2.5
 /** Release velocity in px/ms, capped so a fast fling travels a few cards, not the whole strip. */

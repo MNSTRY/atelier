@@ -9,6 +9,13 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.18
+
+Carousel autoplay no longer holds on hover; it holds for a press, keyboard
+focus, a wheel or an expanded slide and resumes after `data-resume` ms. A site
+that relied on hover to pause autoplay should rely on the pause control. No
+stored record changes format.
+
 ## Upgrading to 0.2.0-alpha.17
 
 This release only adds `@mnstry/atelier/ui/primitives` and

@@ -10,7 +10,7 @@ const toggleIcons = '<svg class="system-carousel__pause" width="16" height="16" 
 export function renderCarouselControls({ label = 'Carousel', autoplay = 'off', scrollbar = true, arrows = true } = {}) {
   const name = escape(label)
   const parts = []
-  if (scrollbar) parts.push('<div class="system-carousel__scrollbar" data-scrollbar aria-hidden="true"><span></span></div>')
+  if (scrollbar) parts.push('<div class="system-carousel__scrollbar" data-scrollbar aria-hidden="true"><span></span><span hidden></span></div>')
   const buttons = []
   if (autoplay === 'discrete' || autoplay === 'smooth') buttons.push(`<button type="button" class="system-carousel__button system-carousel__toggle" data-autoplay-toggle aria-label="Pause automatic scrolling" hidden>${toggleIcons}</button>`)
   if (arrows) {
