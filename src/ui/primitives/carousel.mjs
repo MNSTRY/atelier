@@ -5,7 +5,7 @@
  *
  * Track carousels scroll natively (CSS scroll snap), so touch, trackpad, wheel
  * and keyboard keep the platform's physics. Script adds seamless loops over
- * inert clones, mouse drag (with momentum for multi-card strips), a draggable
+ * hidden clones, mouse drag (with momentum for multi-card strips), a draggable
  * scroll bar, arrows, pages or thumbnails, a live status, height that follows
  * the current slide, receding neighbours, a still row when every card fits,
  * and discrete or smooth autoplay with a pause control.
@@ -200,7 +200,12 @@ function initTrack(parts) {
       const clone = slide => {
         const copy = slide.cloneNode(true)
         copy.removeAttribute('id'); copy.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'))
-        copy.dataset.clone = ''; copy.inert = true; copy.setAttribute('aria-hidden', 'true')
+        copy.dataset.clone = ''; copy.setAttribute('aria-hidden', 'true')
+        // Slideshows keep copies inert. In a strip of visible cards a copy can be on screen at any
+        // time (a drifting loop shows them constantly), so it stays clickable but out of the tab
+        // order and the accessibility tree; opening something inside it hands over to the real slide.
+        if (visibleMode) copy.querySelectorAll('a[href], button, summary, input, select, textarea, [tabindex]').forEach(element => element.setAttribute('tabindex', '-1'))
+        else copy.inert = true
         return copy
       }
       const copies = () => Array.from({ length: sets }, () => slides.map(clone)).flat()
@@ -273,7 +278,10 @@ function initTrack(parts) {
 
   // Keep a looping strip inside the real slides by moving whole periods over identical clones (invisible).
   const loopBase = () => first() * step
-  const normalizeTo = position => (sets && step ? loopBase() + wrap(position - loopBase(), n * step) : position)
+  // While something is open inside a slide the strip stays on that real slide: wrapping would swap
+  // it for a closed copy, so the open panel would vanish from under the reader.
+  const expanded = () => slides.some(slide => slide.querySelector('details[open]'))
+  const normalizeTo = position => (sets && step && !expanded() ? loopBase() + wrap(position - loopBase(), n * step) : position)
   const normalize = () => {
     const position = viewport.scrollLeft, wrapped = normalizeTo(position)
     if (Math.abs(wrapped - position) > 0.5) viewport.scrollTo({ left: wrapped, behavior: 'instant' })
@@ -435,7 +443,22 @@ function initTrack(parts) {
 
   // Something expanded inside a slide (a quick view, a details panel): centre that slide and hold
   // autoplay until everything inside the strip is closed again.
-  const expanded = () => slides.some(slide => slide.querySelector('details[open]'))
+  // A summary inside a copy: move over one period onto the identical real slide (invisible), then
+  // open the real one, so the panel the reader sees is the live one.
+  root.addEventListener('click', event => {
+    const summary = event.target.closest?.('summary')
+    const copy = summary?.closest('[data-clone]')
+    if (!copy || !track.contains(copy)) return
+    event.preventDefault(); event.stopImmediatePropagation()
+    const slide = slides[wrap(items.indexOf(copy), n)]
+    const twin = slide && [...slide.querySelectorAll('summary')][[...copy.querySelectorAll('summary')].indexOf(summary)]
+    if (!twin) return
+    stopGlide()
+    viewport.style.scrollSnapType = 'none'
+    viewport.scrollTo({ left: viewport.scrollLeft + slide.getBoundingClientRect().left - copy.getBoundingClientRect().left, behavior: 'instant' })
+    twin.focus({ preventScroll: true })
+    twin.click()
+  }, true)
   root.addEventListener('toggle', event => {
     const details = event.target
     if (!(details instanceof HTMLDetailsElement) || !track.contains(details) || details.closest('[data-clone]')) return
@@ -449,6 +472,7 @@ function initTrack(parts) {
       const box = viewport.getBoundingClientRect(), card = slide.getBoundingClientRect()
       viewport.scrollBy({ left: card.left + card.width / 2 - (box.left + box.width / 2), behavior: animationAllowed() ? 'smooth' : 'instant' })
     } else if (!expanded()) {
+      normalize()
       player.release('expanded', player.pause)
     }
   }, true)

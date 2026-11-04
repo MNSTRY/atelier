@@ -9,6 +9,13 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.19
+
+In `data-select="visible"` carousels, loop copies are no longer inert: they
+stay clickable but out of the tab order and the accessibility tree. Opening a
+`<details>` in a copy opens it on the real slide instead. No markup or stored
+record changes.
+
 ## Upgrading to 0.2.0-alpha.18
 
 Carousel autoplay no longer holds on hover; it holds for a press, keyboard

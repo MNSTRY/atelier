@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-alpha.19
+
+- In multi-card strips (`data-select="visible"`), loop copies are no longer inert. A looping strip shows copies whenever its end wraps into view, and a drifting one does so constantly, so clicks on those cards fell through to the strip. Copies now stay clickable, with every control out of the tab order and the copy hidden from assistive technology; links in a copy go where the original goes. Slideshows keep inert copies.
+- Opening a `<details>` (a quick view, for example) in a copy moves the strip over one loop period onto the identical real slide, invisibly, and opens it there, so the panel the reader sees is the live one.
+- While anything inside a slide is open, the loop no longer renumbers over its copies, which could swap the open slide for a closed copy and make the panel vanish. It renumbers once everything is closed.
+
 ## 0.2.0-alpha.18
 
 - Carousel autoplay keeps running under the pointer. It now holds for a press (any click, tap or drag), keyboard focus (not focus from a click), a wheel, an expanded slide, a hidden tab or the carousel being off screen, and resumes `data-resume` ms (default 2000) after the reader lets go; a smooth drift eases back to speed instead of jumping.
