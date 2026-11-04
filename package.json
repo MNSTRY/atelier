@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.16",
+  "version": "0.2.0-alpha.17",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
@@ -64,6 +64,8 @@
     "./readiness-protocols": "./src/readiness-protocols/bundled-pack.mjs",
     "./server": "./src/server/local-sidecar.mjs",
     "./ui": "./src/ui/control-system.mjs",
+    "./ui/primitives": "./src/ui/primitives/index.mjs",
+    "./ui/primitives/browser": "./src/ui/primitives/browser.mjs",
     "./harness": "./src/harness/context.mjs",
     "./collaboration": "./src/collaboration/index.mjs",
     "./support": "./src/support/support-bundle.mjs",

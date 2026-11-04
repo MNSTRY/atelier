@@ -9,6 +9,13 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.17
+
+This release only adds `@mnstry/atelier/ui/primitives` and
+`@mnstry/atelier/ui/primitives/browser`; nothing existing changes and no stored
+record changes format. The alpha.15 graph workspace names that alpha.16 kept
+for one release are still accepted here; their removal moves to a later release.
+
 ## Upgrading to 0.2.0-alpha.16
 
 This release renames two graph workspace names; nothing else changes and no
