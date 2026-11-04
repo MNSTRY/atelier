@@ -316,6 +316,7 @@
 
 ## Unreleased
 
+- Document how a host locks page scrolling around the presentation's modal confirmation without shifting the layout (pay the hidden scrollbar back as body end padding, count locks), and test that the browser binding itself never changes the host page's overflow, padding or scroll position.
 - Patch the fast-uri dependency and override from 3.1.7 to 3.1.8, the patched
   3.x release for GHSA-hrr3-gc8f-f4qj (3.1.7 is in the affected range; whether
   Atelier's use was exploitable is not established). The direct dependency
