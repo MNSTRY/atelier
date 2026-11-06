@@ -133,3 +133,27 @@ with overlay scrollbars.
 options)` give one owner for motion: the reduced-motion preference and hidden
 tabs stop every effect started through them. `startMotionWatch()` begins
 watching; the carousel and disclosures call it as needed.
+
+## Scrollbar policy
+
+Use `scrollbarStyles` with `enhanceOverlayScrollbar` for visible vertical
+scrollbars on web. The desktop thumb floats over content without a painted
+track or reserved gutter. The original scroll host handles keyboard, wheel,
+touch, and programmatic scrolling. Touch and forced-colors keep browser
+scrollbars.
+
+- **Page shell**: mount one hidden `.system-scroll-thumb[data-document-thumb]`
+  with `aria-hidden="true"`. Pass the thumb and an optional sticky `header`.
+  The thumb starts below the measured header and disappears while the shared
+  page scroll lock is held.
+- **Panel or drawer**: mount the hidden thumb after its own scroll viewport
+  in a positioned wrapper aligned to the viewport's top and inline end.
+  Pass `viewport` and `thumb`. Provide a measured `content` element or call
+  `refresh()` when its contents change.
+- **Horizontal carousel**: use its existing scrubber. It shares the
+  `--system-scrollbar-thumb` color and defaults to a transparent rail. The
+  carousel still owns looping, snap, and scrub gestures.
+
+Use `--system-scrollbar-thumb`, `--system-scrollbar-thumb-hover`, and
+`--system-scrollbar-layer` for host theming. Call `destroy()` on unmount.
+Native renderers keep platform-specific scrolling and indicator ownership.

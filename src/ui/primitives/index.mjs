@@ -3,5 +3,5 @@
  * helpers. Browser enhancers live in ./browser.mjs (@mnstry/atelier/ui/primitives/browser).
  */
 export * from './state.mjs'
-export { carouselStyles } from './styles.mjs'
+export { carouselStyles, scrollbarStyles } from './styles.mjs'
 export { renderCarouselControls } from './render.mjs'

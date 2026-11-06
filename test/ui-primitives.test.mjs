@@ -133,7 +133,7 @@ test('controls are escaped, labelled and hidden until the enhancer measures over
 
 test('carousel styles are tenant-neutral and themed only through custom properties', () => {
   assert.match(carouselStyles, /--system-carousel-gap, 1\.25rem/)
-  assert.match(carouselStyles, /--system-carousel-scrollbar-thumb, currentColor/)
+  assert.match(carouselStyles, /--system-carousel-scrollbar-thumb, var\(--system-scrollbar-thumb, currentColor\)/)
   assert.match(carouselStyles, /\[data-drift\] \[data-carousel-viewport\] \{ scroll-snap-type: none; \}/)
   assert.match(carouselStyles, /prefers-reduced-motion: reduce/)
   assert.doesNotMatch(carouselStyles, /#[0-9a-f]{6}/i, 'no hard-coded colours')

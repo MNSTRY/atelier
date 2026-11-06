@@ -101,8 +101,8 @@ export const carouselStyles = `
   height: var(--system-carousel-scrollbar-thickness, 2px);
   transform: translateY(-50%);
 }
-.system-carousel__scrollbar::before { left: 0; right: 0; background: var(--system-carousel-scrollbar-track, rgba(0, 0, 0, 0.14)); }
-.system-carousel__scrollbar > span { left: 0; width: 25%; background: var(--system-carousel-scrollbar-thumb, currentColor); transition: height 0.16s var(--system-carousel-ease, ease); }
+.system-carousel__scrollbar::before { left: 0; right: 0; background: var(--system-carousel-scrollbar-track, transparent); }
+.system-carousel__scrollbar > span { left: 0; width: 25%; background: var(--system-carousel-scrollbar-thumb, var(--system-scrollbar-thumb, currentColor)); transition: height 0.16s var(--system-carousel-ease, ease); }
 .system-carousel__scrollbar:hover > span, .system-carousel[data-scrubbing] .system-carousel__scrollbar > span { height: calc(var(--system-carousel-scrollbar-thickness, 2px) * 2); }
 .system-carousel[data-scrubbing] .system-carousel__scrollbar { cursor: grabbing; }
 
@@ -123,5 +123,26 @@ export const carouselStyles = `
   .system-carousel [data-carousel-track] > *, .system-carousel__button, .system-carousel__scrollbar > span,
   .system-carousel[data-fit="current"] [data-carousel-viewport] { transition: none; }
   .system-carousel[data-peek] [data-carousel-track] > * { transform: none; }
+}
+`
+
+export const scrollbarStyles = `
+.system-scroll-thumb { display: none }
+@media (pointer: fine) and (forced-colors: none) {
+  [data-overlay-scrollbar] { scrollbar-width: none; scrollbar-gutter: auto }
+  [data-overlay-scrollbar]::-webkit-scrollbar { display: none }
+  [data-overlay-scrollbar] ~ .system-scroll-thumb:not([hidden]),
+  html[data-overlay-scrollbar]:not([data-scroll-locked]) .system-scroll-thumb[data-document-thumb]:not([hidden]) {
+    display: block; position: absolute; inset-inline-end: 0; width: 16px;
+    cursor: grab; touch-action: none; user-select: none;
+  }
+  html[data-overlay-scrollbar] .system-scroll-thumb[data-document-thumb] { position: fixed; z-index: var(--system-scrollbar-layer, 10) }
+  .system-scroll-thumb::before {
+    content: ''; position: absolute; inset: 0 4px 0 6px;
+    border-radius: 999px; background: var(--system-scrollbar-thumb, #777);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / .35);
+  }
+  .system-scroll-thumb:active { cursor: grabbing }
+  .system-scroll-thumb:hover::before { background: var(--system-scrollbar-thumb-hover, var(--system-scrollbar-thumb, #555)) }
 }
 `
