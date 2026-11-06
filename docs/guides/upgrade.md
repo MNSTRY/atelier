@@ -9,6 +9,10 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.22
+
+Document overlay scrollbars now stay anchored to the viewport and follow window scroll events. The public API is unchanged.
+
 ## Upgrading to 0.2.0-alpha.21
 
 Opt in at the host scroll viewport with the shared scrollbar primitive. Use the thumb and hover custom properties to bind the active theme. Existing native scrolling remains available for touch and forced colors.

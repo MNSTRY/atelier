@@ -133,9 +133,10 @@ export const scrollbarStyles = `
   [data-overlay-scrollbar]::-webkit-scrollbar { display: none }
   [data-overlay-scrollbar] ~ .system-scroll-thumb:not([hidden]),
   html[data-overlay-scrollbar]:not([data-scroll-locked]) .system-scroll-thumb[data-document-thumb]:not([hidden]) {
-    display: block; position: absolute; inset-inline-end: 0; width: 16px;
+    display: block; inset-inline-end: 0; width: 16px;
     cursor: grab; touch-action: none; user-select: none;
   }
+  [data-overlay-scrollbar] ~ .system-scroll-thumb { position: absolute }
   html[data-overlay-scrollbar] .system-scroll-thumb[data-document-thumb] { position: fixed; z-index: var(--system-scrollbar-layer, 10) }
   .system-scroll-thumb::before {
     content: ''; position: absolute; inset: 0 4px 0 6px;
