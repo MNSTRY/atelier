@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-alpha.22
+
+Keep the document scrollbar thumb fixed below the header and track scroll events and position on the window. Nested scrollbars continue to follow their own scroll viewport.
+
 ## 0.2.0-alpha.21
 
 Shared, themeable overlay scrollbars for web documents and panels. Carousels share the thumb token and default to a transparent track.
