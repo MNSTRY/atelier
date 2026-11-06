@@ -17,11 +17,18 @@ test('overlay scrollbars leave page and panel geometry intact', { skip: process.
       <dialog><section><article><div>Panel content</div></article><div class="system-scroll-thumb" data-panel-thumb hidden></div></section></dialog>`)
     await page.addScriptTag({ content: bundle.outputFiles[0].text })
     await page.evaluate(() => {
+      // Exercise hosts that expose viewport scroll notifications on Window.
+      document.addEventListener('scroll', event => {
+        if (event.target !== document) return
+        event.stopImmediatePropagation()
+        window.dispatchEvent(new Event('scroll'))
+      }, { capture: true })
       Primitives.enhanceOverlayScrollbar({ thumb: document.querySelector('[data-document-thumb]'), header: document.querySelector('header') })
       Primitives.enhanceOverlayScrollbar({ thumb: document.querySelector('[data-panel-thumb]'), viewport: document.querySelector('article') })
     })
     const thumb = page.locator('[data-document-thumb]')
     await thumb.waitFor()
+    assert.equal(await thumb.evaluate(element => getComputedStyle(element).position), 'fixed')
     assert.equal(await page.evaluate(() => document.documentElement.clientWidth), 720)
     const bounds = await thumb.boundingBox()
     assert.ok(bounds.y >= 80)
@@ -31,6 +38,10 @@ test('overlay scrollbars leave page and panel geometry intact', { skip: process.
     await page.mouse.up()
     const offset = await page.evaluate(() => scrollY)
     assert.ok(offset > 100)
+    await page.waitForFunction(() => {
+      const thumb = document.querySelector('[data-document-thumb]')
+      return new DOMMatrix(thumb.style.transform).m42 > 20 && thumb.getBoundingClientRect().top > 80
+    }, null, { timeout: 2000 })
     await page.evaluate(() => {
       document.querySelector('dialog').showModal()
       Primitives.lockScroll('sample')

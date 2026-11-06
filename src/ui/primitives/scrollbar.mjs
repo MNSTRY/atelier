@@ -6,7 +6,10 @@
 export function enhanceOverlayScrollbar({ thumb, viewport = document, header, content }) {
   if (!thumb || !('ResizeObserver' in window)) return
   const page = viewport === document
-  const scroller = page ? document.documentElement : viewport
+  const scrollHost = page ? window : viewport
+  const scroller = page ? document.scrollingElement ?? document.documentElement : viewport
+  const styleTarget = page ? document.documentElement : viewport
+  const scrollOffset = () => page ? window.scrollY : scroller.scrollTop
   const media = matchMedia('(pointer: fine) and (forced-colors: none)')
   const events = new AbortController()
   const options = { signal: events.signal }
@@ -18,7 +21,7 @@ export function enhanceOverlayScrollbar({ thumb, viewport = document, header, co
   function update() {
     frame = undefined
     if (!media.matches) return
-    const height = scroller.clientHeight
+    const height = styleTarget.clientHeight
     const top = (header ? Math.max(0, header.getBoundingClientRect().bottom) : 0) + 4
     const track = height - top - 4
     scrollRange = Math.max(0, scroller.scrollHeight - height)
@@ -26,7 +29,7 @@ export function enhanceOverlayScrollbar({ thumb, viewport = document, header, co
     if (thumb.hidden) return
     const size = Math.max(32, track * height / scroller.scrollHeight)
     travel = track - size
-    const progress = Math.max(0, Math.min(1, scroller.scrollTop / scrollRange))
+    const progress = Math.max(0, Math.min(1, scrollOffset() / scrollRange))
     thumb.style.top = `${top}px`
     thumb.style.height = `${size}px`
     thumb.style.transform = `translateY(${progress * travel}px)`
@@ -37,7 +40,7 @@ export function enhanceOverlayScrollbar({ thumb, viewport = document, header, co
   }
 
   function setMode() {
-    scroller.toggleAttribute('data-overlay-scrollbar', media.matches)
+    styleTarget.toggleAttribute('data-overlay-scrollbar', media.matches)
     refresh()
   }
 
@@ -45,14 +48,14 @@ export function enhanceOverlayScrollbar({ thumb, viewport = document, header, co
     if (event.button !== 0 || !travel) return
     event.preventDefault()
     thumb.setPointerCapture(event.pointerId)
-    drag = { y: event.clientY, scroll: scroller.scrollTop, scale: scrollRange / travel }
+    drag = { y: event.clientY, scroll: scrollOffset(), scale: scrollRange / travel }
   }, options)
   thumb.addEventListener('pointermove', event => {
     if (!drag || !thumb.hasPointerCapture(event.pointerId)) return
-    scroller.scrollTo({ top: drag.scroll + (event.clientY - drag.y) * drag.scale, behavior: 'instant' })
+    scrollHost.scrollTo({ top: drag.scroll + (event.clientY - drag.y) * drag.scale, behavior: 'instant' })
   }, options)
   thumb.addEventListener('lostpointercapture', () => { drag = undefined }, options)
-  viewport.addEventListener('scroll', refresh, { ...options, passive: true })
+  scrollHost.addEventListener('scroll', refresh, { ...options, passive: true })
   window.addEventListener('resize', refresh, options)
   media.addEventListener('change', setMode, options)
   const observer = new ResizeObserver(refresh)
@@ -67,7 +70,7 @@ export function enhanceOverlayScrollbar({ thumb, viewport = document, header, co
       events.abort()
       observer.disconnect()
       if (frame !== undefined) cancelAnimationFrame(frame)
-      scroller.removeAttribute('data-overlay-scrollbar')
+      styleTarget.removeAttribute('data-overlay-scrollbar')
       thumb.hidden = true
     },
   }
