@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The locked Playwright release supports this OS; ubuntu-latest can advance.
+    runs-on: ubuntu-24.04
     env:
       # Denylist assertions run in the secret-sweep lane; this job acknowledges
       # a structural-only run explicitly. Never add this to secret-sweep.
@@ -30,13 +31,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run syntax:check
-      - run: npm test
       - name: install scrollbar proof browsers
         run: npx playwright install --with-deps chromium webkit
       - name: verify scrollbar stacking and interaction
         run: node --test test/ui-scrollbar-browser.test.mjs test/ui-scrollbar-stacking-browser.test.mjs
         env:
           ATELIER_UI_BROWSER_PROOF: '1'
+      - run: npm test
       - run: npm run contract
       - run: npm run egress:check
       - run: npm run migrations:check
