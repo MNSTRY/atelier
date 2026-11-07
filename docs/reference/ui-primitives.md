@@ -149,11 +149,21 @@ scrollbars.
 - **Panel or drawer**: mount the hidden thumb after its own scroll viewport
   in a positioned wrapper aligned to the viewport's top and inline end.
   Pass `viewport` and `thumb`. Provide a measured `content` element or call
-  `refresh()` when its contents change.
+  `refresh()` when its contents change. The shared styles isolate the viewport
+  and its immediate frame, and place the sibling thumb above the viewport.
+  Content can use local layers without covering the thumb. Keep header chrome
+  and outer overlays outside this frame; render dialogs in the top layer or
+  the host's existing overlay portal. Do not raise page sections above scroll
+  chrome with global layer values.
 - **Horizontal carousel**: use its existing scrubber. It shares the
   `--system-scrollbar-thumb` color and defaults to a transparent rail. The
   carousel still owns looping, snap, and scrub gestures.
 
 Use `--system-scrollbar-thumb`, `--system-scrollbar-thumb-hover`, and
-`--system-scrollbar-layer` for host theming. Call `destroy()` on unmount.
+`--system-scrollbar-layer` for host theming. The layer is local to an element
+scroll frame. For a document scrollbar, the host owns the document layer order:
+isolate its content root separately from the thumb, persistent chrome and
+overlay portals. A document thumb cannot escape an ancestor stacking context.
+Call `destroy()` on unmount. Element frames require browser support for `:has()`
+(current Chromium, Firefox and Safari); older engines retain native scrolling.
 Native renderers keep platform-specific scrolling and indicator ownership.
