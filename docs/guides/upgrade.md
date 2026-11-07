@@ -9,6 +9,13 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.23
+
+Element scrollbars now contain local stacking layers within their viewport and
+frame. Keep persistent chrome and outer overlay portals outside that frame.
+The existing sibling-thumb markup and theme variables remain unchanged.
+Engines without relational-selector support retain native scrolling.
+
 ## Upgrading to 0.2.0-alpha.22
 
 Document overlay scrollbars now stay anchored to the viewport and follow window scroll events. The public API is unchanged.
