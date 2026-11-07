@@ -131,12 +131,14 @@ export const scrollbarStyles = `
 @media (pointer: fine) and (forced-colors: none) {
   [data-overlay-scrollbar] { scrollbar-width: none; scrollbar-gutter: auto }
   [data-overlay-scrollbar]::-webkit-scrollbar { display: none }
+  /* Content layers stay inside their viewport; the thumb stays inside its frame. */
+  [data-overlay-scrollbar]:not(html), :has(> [data-overlay-scrollbar]:not(html)) { isolation: isolate }
   [data-overlay-scrollbar] ~ .system-scroll-thumb:not([hidden]),
   html[data-overlay-scrollbar]:not([data-scroll-locked]) .system-scroll-thumb[data-document-thumb]:not([hidden]) {
     display: block; inset-inline-end: 0; width: 16px;
     cursor: grab; touch-action: none; user-select: none;
   }
-  [data-overlay-scrollbar] ~ .system-scroll-thumb { position: absolute }
+  [data-overlay-scrollbar] ~ .system-scroll-thumb { position: absolute; z-index: var(--system-scrollbar-layer, 10) }
   html[data-overlay-scrollbar] .system-scroll-thumb[data-document-thumb] { position: fixed; z-index: var(--system-scrollbar-layer, 10) }
   .system-scroll-thumb::before {
     content: ''; position: absolute; inset: 0 4px 0 6px;

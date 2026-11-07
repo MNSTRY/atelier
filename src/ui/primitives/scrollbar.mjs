@@ -6,6 +6,7 @@
 export function enhanceOverlayScrollbar({ thumb, viewport = document, header, content }) {
   if (!thumb || !('ResizeObserver' in window)) return
   const page = viewport === document
+  if (!page && !CSS.supports('selector(:has(*))')) return
   const scrollHost = page ? window : viewport
   const scroller = page ? document.scrollingElement ?? document.documentElement : viewport
   const styleTarget = page ? document.documentElement : viewport

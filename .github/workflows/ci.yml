@@ -31,6 +31,12 @@ jobs:
       - run: npm ci
       - run: npm run syntax:check
       - run: npm test
+      - name: install scrollbar proof browsers
+        run: npx playwright install --with-deps chromium webkit
+      - name: verify scrollbar stacking and interaction
+        run: node --test test/ui-scrollbar-browser.test.mjs test/ui-scrollbar-stacking-browser.test.mjs
+        env:
+          ATELIER_UI_BROWSER_PROOF: '1'
       - run: npm run contract
       - run: npm run egress:check
       - run: npm run migrations:check

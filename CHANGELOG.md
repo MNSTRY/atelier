@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-alpha.23
+
+Keep element scrollbar thumbs above local content layers and contain each
+scroll frame below outer chrome and overlays. Native scroll ownership,
+transparent tracks and theme tokens are unchanged.
+
 ## 0.2.0-alpha.22
 
 Keep the document scrollbar thumb fixed below the header and track scroll events and position on the window. Nested scrollbars continue to follow their own scroll viewport.
