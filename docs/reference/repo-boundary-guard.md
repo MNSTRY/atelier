@@ -426,7 +426,9 @@ unknown encodings are immediate bytes only. Reports include `depthReached` and
 total entry/expanded counts. Flat coverage continues to refuse nested ZIPs.
 
 Declared artifacts using `.md` or `.kg.json` outer names do not escape semantic
-review: detected assignments remain blocking with their values redacted. A
+review: detected assignments remain blocking with their values redacted. Invalid
+v2 configuration refuses before any graph, staged evidence or semantic content
+is read; it cannot disable redaction and fall back to legacy reporting. A
 review marker inside the container cannot approve those changes. The diagnostic
 requires source-owner review rather than echoing stored member contents.
 

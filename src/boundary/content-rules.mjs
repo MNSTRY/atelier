@@ -795,7 +795,7 @@ export function scanStagedRepository({
 
 function scanRevisionRange({ repoRoot, base, tip, rules, exceptions, repo, gitRunner, artifactContext = null }) {
   const acquired = artifactGitOutput(repoRoot, contentDiffArgs([base, tip]), { runner: gitRunner, artifactContext })
-  if (!acquired.ok) return { acquired, keyed: [], diagnostics: [], bytes: 0, blobs: [] }
+  if (!acquired.ok) return { acquired, keyed: [], diagnostics: artifactContext ? [incompleteDiagnostic({ repo, message: 'artifact evidence acquisition did not complete', details: { reason: acquired.code } })] : [], bytes: 0, blobs: [] }
   const sections = parseDiffSections(acquired.stdout)
   const binary = readBinaryChanges({ repoRoot, revisions: [base, tip], sections, rules, exceptions, repo, gitRunner, artifactContext })
   const findings = [...scanAddedContent({ files: contentFilesFor(sections, artifactContext, repo), rules, exceptions, repo }), ...binary.findings]
@@ -823,16 +823,16 @@ function findingKey(finding) {
  */
 function scanCommit({ repoRoot, commit, parents, empty, rules, exceptions, repo, gitRunner, artifactContext = null }) {
   if (parents.length <= 1) return scanRevisionRange({ repoRoot, base: parents[0] ?? empty, tip: commit, rules, exceptions, repo, gitRunner, artifactContext })
-  const read = parents
-    .map((parent) => scanRevisionRange({ repoRoot, base: parent, tip: commit, rules, exceptions, repo, gitRunner, artifactContext }))
-    .filter((scan) => scan.acquired.ok)
+  const attempts = parents.map((parent) => scanRevisionRange({ repoRoot, base: parent, tip: commit, rules, exceptions, repo, gitRunner, artifactContext }))
+  const failures = artifactContext ? attempts.filter(scan => !scan.acquired.ok).flatMap(scan => scan.diagnostics) : []
+  const read = attempts.filter(scan => scan.acquired.ok)
   if (read.length === 0) return { acquired: { ok: false, code: 'merge-unreadable' }, keyed: [], diagnostics: [], bytes: 0, blobs: [] }
   const complete = read.filter((scan) => scan.diagnostics.length === 0)
   // Any complete parent diff yields the same findings; the smallest is the one
   // that does not re-read what the other parent already published.
   const reference = complete.length > 0 ? complete.reduce((small, scan) => (scan.bytes < small.bytes ? scan : small)) : read[0]
   const keyed = reference.keyed.filter(([key]) => complete.every((scan) => scan === reference || scan.keyed.some(([other]) => other === key)))
-  const diagnostics = artifactContext?.failed || complete.length === 0 ? read.flatMap((scan) => scan.diagnostics) : []
+  const diagnostics = [...(artifactContext?.failed || complete.length === 0 ? read.flatMap((scan) => scan.diagnostics) : []), ...failures]
   // Evidence counts once, as the diff the commit is judged by.
   return { acquired: reference.acquired, keyed, diagnostics, bytes: reference.bytes, blobs: reference.blobs }
 }
@@ -879,6 +879,10 @@ export function scanPushUpdate({
   aggregateLimitBytes = maxBytes,
   artifactContext = null,
 } = {}) {
+  const finish = result => {
+    if (artifactContext?.failed) result.diagnostics.push(incompleteDiagnostic({ repo, message: 'shared artifact context failed; push coverage is incomplete', details: { reason: 'artifact-context-failed' } }))
+    return result
+  }
   const base = pushRangeBase(repoRoot, update.remoteSha, { runner: gitRunner, artifactContext })
   const net = scanRevisionRange({ repoRoot, base, tip: update.localSha, rules, exceptions, repo, gitRunner, artifactContext })
   if (!net.acquired.ok) {
@@ -905,7 +909,7 @@ export function scanPushUpdate({
   const listed = artifactGitOutput(repoRoot, ['rev-list', '--topo-order', '--reverse', '--parents', `--max-count=${maxCommits + 1}`, update.localSha, '--not', ...(base === update.remoteSha ? [base] : []), ...scope.args], { runner: gitRunner, artifactContext })
   if (!listed.ok) {
     diagnostics.push(incompleteDiagnostic({ repo, message: 'the commits in this push could not be listed', details: { reason: listed.code } }))
-    return { findings, diagnostics, bytes }
+    return finish({ findings, diagnostics, bytes })
   }
   const commits = listed.stdout.split('\n').filter(Boolean).map((line) => line.split(' '))
   if (commits.length > maxCommits) {
@@ -914,10 +918,10 @@ export function scanPushUpdate({
       message: `this push carries more than ${maxCommits} commits that ${scope.label}, more than are judged one by one; push it in smaller parts, an earlier commit first (git push <remote> <commit>:<ref>)`,
       details: { reason: 'push-range-too-long', limit: maxCommits },
     }))
-    return { findings, diagnostics, bytes }
+    return finish({ findings, diagnostics, bytes })
   }
   // One commit straight on the remote's tip is the endpoint change already judged.
-  if (commits.length === 1 && commits[0].length === 2 && commits[0][1] === base) return { findings, diagnostics, bytes }
+  if (commits.length === 1 && commits[0].length === 2 && commits[0][1] === base) return finish({ findings, diagnostics, bytes })
   const empty = emptyTreeFor(repoRoot, { runner: gitRunner, artifactContext })
   for (const [commit, ...parents] of commits) {
     const step = scanCommit({ repoRoot, commit, parents, empty, rules, exceptions, repo, gitRunner, artifactContext })
@@ -949,7 +953,7 @@ export function scanPushUpdate({
       break
     }
   }
-  return { findings, diagnostics, bytes }
+  return finish({ findings, diagnostics, bytes })
 }
 
 /**

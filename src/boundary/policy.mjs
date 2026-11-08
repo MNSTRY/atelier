@@ -705,6 +705,7 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
       break
     }
   }
+  if (artifactContext?.failed) findings.push(finding({ severity: 'error', code: 'content-scan-incomplete', repo: target.name, message: 'shared artifact context failed; push coverage is incomplete', details: { reason: 'artifact-context-failed' } }))
   const errors = findings.filter((item) => item.severity === 'error')
   return { ok: errors.length === 0, repo: target.name, updates, findings, errors, warnings: findings.filter((item) => item.severity !== 'error'), ...(artifactContext ? { artifactCoverage: artifactContext.coverage, artifactWorkBytes: artifactContext.workBytes } : {}) }
 }
@@ -796,6 +797,12 @@ function promotionFindings({ policy, project, graph }) {
 
 export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false, delegations = null, ownerKeys = null, now = Date.now(), hookIndex = null } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
+  // Invalid successor configuration cannot disable redaction and then inspect
+  // member-derived semantic values through the legacy document scanner.
+  if (validationErrors.length && policy?.schema !== BOUNDARY_POLICY_SCHEMA) {
+    const errors = [finding({ severity: 'error', code: 'boundary-policy-invalid', message: 'boundary artifact policy or schema is unsupported' })]
+    return { ok: false, schema: policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? BOUNDARY_POLICY_SCHEMA_V2 : BOUNDARY_POLICY_SCHEMA, mode: null, graphCounts: null, artifactCoverage: [], findings: errors, errors, warnings: [] }
+  }
   let graph = null
   const artifactCoverage = []
   const artifactContext = !validationErrors.length && policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? createArtifactScanContext(policy.artifactScan, resolveContentRules(policy)) : null
@@ -828,6 +835,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     findings.push(...semanticDiffFindings({ targets, gitExecutable, artifactContext }))
     if (!validationErrors.length || policy?.schema !== BOUNDARY_POLICY_SCHEMA_V2) findings.push(...stagedContentFindings({ policy, targets, gitExecutable, artifactCoverage, artifactContext }))
   }
+  if (artifactContext?.failed) findings.push(finding({ severity: 'error', code: 'content-scan-incomplete', message: 'shared artifact context failed; staged coverage is incomplete', details: { reason: 'artifact-context-failed' } }))
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')
   return {

@@ -1907,6 +1907,20 @@ test('v2 redacts stored artifact semantic values under both document suffixes an
     assert.equal(report.ok, false)
     assert.ok(report.errors.some(f => f.code === 'semantic-field-change-needs-review' && f.path === file))
     assert.equal(JSON.stringify(report).includes(inventedValue), false)
+    for (const mutate of [
+      value => { value.artifactScan.limits.timeoutMs = 30001 },
+      value => { value.artifactScan.artifacts = [null] },
+      value => { value.contentRules = [] },
+      value => { value.schema = 'mnstry.atelier-boundary-policy@v999' },
+    ]) {
+      const invalid = structuredClone(v2);mutate(invalid)
+      const refused = checkBoundaryPolicy({ project, policy: invalid, actor: 'author', staged: true })
+      assert.equal(refused.ok, false)
+      assert.equal(refused.graphCounts, null)
+      assert.deepEqual(refused.artifactCoverage, [])
+      assert.ok(refused.errors.some(f => f.code === 'boundary-policy-invalid'))
+      assert.equal(JSON.stringify(refused).includes(inventedValue), false)
+    }
     git(site, ['reset', '--quiet', file]);fs.unlinkSync(path.join(site, file))
   }
 })
@@ -1988,4 +2002,37 @@ test('v2 verifies the native blob hash in SHA-256 Git repositories too', t => {
   const result = scanStagedRepository({ repoRoot: root, repo: 'example-site', artifactContext: context })
   assert.deepEqual(result.diagnostics, [])
   assert.equal(context.coverage[0].blob, v2.artifactScan.artifacts[0].blob)
+})
+
+
+test('v2 cannot pass after a discarded merge-parent acquisition or empty-history metadata failure', t => {
+  const { site, policy, project } = makeWorkspace(t), bytes = Buffer.from([0])
+  fs.writeFileSync(path.join(site, 'sample.bin'), bytes);git(site, ['add', '.'])
+  const v2 = artifactPolicy(site, policy, 'sample.bin', bytes)
+  const [base, tip, left, right] = ['b', 'c', 'd', 'e'].map(value => value.repeat(40))
+  for (const failure of ['merge-parent', 'empty-history']) {
+    const trace = []
+    const runner = (_command, args) => {
+      trace.push(args)
+      if (args.includes('rev-parse')) {
+        if (args.includes('--show-object-format')) return failure === 'empty-history' ? { status: 1, stdout: '' } : { status: 0, stdout: 'sha1\n' }
+        return { status: 0, stdout: base + '\n' }
+      }
+      if (args.includes('rev-list')) return { status: 0, stdout: failure === 'empty-history' ? '' : [tip, left, right].join(' ') + '\n' }
+      if (args.includes('diff')) return args.includes(right) ? { status: 1, stdout: '' } : { status: 0, stdout: '' }
+      return { status: 0, stdout: '' }
+    }
+    const update = { localRef: 'refs/heads/sample', localSha: tip, remoteRef: 'refs/heads/sample', remoteSha: base }
+    const context = createArtifactScanContext(v2.artifactScan)
+    const scanned = scanPushUpdate({ repoRoot: site, repo: 'example-site', update, artifactContext: context, gitRunner: runner })
+    assert.equal(context.failed, true)
+    assert.deepEqual(context.coverage, [])
+    assert.ok(scanned.diagnostics.some(f => f.code === 'content-scan-incomplete'), failure)
+    trace.length = 0
+    const report = checkPushContent({ project, policy: v2, updates: [update, update], cwd: site, gitRunner: runner })
+    assert.equal(report.ok, false, failure)
+    assert.deepEqual(report.artifactCoverage, [])
+    assert.ok(report.errors.some(f => f.details?.reason === 'artifact-context-failed'))
+    assert.equal(trace.filter(args => args.includes('rev-list')).length, 1, 'later refs are skipped only with an explicit blocking diagnostic')
+  }
 })
