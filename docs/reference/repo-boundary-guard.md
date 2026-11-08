@@ -347,3 +347,101 @@ Every field is required, because the exception **is** the approval record. There
 is no blanket repo-wide skip: `paths` must name real paths, and a bare `*` or
 `**` is rejected as disabling the rule rather than excepting it. `reason` must
 say something a reviewer can act on. Removing the exception re-blocks the path.
+
+## Opt-in V2 artifact scans
+
+Contract discussion: [bounded artifact processing](https://github.com/MNSTRY/atelier/issues/247).
+The `mnstry.atelier-boundary-policy@v2` successor retains the existing boundary
+policy identity lineage. V1 files and its 8 MiB binary file, 32 MiB binary aggregate
+and 64 MiB check aggregate defaults are unchanged. No `ext` member changes scan
+authority. An older schema validator/staged guard refuses the unknown v2 schema.
+Historical push-only dispatchers did not validate the policy version: they are
+not v2 consumers and must be upgraded before this route is used. Their raw-byte
+check cannot establish decoded-entry coverage, even on a small archive. The v2
+dispatcher now refuses unknown policy versions explicitly.
+
+V2 requires `artifactScan` with explicit `artifacts` and `limits`. Each binding
+names the existing policy repository, exact repository-relative `path`, Git
+`blob` object ID (40 or 64 lowercase hex), `sha256` (64 lowercase hex), `bytes`
+and `coverage`. Coverage is `raw-bytes` or `zip-flat-entries`. Bind every introduced
+version that a push carries, including historical blobs removed from the tip.
+The policy has at most 128 bindings and 128 content rules. An altered blob at a
+bound path refuses until its new identity is explicitly reviewed and bound.
+
+The required limits are `maxArtifactBytes`, `maxExpandedBytes`, `maxEntryBytes`,
+`maxEntries`, `maxWorkBytes` and `timeoutMs`, all positive integers. Hard maxima
+are respectively 128 MiB, 128 MiB, 32 MiB, 1024, 512 MiB and 30000 ms. Choose
+smaller limits appropriate to the authorized artifact and host. These are caps,
+not reservations or permission to run heavy work. No purchase or runtime fallback
+is performed. Ordinary unbound evidence retains its existing per-file/diff
+ceilings; v2's explicit shared work budget covers the check instead of silently
+retaining v1's aggregate cap for its larger admitted profile.
+
+Acquisition checks immutable Git object type, declared size, exact complete
+bytes, the Git object hash and separate SHA-256. Caller Git settings and an
+alternate committing index cannot substitute a working-tree file. Full finite
+artifact units are matched as Latin1, preserving the existing binary regex
+semantics, in a synchronous child process with a deadline, bounded input/output
+and a 384 MiB JavaScript old-space cap. That heap cap is **not** an OS resident
+memory reservation: finite Buffers/decoded units also use memory. The host owns
+machine capacity. No source or archive content is executed; the child has no
+caller `NODE_OPTIONS`, preloads, credentials or network transport. The profile
+and rule snapshot are digest-bound to each returned coverage record.
+
+V2 counts repeated raw acquisition and expanded entry bytes, plus ordinary diff
+and binary bytes, across refs, introduced commits and merge-parent comparisons.
+An identity may be read again and each read still consumes work. Integrity
+deduplication does not waive processing cost. The deadline bounds each declared
+artifact scan, including Git acquisition and matching; commit-count and work
+limits separately bound the overall check. Normal small-file checks retain their
+existing regex semantics; this profile does not replace their execution path.
+
+`zip-flat-entries` covers the entire raw container and every immediate entry's
+name and complete uncompressed bytes. Entry matching uses the virtual scope
+`archive-path!/entry-path`. Path rules judge entry names; content rules judge
+complete entry bytes. An outer-path content exception applies only to raw bytes,
+never to decoded entries. Findings report outer path and entry index without
+echoing entry names, matched contents or raw child errors. No files are extracted.
+
+The ZIP profile intentionally supports a narrow subset: contiguous local entries
+and matching central-directory order, methods stored/DEFLATE, ASCII or strict
+UTF-8 names, and an uncommented single-disk directory. It verifies local/central
+headers, complete compressed consumption, actual decoded sizes and CRC32. It
+refuses extras, comments, data descriptors, encryption, ZIP64, unsupported methods,
+links/special files, duplicate/case-ambiguous names, unsafe/ambiguous paths, trailing
+bytes and all declared size/count/expansion limits. It refuses recognized nested
+ZIP/gzip/bzip2/xz/7z/RAR/zstd/tar signatures and corresponding filename suffixes.
+It is **not** a recursive or universal container decoder: other payload encodings
+are scanned only as immediate entry bytes, never claimed as semantic decoding.
+Use a separately supported profile before requesting other coverage. Raw-only
+coverage never attests ZIP entries or satisfies a decoded-entry requirement.
+
+Successful JSON reports include `artifactCoverage` (exact identities, profile
+digest, declared coverage, entry count and expanded size). Push reports also
+include `artifactWorkBytes`. These are observations from that check, not durable
+approval receipts, publisher authentication, artifact rights or permission to
+publish. The next check acquires and verifies the objects again. Ordinary content
+violations and incomplete coverage remain separate blocking findings. A rule
+exception cannot waive unsupported coverage, checksum mismatch, timeout, worker
+failure, malformed archive, truncation or aggregate exhaustion.
+
+### Migration and rollback
+
+Keep the current v1 policy as the rollback source. After reviewing the intended
+coverage and host budgets, explicitly author a v2 policy with the existing actors,
+repositories and rules, change its schema to `mnstry.atelier-boundary-policy@v2`,
+and set `contractVersion` to `2.0.0` if present. Add exact artifact bindings and
+limits; do not infer identity or approval from a filename. The existing project
+`boundaries.policyPath` selects this policy. There is no automatic migration.
+
+Adopt a supporting reviewed package through the consumer's normal ownership
+process, then run the existing `atelier boundary check --staged --json` and
+normal installed pre-commit/pre-push hooks. Read the actual candidate-bound
+coverage and failures. A source merge does not update an installed package.
+Unsupported profiles refuse. Verify both installed staged and push dispatchers
+are the supporting version; an old raw-only push result is not v2 acceptance.
+No hook bypass or installed patch
+is part of this route. Restore the retained v1 policy to roll back. Large evidence
+then refuses under v1's original limits. Fix the source/profile or obtain the
+required resources through the existing owner before rerunning a failed check;
+retain its failed outcome. No cached passing receipt overrides a fresh check.

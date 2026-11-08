@@ -7,6 +7,8 @@ import { matchesPathPattern } from '../project/path-match.mjs'
 import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 import {
   CHECK_AGGREGATE_MAX_BYTES,
+  createArtifactScanContext,
+  validateArtifactScan,
   canonicalDiffArgs,
   gitOutputResult,
   parseDiffSections,
@@ -21,6 +23,7 @@ import {
 import { delegationsPathFor, loadDelegationsFile, ownerKeysForCommand, resolveDelegation, validateDelegationsDocument } from './delegation.mjs'
 
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
+export const BOUNDARY_POLICY_SCHEMA_V2 = 'mnstry.atelier-boundary-policy@v2'
 export const PROMOTE_EVENT_SCHEMA = 'git-promote-event@v1'
 // Promote events append to a durable governance ledger; lines written before the
 // contract-stability epoch carry the legacy schema id and must stay readable.
@@ -138,10 +141,12 @@ function validAudienceList(value, label, required = false) {
 export function validateBoundaryPolicy(policy, project = null) {
   const errors = []
   if (!isObject(policy)) return ['boundary policy must be a JSON object']
-  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'contractVersion', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath', 'ext'])))
-  if (policy.schema !== BOUNDARY_POLICY_SCHEMA) errors.push(`schema must be ${BOUNDARY_POLICY_SCHEMA}`)
-  if (policy.contractVersion != null && !(typeof policy.contractVersion === 'string' && /^1\.[0-9]+\.[0-9]+$/.test(policy.contractVersion))) {
-    errors.push('contractVersion must be a 1.x.y version')
+  const v2 = policy.schema === BOUNDARY_POLICY_SCHEMA_V2
+  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'contractVersion', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath', 'ext', ...(v2 ? ['artifactScan'] : [])])))
+  if (![BOUNDARY_POLICY_SCHEMA, BOUNDARY_POLICY_SCHEMA_V2].includes(policy.schema)) errors.push(`schema must be ${BOUNDARY_POLICY_SCHEMA} or ${BOUNDARY_POLICY_SCHEMA_V2}`)
+  if (v2) errors.push(...validateArtifactScan(policy.artifactScan, resolveContentRules(policy)))
+  if (policy.contractVersion != null && !(typeof policy.contractVersion === 'string' && (v2 ? /^2\.[0-9]+\.[0-9]+$/ : /^1\.[0-9]+\.[0-9]+$/).test(policy.contractVersion))) {
+    errors.push(`contractVersion must be a ${v2 ? 2 : 1}.x.y version`)
   }
   errors.push(...extErrors(policy, '/'))
   if (!VALID_BOUNDARY_MODES.has(policy.mode)) errors.push('mode must be strict or legacy-warning')
@@ -165,6 +170,10 @@ export function validateBoundaryPolicy(policy, project = null) {
         errors.push(`contentRuleExceptions[${index}].repo ${name} is not declared in repos`)
       }
     }
+  }
+
+  if (v2 && Array.isArray(policy.artifactScan?.artifacts)) {
+    for (const item of policy.artifactScan.artifacts) if (!isObject(item) || !Object.hasOwn(isObject(repos) ? repos : {}, item.repo)) errors.push('artifact binding repository is not declared')
   }
 
   for (const [actorId, actor] of Object.entries(isObject(actors) ? actors : {})) {
@@ -599,20 +608,21 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
   return findings
 }
 
-function stagedContentFindings({ policy, targets, gitExecutable = 'git' }) {
+function stagedContentFindings({ policy, targets, gitExecutable = 'git', artifactCoverage = [] }) {
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
   const findings = []
+  const artifactContext = policy.schema === BOUNDARY_POLICY_SCHEMA_V2 ? createArtifactScanContext(policy.artifactScan, rules) : null
   let totalBytes = 0
   for (const [repo, target] of targets) {
     if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) {
       findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
       continue
     }
-    const result = scanStagedRepository({ repoRoot: target.root, rules, exceptions, repo: repo.name, gitExecutable, indexFile: target.indexFile })
+    const result = scanStagedRepository({ repoRoot: target.root, rules, exceptions, repo: repo.name, gitExecutable, indexFile: target.indexFile, artifactContext })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
-    if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
+    if (!artifactContext && totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
       findings.push(finding({
         severity: 'error',
         code: 'content-scan-incomplete',
@@ -622,6 +632,7 @@ function stagedContentFindings({ policy, targets, gitExecutable = 'git' }) {
       break
     }
   }
+  if (artifactContext) artifactCoverage.push(...artifactContext.coverage)
   return findings
 }
 
@@ -667,15 +678,20 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
   }
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
+  if (policy?.schema !== BOUNDARY_POLICY_SCHEMA && validateBoundaryPolicy(policy, project).length) {
+    const errors = [{ severity: 'error', code: 'boundary-policy-invalid', message: 'boundary artifact policy or schema is unsupported' }]
+    return { ok: false, findings: errors, errors, warnings: [] }
+  }
+  const artifactContext = policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? createArtifactScanContext(policy.artifactScan, rules) : null
   const findings = []
   let totalBytes = 0
   for (const update of updates) {
-    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, remote, gitRunner, maxBytes: CHECK_AGGREGATE_MAX_BYTES - totalBytes, aggregateLimitBytes: CHECK_AGGREGATE_MAX_BYTES })
+    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, remote, gitRunner, maxBytes: CHECK_AGGREGATE_MAX_BYTES - totalBytes, aggregateLimitBytes: CHECK_AGGREGATE_MAX_BYTES, artifactContext })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
     // The per-commit scan reports its own budget refusal; say it once.
     if (result.diagnostics.some((item) => item.details?.reason === 'push-evidence-too-large')) break
-    if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
+    if (!artifactContext && totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
       findings.push(finding({
         severity: 'error',
         code: 'content-scan-incomplete',
@@ -687,7 +703,7 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
     }
   }
   const errors = findings.filter((item) => item.severity === 'error')
-  return { ok: errors.length === 0, repo: target.name, updates, findings, errors, warnings: findings.filter((item) => item.severity !== 'error') }
+  return { ok: errors.length === 0, repo: target.name, updates, findings, errors, warnings: findings.filter((item) => item.severity !== 'error'), ...(artifactContext ? { artifactCoverage: artifactContext.coverage, artifactWorkBytes: artifactContext.workBytes } : {}) }
 }
 
 export function auditContentRules({ project, policy, source = 'working-tree' } = {}) {
@@ -778,6 +794,7 @@ function promotionFindings({ policy, project, graph }) {
 export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false, delegations = null, ownerKeys = null, now = Date.now(), hookIndex = null } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
+  const artifactCoverage = []
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
   if (!stagedOnly) {
     graph = buildGraph(project)
@@ -805,14 +822,15 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     findings.push(...listed.failures.map(({ repo, reason }) => unscannableRepoFinding(repo, `staged paths could not be listed (${reason})`)))
     findings.push(...forbiddenPathFindings({ policy, stagedPaths: listed.paths }))
     findings.push(...semanticDiffFindings({ targets, gitExecutable }))
-    findings.push(...stagedContentFindings({ policy, targets, gitExecutable }))
+    if (!validationErrors.length || policy?.schema !== BOUNDARY_POLICY_SCHEMA_V2) findings.push(...stagedContentFindings({ policy, targets, gitExecutable, artifactCoverage }))
   }
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')
   return {
     ok: errors.length === 0,
     mode: policy?.mode ?? null,
-    schema: BOUNDARY_POLICY_SCHEMA,
+    schema: policy?.schema ?? BOUNDARY_POLICY_SCHEMA,
+    ...(policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? { artifactCoverage } : {}),
     graphCounts: graph?.counts ?? null,
     findings,
     errors,

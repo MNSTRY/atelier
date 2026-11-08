@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { deflateRawSync } from 'node:zlib'
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -19,6 +21,7 @@ import {
 } from '../src/boundary/policy.mjs'
 import {
   DEFAULT_CONTENT_RULES,
+  createArtifactScanContext,
   BINARY_FILE_MAX_BYTES,
   CHECK_AGGREGATE_MAX_BYTES,
   parsePushRefInput,
@@ -1663,4 +1666,185 @@ test('staged-check text keeps errors ahead of legacy warnings, prioritizes unres
   assert.equal(shown.length, 50, text.stdout)
   assert.ok(shown.every((line) => line.startsWith('error ')), 'blocking errors are not displaced by legacy warnings')
   assert.ok(lines.includes(`${report.findings.length - 50} more not shown; --json lists every finding`), text.stdout)
+})
+
+const ARTIFACT_LIMITS = { maxArtifactBytes: 32 * 1024 * 1024, maxExpandedBytes: 32 * 1024 * 1024, maxEntryBytes: 16 * 1024 * 1024, maxEntries: 64, maxWorkBytes: 128 * 1024 * 1024, timeoutMs: 4000 }
+function artifactPolicy(site, policy, file, bytes, coverage = 'raw-bytes') {
+  return { ...policy, schema: 'mnstry.atelier-boundary-policy@v2', contractVersion: '2.0.0', artifactScan: {
+    artifacts: [{ repo: 'example-site', path: file, blob: git(site, ['rev-parse', `:${file}`]), sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, coverage }],
+    limits: { ...ARTIFACT_LIMITS },
+  } }
+}
+function syntheticZip(entries) {
+  const locals = [], central = []
+  let offset = 0
+  for (const [name, content, method = 8] of entries) {
+    const nameBytes = Buffer.from(name), bytes = Buffer.from(content), packed = method === 8 ? deflateRawSync(bytes) : bytes
+    let crc = 0xffffffff
+    for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : crc >>> 1 }
+    crc = (crc ^ 0xffffffff) >>> 0
+    const local = Buffer.alloc(30), directory = Buffer.alloc(46)
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x800, 6); local.writeUInt16LE(method, 8)
+    local.writeUInt32LE(crc, 14); local.writeUInt32LE(packed.length, 18); local.writeUInt32LE(bytes.length, 22); local.writeUInt16LE(nameBytes.length, 26)
+    directory.writeUInt32LE(0x02014b50, 0); directory.writeUInt16LE(20, 4); directory.writeUInt16LE(20, 6); directory.writeUInt16LE(0x800, 8); directory.writeUInt16LE(method, 10)
+    directory.writeUInt32LE(crc, 16); directory.writeUInt32LE(packed.length, 20); directory.writeUInt32LE(bytes.length, 24); directory.writeUInt16LE(nameBytes.length, 28); directory.writeUInt32LE(offset, 42)
+    locals.push(local, nameBytes, packed); central.push(directory, nameBytes); offset += local.length + nameBytes.length + packed.length
+  }
+  const directory = Buffer.concat(central), end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, directory, end])
+}
+
+// Complete finite-unit matching is preserved beyond any reader/chunk seam.
+test('v2 binds a large immutable staged blob and preserves full-unit regex semantics', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const bytes = Buffer.concat([Buffer.from([0]), Buffer.from('PREFIX'), Buffer.alloc(BINARY_FILE_MAX_BYTES + 100, 120), Buffer.from('SUFFIX')])
+  fs.writeFileSync(path.join(site, 'sample.bin'), bytes); git(site, ['add', 'sample.bin'])
+  const v2 = artifactPolicy(site, policy, 'sample.bin', bytes)
+  v2.contentRules = [{ id: 'synthetic-endpoints', pattern: 'PREFIX[\\s\\S]*SUFFIX', severity: 'error' }]
+  const report = checkBoundaryPolicy({ project, policy: v2, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some(f => f.rule === 'synthetic-endpoints'))
+  assert.ok(!report.errors.some(f => f.code === 'content-scan-incomplete'), JSON.stringify(report.errors))
+  assert.equal(report.artifactCoverage.length, 1)
+  assert.equal(report.artifactCoverage[0].sha256, v2.artifactScan.artifacts[0].sha256)
+  assert.equal(report.artifactCoverage[0].coverage, 'raw-bytes')
+  assert.ok(checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true }).errors.some(f => f.code === 'content-scan-incomplete'), 'v1 still refuses the same large blob')
+})
+
+test('v2 complete ZIP entries expose compressed content and names without echoing either', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const marker = 'invented-private-marker', bytes = syntheticZip([['notes.txt', marker.repeat(40)], ['invoice.txt', 'Invented document', 0]])
+  assert.equal(bytes.toString('latin1').includes(marker), false)
+  fs.writeFileSync(path.join(site, 'sample.zip'), bytes); git(site, ['add', 'sample.zip'])
+  const v2 = artifactPolicy(site, policy, 'sample.zip', bytes, 'zip-flat-entries')
+  v2.contentRules = [{ id: 'synthetic-marker', pattern: marker, severity: 'error' }, { id: 'synthetic-path', kind: 'path', pattern: 'invoice', severity: 'error' }]
+  v2.contentRuleExceptions = [{ rule: 'synthetic-marker', repo: 'example-site', paths: ['sample.zip'], reason: 'Invented outer-byte exception only' }]
+  const report = checkBoundaryPolicy({ project, policy: v2, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some(f => f.rule === 'synthetic-marker' && f.details.coverage === 'entry-bytes'))
+  assert.ok(report.errors.some(f => f.rule === 'synthetic-path' && f.details.coverage === 'entry-path'))
+  assert.equal(report.artifactCoverage[0].entries, 2)
+  assert.ok(!JSON.stringify(report).includes(marker))
+  assert.ok(!JSON.stringify(report).includes('notes.txt'))
+  assert.ok(!JSON.stringify(report).includes('invoice.txt'))
+  const raw = structuredClone(v2); raw.artifactScan.artifacts[0].coverage = 'raw-bytes'
+  const rawReport = checkBoundaryPolicy({ project, policy: raw, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(rawReport.ok, true)
+  assert.equal(rawReport.artifactCoverage[0].coverage, 'raw-bytes')
+  assert.equal(rawReport.artifactCoverage[0].entries, 0, 'raw-only never claims entry coverage')
+})
+
+test('v2 ZIP profile refuses CRC/header/size/path/nesting/unsupported coverage instead of passing partial data', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const good = syntheticZip([['sample.txt', 'Invented sample text']])
+  const central = good.readUInt32LE(good.length - 6)
+  const cases = [
+    () => good.subarray(0, good.length - 1),
+    () => { const b = Buffer.from(good); b.writeUInt32LE(0, 14); return b },
+    () => { const b = Buffer.from(good); b.writeUInt32LE(0, central + 16); b.writeUInt32LE(0, 14); return b },
+    () => { const b = Buffer.from(good); b.writeUInt16LE(1, central + 8); b.writeUInt16LE(1, 6); return b },
+    () => { const b = Buffer.from(good); b.writeUInt16LE(8, central + 8); b.writeUInt16LE(8, 6); return b },
+    () => { const b = Buffer.from(good); b.writeUInt16LE(99, central + 10); b.writeUInt16LE(99, 8); return b },
+    () => { const b = Buffer.from(good); b.writeUInt16LE(1, good.length - 18); return b },
+    () => { const b = Buffer.from(good); b.writeUInt32LE(0xffffffff, central + 24); return b },
+    () => syntheticZip([['../outside.txt', 'Invented text']]),
+    () => syntheticZip([['sample.txt', 'one'], ['SAMPLE.txt', 'two']]),
+    () => syntheticZip([['nested.zip', good, 0]]),
+    () => syntheticZip([['opaque.bin', Buffer.from([0x50, 0x4b, 3, 4]), 0]]),
+    () => { const b = Buffer.from(good); b.writeUInt32LE((0xa000 << 16) >>> 0, central + 38); return b },
+  ]
+  for (const make of cases) {
+    const bytes = make()
+    fs.writeFileSync(path.join(site, 'sample.zip'), bytes); git(site, ['add', 'sample.zip'])
+    const v2 = artifactPolicy(site, policy, 'sample.zip', bytes, 'zip-flat-entries')
+    const report = checkBoundaryPolicy({ project, policy: v2, actor: 'author', staged: true, stagedOnly: true })
+    assert.ok(report.errors.some(f => f.code === 'content-scan-incomplete'), JSON.stringify(report))
+    assert.deepEqual(report.artifactCoverage, [])
+  }
+})
+
+test('v2 identity substitution, expansion/count caps, deadline and regex exhaustion fail closed', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const bytes = syntheticZip([['sample.txt', 'x'.repeat(10000)]])
+  fs.writeFileSync(path.join(site, 'sample.zip'), bytes); git(site, ['add', 'sample.zip'])
+  const v2 = artifactPolicy(site, policy, 'sample.zip', bytes, 'zip-flat-entries')
+  for (const change of [
+    value => { value.artifactScan.artifacts[0].sha256 = '0'.repeat(64) },
+    value => { value.artifactScan.artifacts[0].blob = '0'.repeat(40) },
+    value => { value.artifactScan.artifacts[0].bytes++ },
+    value => { value.artifactScan.limits.maxExpandedBytes = 10 },
+    value => { value.artifactScan.limits.maxEntryBytes = 10 },
+    value => { value.artifactScan.limits.timeoutMs = 1 },
+    value => { value.artifactScan.limits.maxWorkBytes = 1 },
+  ]) {
+    const value = structuredClone(v2); change(value)
+    const report = checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true })
+    assert.ok(report.errors.some(f => f.code === 'content-scan-incomplete'), JSON.stringify(report))
+    assert.deepEqual(report.artifactCoverage, [])
+  }
+  const hostile = Buffer.concat([Buffer.from([0]), Buffer.from('a'.repeat(80) + '!')])
+  fs.writeFileSync(path.join(site, 'sample.bin'), hostile); git(site, ['add', 'sample.bin'])
+  const regex = artifactPolicy(site, policy, 'sample.bin', hostile)
+  regex.contentRules = [{ id: 'synthetic-expensive', pattern: '(a+)+$' }]
+  regex.artifactScan.limits.timeoutMs = 300
+  const report = checkBoundaryPolicy({ project, policy: regex, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some(f => f.details?.reason === 'artifact-worker-incomplete'))
+})
+
+test('v2 shares actual work across refs and inspects introduced-and-removed artifact history', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const bytes = Buffer.concat([Buffer.from([0]), Buffer.from('invented-history-marker')])
+  fs.writeFileSync(path.join(site, 'sample.bin'), bytes); git(site, ['add', 'sample.bin'])
+  const v2 = artifactPolicy(site, policy, 'sample.bin', bytes)
+  v2.contentRules = [{ id: 'synthetic-history', pattern: 'invented-history-marker' }]
+  git(site, ['commit', '--quiet', '-m', 'synthetic artifact'])
+  const single = pushUpdate(site)
+  const once = checkPushContent({ project, policy: v2, updates: single, cwd: site, remote: 'origin' })
+  assert.ok(once.errors.some(f => f.rule === 'synthetic-history'))
+  const small = structuredClone(v2); small.artifactScan.limits.maxWorkBytes = once.artifactWorkBytes + 1
+  const repeated = checkPushContent({ project, policy: small, updates: [...single, ...single], cwd: site, remote: 'origin' })
+  assert.ok(repeated.errors.some(f => f.code === 'content-scan-incomplete'))
+  git(site, ['rm', '--quiet', 'sample.bin']); git(site, ['commit', '--quiet', '-m', 'remove synthetic artifact'])
+  const history = checkPushContent({ project, policy: v2, updates: pushUpdate(site), cwd: site, remote: 'origin' })
+  assert.ok(history.errors.some(f => f.rule === 'synthetic-history' && f.commit), 'tip absence cannot hide introduced history')
+})
+
+test('v2 retains staged object identity across working-tree edits and read failures, with shared ZIP caps', t => {
+  const { site, policy } = makeWorkspace(t)
+  const bytes = syntheticZip([['one.js', 'sessionStorage.setItem("sample", "one")'], ['two.txt', 'Invented sample']])
+  fs.writeFileSync(path.join(site, 'sample.zip'), bytes); git(site, ['add', 'sample.zip'])
+  const v2 = artifactPolicy(site, policy, 'sample.zip', bytes, 'zip-flat-entries')
+  fs.writeFileSync(path.join(site, 'sample.zip'), 'Unstaged substitute')
+  const run = (value, gitRunner = spawnSync) => scanStagedRepository({ repoRoot: site, repo: 'example-site', artifactContext: createArtifactScanContext(value.artifactScan), gitRunner })
+  const actual = run(v2)
+  assert.ok(actual.findings.some(f => f.rule === 'browser-persistence' && f.details.coverage === 'entry-bytes'), 'entry virtual path keeps existing rule path scope')
+  assert.deepEqual(actual.diagnostics, [])
+  for (const mutate of [
+    value => { value.artifactScan.limits.maxEntries = 1 },
+    value => { value.artifactScan.limits.maxExpandedBytes = 1 },
+  ]) {
+    const value = structuredClone(v2); mutate(value)
+    assert.ok(run(value).diagnostics.some(f => f.code === 'content-scan-incomplete'))
+  }
+  for (const failure of ['truncated', 'substituted', 'timed-out', 'nonblob']) {
+    const runner = (executable, args, options) => {
+      const result = spawnSync(executable, args, options)
+      if (args.includes('cat-file') && args.includes('-t') && failure === 'nonblob') return { status: 0, stdout: 'tree\n' }
+      if (args.includes('cat-file') && args.includes('blob')) {
+        if (failure === 'timed-out') return { ...result, status: null, error: { code: 'ETIMEDOUT' } }
+        if (failure === 'truncated') return { ...result, stdout: result.stdout.subarray(0, result.stdout.length - 1) }
+        if (failure === 'substituted') return { ...result, stdout: Buffer.alloc(bytes.length, 1) }
+      }
+      return result
+    }
+    assert.ok(run(v2, runner).diagnostics.some(f => f.code === 'content-scan-incomplete'), failure)
+  }
+})
+
+
+test('the supporting push dispatcher refuses unknown policy schemas rather than falling back to raw-only scanning', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  commit(site, 'README.md', '# Invented sample\n', 'sample')
+  const report = checkPushContent({ project, policy: { ...policy, schema: 'mnstry.atelier-boundary-policy@v999' }, updates: pushUpdate(site), cwd: site })
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some(f => f.code === 'boundary-policy-invalid'))
 })
