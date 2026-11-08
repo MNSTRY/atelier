@@ -1,0 +1,600 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-boundary-policy.v3.schema.json",
+  "$comment": "contract revision 3.0.0; exact decoded-leaf source-reference exceptions; v1/v2 unchanged. Migration: docs/reference/repo-boundary-guard.md",
+  "title": "mnstry.atelier-boundary-policy@v3",
+  "description": "Local repo boundary policy for enforcing private-domain and shared-repo placement in MNSTRY Atelier workspaces.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "mode",
+    "actors",
+    "repos",
+    "artifactScan"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-boundary-policy@v3"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^3\\.[0-9]+\\.[0-9]+$"
+    },
+    "mode": {
+      "enum": [
+        "strict",
+        "legacy-warning"
+      ]
+    },
+    "actors": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/actorId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/actorPolicy"
+      },
+      "minProperties": 1
+    },
+    "repos": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/repoName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/repoPolicy"
+      },
+      "minProperties": 1
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiresGitPromote": {
+          "type": "boolean"
+        },
+        "recordsPath": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      }
+    },
+    "forbiddenPaths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "contentRules": {
+      "description": "Rules judged against added lines and added file paths, not the whole tree. Omit to use the kit defaults.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/contentRule"
+      },
+      "uniqueItems": true,
+      "maxItems": 128
+    },
+    "contentRuleExceptions": {
+      "description": "Reviewable, per-repo, per-path carve-outs. An exception IS the approval record, which is why every field is required \u2014 a repo-specific decision must not live as a hardcoded pathspec inside shared guard infrastructure.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/contentRuleException"
+      },
+      "uniqueItems": true,
+      "maxItems": 128
+    },
+    "governanceLedgerPath": {
+      "$ref": "#/$defs/relativePath"
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+    },
+    "artifactScan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifacts",
+        "limits"
+      ],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repo",
+              "path",
+              "blob",
+              "sha256",
+              "bytes",
+              "coverage"
+            ],
+            "properties": {
+              "repo": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "pattern": "^(?!/)(?!.*[\\u0000-\\u001f\\u007f\\\\:])(?!(?:.*/)?\\.{1,2}(?:/|$))[^/]+(?:/[^/]+)*$"
+              },
+              "blob": {
+                "type": "string",
+                "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 134217728
+              },
+              "coverage": {
+                "enum": [
+                  "raw-bytes",
+                  "zip-flat-entries",
+                  "zip-tree-entries"
+                ]
+              },
+              "ext": {
+                "type": "object",
+                "description": "Reserved extension metadata. Ignored by this profile; no authority over identity, coverage or resource limits."
+              }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxArtifactBytes",
+            "maxExpandedBytes",
+            "maxEntryBytes",
+            "maxEntries",
+            "maxWorkBytes",
+            "timeoutMs"
+          ],
+          "properties": {
+            "maxArtifactBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 134217728
+            },
+            "maxExpandedBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 134217728
+            },
+            "maxEntryBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 33554432
+            },
+            "maxEntries": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            },
+            "maxWorkBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            },
+            "maxDepth": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4
+            },
+            "ext": {
+              "type": "object",
+              "description": "Reserved extension metadata. Ignored by this profile; no authority over identity, coverage or resource limits."
+            }
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension metadata. Ignored by this profile; no authority over identity, coverage or resource limits."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "artifacts": {
+                "contains": {
+                  "properties": {
+                    "coverage": {
+                      "const": "zip-tree-entries"
+                    }
+                  },
+                  "required": [
+                    "coverage"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "artifacts"
+            ]
+          },
+          "then": {
+            "properties": {
+              "limits": {
+                "required": [
+                  "maxDepth"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "contentRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pattern"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "description": "content matches added lines; path matches added file paths.",
+          "enum": [
+            "content",
+            "path"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      }
+    },
+    "contentRuleException": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "repo",
+        "paths",
+        "reason"
+      ],
+      "properties": {
+        "rule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo": {
+          "$ref": "#/$defs/repoName"
+        },
+        "paths": {
+          "description": "Specific paths only. A blanket wildcard is disabling the rule, not excepting it.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "not": {
+              "enum": [
+                "*",
+                "**",
+                ".",
+                "./",
+                "**/*",
+                "*/**"
+              ]
+            }
+          },
+          "uniqueItems": true
+        },
+        "reason": {
+          "description": "Why this usage is accepted, in terms a reviewer can act on.",
+          "type": "string",
+          "minLength": 8
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        },
+        "artifactEntry": {
+          "$ref": "#/$defs/artifactEntryExceptionBinding"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "artifactEntry"
+            ]
+          },
+          "then": {
+            "properties": {
+              "rule": {
+                "const": "browser-persistence"
+              },
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "pattern": "^(?!/)(?!.*[\\x00-\\x1f\\x7f\\\\:*?\\[\\]{}])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//).*(?<!/)$"
+                }
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 2048
+              }
+            }
+          }
+        }
+      ]
+    },
+    "actorId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]*$"
+    },
+    "actorPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "privateDomainRepo"
+      ],
+      "properties": {
+        "githubLogin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gitEmails": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          },
+          "uniqueItems": true
+        },
+        "privateDomainRepo": {
+          "$ref": "#/$defs/repoName"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "githubLogin"
+          ]
+        },
+        {
+          "required": [
+            "gitEmails"
+          ]
+        }
+      ]
+    },
+    "repoName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "repoPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "readBoundary",
+        "allowedAudiences",
+        "forbiddenAudiences",
+        "autoCommit"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "private_domain",
+            "shared",
+            "generated",
+            "archive"
+          ]
+        },
+        "ownerActor": {
+          "$ref": "#/$defs/actorId"
+        },
+        "readBoundary": {
+          "$ref": "#/$defs/audience"
+        },
+        "allowedAudiences": {
+          "$ref": "#/$defs/audienceList"
+        },
+        "forbiddenAudiences": {
+          "$ref": "#/$defs/audienceList"
+        },
+        "autoCommit": {
+          "enum": [
+            "allowed",
+            "blocked",
+            "guarded"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "private_domain"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "ownerActor"
+            ]
+          }
+        }
+      ]
+    },
+    "audience": {
+      "enum": [
+        "private",
+        "team",
+        "operator",
+        "staff",
+        "public",
+        "sensitive"
+      ]
+    },
+    "audienceList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/audience"
+      },
+      "uniqueItems": true
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "\\u0000"
+          },
+          {
+            "pattern": "^/"
+          },
+          {
+            "pattern": "^[a-z][a-z0-9+.-]*:"
+          }
+        ]
+      }
+    },
+    "artifactEntryChainMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^(?!/)(?!.*[\\x00-\\x1f\\x7f\\\\:*?\\[\\]{}])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//).*(?<!/)$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 33554432
+        },
+        "ext": {
+          "type": "object",
+          "description": "Ignored metadata only; no authority over first-class fields."
+        }
+      }
+    },
+    "artifactEntryExceptionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "blob",
+        "sha256",
+        "bytes",
+        "chain"
+      ],
+      "properties": {
+        "purpose": {
+          "const": "archival-source-reference"
+        },
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 134217728
+        },
+        "chain": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/artifactEntryChainMember"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Ignored metadata only; no authority over first-class fields."
+        }
+      }
+    }
+  }
+}

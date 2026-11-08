@@ -1695,6 +1695,173 @@ function syntheticZip(entries) {
   return Buffer.concat([...locals, directory, end])
 }
 
+function entryReferencePolicy(site, policy, outer, bytes, chain, coverage = 'zip-flat-entries') {
+  const value = artifactPolicy(site, policy, outer, bytes, coverage)
+  value.schema = 'mnstry.atelier-boundary-policy@v3'; value.contractVersion = '3.0.0'
+  if (coverage === 'zip-tree-entries') value.artifactScan.limits.maxDepth = 2
+  const parent = value.artifactScan.artifacts[0]
+  value.contentRuleExceptions = [{ rule: 'browser-persistence', repo: parent.repo, paths: [outer], reason: 'Invented inert archival source reference retained for review.', artifactEntry: {
+    purpose: 'archival-source-reference', blob: parent.blob, sha256: parent.sha256, bytes: parent.bytes,
+    chain: chain.map(([name, content]) => ({ path: name, sha256: createHash('sha256').update(content).digest('hex'), bytes: Buffer.byteLength(content) })),
+  } }]
+  return value
+}
+
+test('v3 exact decoded reference leaf receives an auditable disposition after complete scanning', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const leaf = '<p>Invented reference.</p><script>localStorage.getItem("sample")</script>'
+  const bytes = syntheticZip([['sample.html', leaf], ['plain.txt', 'Invented sibling.']])
+  fs.writeFileSync(path.join(site, 'bundle.zip'), bytes); git(site, ['add', 'bundle.zip'])
+  const value = entryReferencePolicy(site, policy, 'bundle.zip', bytes, [['sample.html', leaf]])
+  const report = checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, true, JSON.stringify(report.errors))
+  assert.equal(report.artifactCoverage[0].entries, 2)
+  const [disposition] = report.artifactCoverage[0].entryExceptionDispositions
+  assert.equal(disposition.applied, true); assert.equal(disposition.rule, 'browser-persistence')
+  assert.match(disposition.exceptionDigest, /^[a-f0-9]{64}$/)
+  assert.ok(!JSON.stringify(report).includes('sample.html'))
+  assert.ok(!JSON.stringify(report).includes('Invented inert'))
+})
+
+test('v3 reference identity is an ordered container chain and exceptions bind the profile snapshot', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const leaf = '<script>sessionStorage.getItem("invented")</script>', inner = syntheticZip([['leaf.html', leaf]])
+  const bytes = syntheticZip([['inner.zip', inner]])
+  fs.writeFileSync(path.join(site, 'bundle.zip'), bytes); git(site, ['add', 'bundle.zip'])
+  const value = entryReferencePolicy(site, policy, 'bundle.zip', bytes, [['inner.zip', inner], ['leaf.html', leaf]], 'zip-tree-entries')
+  const run = input => checkBoundaryPolicy({ project, policy: input, actor: 'author', staged: true, stagedOnly: true })
+  const report = run(value); assert.equal(report.ok, true, JSON.stringify(report.errors))
+  assert.equal(report.artifactCoverage[0].depthReached, 1)
+  assert.equal(report.artifactCoverage[0].entryExceptionDispositions[0].entryIndex, 1)
+  const changed = structuredClone(value); changed.contentRuleExceptions[0].reason += ' Additional invented explanation.'
+  const second = run(changed); assert.equal(second.ok, true)
+  assert.notEqual(second.artifactCoverage[0].profileDigest, report.artifactCoverage[0].profileDigest)
+})
+
+test('v3 refuses invalid parent, authority, rule and literal path declarations before acquisition', t => {
+  const { site, policy, project } = makeWorkspace(t), leaf = '<script>localStorage.getItem("invented")</script>'
+  const bytes = syntheticZip([['leaf.html', leaf]])
+  fs.writeFileSync(path.join(site, 'bundle.zip'), bytes); git(site, ['add', 'bundle.zip'])
+  const original = entryReferencePolicy(site, policy, 'bundle.zip', bytes, [['leaf.html', leaf]])
+  const changes = [
+    v => { v.contentRuleExceptions[0].artifactEntry.blob = '0'.repeat(40) },
+    v => { v.contentRuleExceptions[0].artifactEntry.sha256 = '0'.repeat(64) },
+    v => { v.contentRuleExceptions[0].artifactEntry.bytes++ },
+    v => { v.contentRuleExceptions[0].artifactEntry.purpose = 'execute' },
+    v => { v.contentRuleExceptions[0].rule = 'secret-material' },
+    v => { v.contentRuleExceptions[0].repo = 'different-repository' },
+    v => { v.contentRuleExceptions[0].paths = ['*.zip'] },
+    v => { v.contentRuleExceptions[0].paths.push('second.zip') },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].path = '*.html' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain = [] },
+    v => { v.contentRuleExceptions[0].artifactEntry.ext = null },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].ext = [] },
+    v => { v.contentRuleExceptions.push(structuredClone(v.contentRuleExceptions[0])) },
+    v => { v.contentRuleExceptions[0].reason = '' },
+    v => { v.contentRuleExceptions = null },
+    v => { v.contentRuleExceptions[0].reason = '\u{1f4d6}'.repeat(4) },
+    v => { v.contentRules = structuredClone(DEFAULT_CONTENT_RULES); v.contentRules[1].pattern = 'invented-narrower-pattern' },
+    v => { v.contentRules = structuredClone(DEFAULT_CONTENT_RULES); v.contentRules[1].paths = ['*.html'] },
+    v => { v.contentRules = structuredClone(DEFAULT_CONTENT_RULES); v.contentRules[1].severity = 'warning' },
+    v => { v.artifactScan.artifacts[0].coverage = 'raw-bytes' },
+    v => { v.schema = 'mnstry.atelier-boundary-policy@v2'; v.contractVersion = '2.0.0' },
+  ]
+  for (const [i, change] of changes.entries()) {
+    const value = structuredClone(original); change(value)
+    assert.ok(validateBoundaryPolicy(value).length, `case ${i}`)
+    const report = checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true, gitExecutable: 'unavailable-invented-git' })
+    assert.equal(report.ok, false, `case ${i}`); assert.deepEqual(report.artifactCoverage, [])
+    assert.ok(report.errors.every(item => item.code === 'boundary-policy-invalid'), `case ${i}`)
+  }
+})
+
+test('v3 stale member hashes, sizes, paths and intermediate identities refuse complete coverage', t => {
+  const { site, policy, project } = makeWorkspace(t), leaf = '<script>sessionStorage.getItem("sample")</script>'
+  const inner = syntheticZip([['leaf.html', leaf]]), bytes = syntheticZip([['inner.zip', inner]])
+  fs.writeFileSync(path.join(site, 'bundle.zip'), bytes); git(site, ['add', 'bundle.zip'])
+  const original = entryReferencePolicy(site, policy, 'bundle.zip', bytes, [['inner.zip', inner], ['leaf.html', leaf]], 'zip-tree-entries')
+  for (const change of [
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[1].sha256 = '0'.repeat(64) },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[1].bytes++ },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[1].path = 'absent.html' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[1].path = 'LEAF.html' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].sha256 = '0'.repeat(64) },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].bytes++ },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain.reverse() },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain.pop() },
+    v => { v.artifactScan.limits.maxExpandedBytes = 1 },
+    v => { v.artifactScan.limits.maxEntries = 1 },
+    v => { v.artifactScan.limits.maxWorkBytes = 1 },
+    v => { v.artifactScan.limits.timeoutMs = 1 },
+  ]) {
+    const value = structuredClone(original); change(value)
+    const report = checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true })
+    assert.equal(report.ok, false); assert.ok(report.errors.some(item => item.code === 'content-scan-incomplete'), JSON.stringify(report.errors))
+    assert.deepEqual(report.artifactCoverage, [])
+  }
+})
+
+test('v3 leaf exception preserves siblings, secret, path, other content and outer raw findings', t => {
+  const { site, policy, project } = makeWorkspace(t), base = '<script>localStorage.getItem("sample")</script>'
+  const run = (entries, { outer = 'bundle.zip', rules = null } = {}) => {
+    const bytes = syntheticZip(entries); fs.writeFileSync(path.join(site, outer), bytes); git(site, ['add', outer])
+    const value = entryReferencePolicy(site, policy, outer, bytes, [[entries[0][0], entries[0][1]]])
+    if (rules) value.contentRules = rules
+    const report = checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true })
+    git(site, ['reset', '--quiet']); fs.unlinkSync(path.join(site, outer))
+    assert.equal(report.ok, false); assert.ok(report.artifactCoverage[0].entryExceptionDispositions[0].applied)
+    return report
+  }
+  assert.ok(run([['leaf.html', base], ['sibling.html', base]]).errors.some(item => item.rule === 'browser-persistence' && item.details.entryIndex === 1))
+  assert.ok(run([['leaf.html', base + KEY_MATERIAL]]).errors.some(item => item.rule === 'secret-material'))
+  assert.ok(run([['leaf.html', base]], { rules: [...DEFAULT_CONTENT_RULES, { id: 'invented-path-control', kind: 'path', pattern: '^leaf[.]html$' }] }).errors.some(item => item.rule === 'invented-path-control'))
+  assert.ok(run([['leaf.html', base + 'invented-marker']], { rules: [...DEFAULT_CONTENT_RULES, { id: 'invented-content-control', pattern: 'invented-marker' }] }).errors.some(item => item.rule === 'invented-content-control'))
+  assert.ok(run([['leaf.html', base, 0]], { outer: 'container.html' }).errors.some(item => item.rule === 'browser-persistence' && item.details.coverage === 'raw-bytes'))
+})
+
+test('v3 chain segments distinguish equal display paths and valid CRC remains mandatory', t => {
+  const { site, policy, project } = makeWorkspace(t), leaf = '<script>localStorage.getItem("sample")</script>'
+  const inner = syntheticZip([['leaf.html', leaf]])
+  for (const corrupt of [false, true]) {
+    const bytes = syntheticZip([['inner.zip!/leaf.html', leaf], ['inner.zip', inner]])
+    if (corrupt) bytes.writeUInt32LE(0, 14)
+    fs.writeFileSync(path.join(site, 'bundle.zip'), bytes); git(site, ['add', 'bundle.zip'])
+    const value = entryReferencePolicy(site, policy, 'bundle.zip', bytes, [['inner.zip', inner], ['leaf.html', leaf]], 'zip-tree-entries')
+    const report = checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true })
+    assert.equal(report.ok, false)
+    if (corrupt) { assert.ok(report.errors.some(item => item.code === 'content-scan-incomplete')); assert.deepEqual(report.artifactCoverage, []) }
+    else { assert.ok(report.errors.some(item => item.rule === 'browser-persistence' && item.details.entryIndex === 0)); assert.equal(report.artifactCoverage[0].entryExceptionDispositions[0].entryIndex, 2) }
+  }
+})
+
+test('v3 verified unmatched declarations remain observable and introduced history still scans', t => {
+  const { site, policy, project } = makeWorkspace(t), leaf = '<p>Invented static reference.</p>'
+  const bytes = syntheticZip([['leaf.html', leaf]])
+  fs.writeFileSync(path.join(site, 'bundle.zip'), bytes); git(site, ['add', 'bundle.zip'])
+  const value = entryReferencePolicy(site, policy, 'bundle.zip', bytes, [['leaf.html', leaf]])
+  const report = checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, true); assert.equal(report.artifactCoverage[0].entryExceptionDispositions[0].applied, false)
+  git(site, ['commit', '--quiet', '-m', 'invented reference archive'])
+  fs.unlinkSync(path.join(site, 'bundle.zip')); git(site, ['add', 'bundle.zip']); git(site, ['commit', '--quiet', '-m', 'remove invented reference'])
+  const pushed = checkPushContent({ project, policy: value, updates: pushUpdate(site), cwd: site })
+  assert.equal(pushed.ok, true, JSON.stringify(pushed.errors))
+  assert.ok(pushed.artifactCoverage.some(item => item.entryExceptionDispositions[0].applied === false))
+})
+
+test('v3 exported default aliases cannot redefine entry exception authority', () => {
+  // Isolate an API caller's mutation from the rest of the regression process.
+  const url = new URL('../src/boundary/content-rules.mjs', import.meta.url).href
+  const script = `import { DEFAULT_CONTENT_RULES, validateContentRuleExceptions } from ${JSON.stringify(url)};
+    const rules = [...DEFAULT_CONTENT_RULES]; rules[1].paths.push('*.invented');
+    const artifact = {repo:'sample',path:'bundle.zip',blob:'a'.repeat(40),sha256:'b'.repeat(64),bytes:40,coverage:'zip-flat-entries'};
+    const exception = {rule:'browser-persistence',repo:'sample',paths:['bundle.zip'],reason:'Invented immutable default control.',artifactEntry:{purpose:'archival-source-reference',blob:artifact.blob,sha256:artifact.sha256,bytes:40,chain:[{path:'leaf.invented',sha256:'c'.repeat(64),bytes:10}]}};
+    const errors = validateContentRuleExceptions([exception],rules,{allowArtifactEntries:true,artifactScan:{artifacts:[artifact],limits:{}}});
+    process.stdout.write(JSON.stringify(errors));`
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10000 })
+  assert.equal(result.status, 0, result.stderr)
+  assert.ok(JSON.parse(result.stdout).length, 'a mutable exported alias cannot replace the canonical default definition')
+})
+
 // Complete finite-unit matching is preserved beyond any reader/chunk seam.
 test('v2 binds a large immutable staged blob and preserves full-unit regex semantics', t => {
   const { site, policy, project } = makeWorkspace(t)

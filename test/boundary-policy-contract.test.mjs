@@ -137,3 +137,48 @@ test('v2 reserved profile ext metadata is accepted as data and cannot supply aut
     target.ext = previous
   }
 })
+
+test('v3 decoded entry exceptions are explicit and both older schemas refuse them', async () => {
+  const { validateBoundaryPolicy } = await import('../src/boundary/policy.mjs')
+  const base = readJson(fixtureFiles('valid')[0]), repo = Object.keys(base.repos)[0]
+  const value = { ...base, schema: 'mnstry.atelier-boundary-policy@v3', contractVersion: '3.0.0', artifactScan: { artifacts: [{ repo, path: 'bundle.zip', blob: 'a'.repeat(40), sha256: 'b'.repeat(64), bytes: 40, coverage: 'zip-flat-entries' }], limits: { maxArtifactBytes: 100, maxExpandedBytes: 100, maxEntryBytes: 100, maxEntries: 10, maxWorkBytes: 1000, timeoutMs: 1000 } }, contentRuleExceptions: [{ repo, paths: ['bundle.zip'], rule: 'browser-persistence', reason: 'Invented retained archival reference.', artifactEntry: { purpose: 'archival-source-reference', blob: 'a'.repeat(40), sha256: 'b'.repeat(64), bytes: 40, chain: [{ path: 'leaf.html', sha256: 'c'.repeat(64), bytes: 10 }] } }] }
+  delete value.contentRules
+  const validate = new Ajv2020({ allErrors: true, strict: false }).compile(readJson(path.join(ROOT, 'contracts/atelier-boundary-policy.v3.schema.json')))
+  assert.equal(validate(value), true, formatErrors(validate)); assert.deepEqual(validateBoundaryPolicy(value), [])
+  for (const version of [1, 2]) {
+    const older = new Ajv2020({ strict: false }).compile(readJson(path.join(ROOT, `contracts/atelier-boundary-policy.v${version}.schema.json`)))
+    assert.equal(older(value), false)
+    const disguised = structuredClone(value); disguised.schema = `mnstry.atelier-boundary-policy@v${version}`; disguised.contractVersion = `${version}.0.0`
+    if (version === 1) delete disguised.artifactScan
+    assert.equal(older(disguised), false, 'older schema never accepts a disguised new exception')
+    assert.ok(validateBoundaryPolicy(disguised).length)
+  }
+  const mutations = [
+    v => { v.contentRuleExceptions[0].paths = ['**/bundle.zip'] },
+    v => { v.contentRuleExceptions[0].paths.push('another.zip') },
+    v => { v.contentRuleExceptions[0].rule = 'secret-material' },
+    v => { v.contentRuleExceptions[0].artifactEntry.purpose = 'execute' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].path = '../leaf.html' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].path = 'a//leaf.html' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].path = 'leaf*.html' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].bytes = '10' },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].sha256 = ['c'.repeat(64)] },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain[0].ext = null },
+    v => { v.contentRuleExceptions[0].artifactEntry.ext = [] },
+    v => { delete v.contentRuleExceptions[0].artifactEntry.purpose; v.contentRuleExceptions[0].artifactEntry.ext = { purpose: 'archival-source-reference' } },
+    v => { v.contentRuleExceptions[0].artifactEntry.chain = [] },
+  ]
+  for (const [i, change] of mutations.entries()) {
+    const candidate = structuredClone(value); change(candidate)
+    assert.equal(validate(candidate), false, `case ${i}: ${formatErrors(validate)}`)
+    assert.ok(validateBoundaryPolicy(candidate).length, `case ${i}`)
+  }
+  for (const change of [
+    v => { v.contentRuleExceptions[0].artifactEntry.sha256 = 'd'.repeat(64) },
+    v => { v.contentRuleExceptions[0].artifactEntry.bytes++ },
+    v => { v.contentRuleExceptions.push(structuredClone(v.contentRuleExceptions[0])) },
+  ]) { const candidate = structuredClone(value); change(candidate); assert.ok(validateBoundaryPolicy(candidate).length, 'runtime validates cross-field identities and duplicate dispositions') }
+  value.contentRuleExceptions[0].artifactEntry.ext = { purpose: 'execute' }
+  value.contentRuleExceptions[0].artifactEntry.chain[0].ext = { path: 'another.html' }
+  assert.equal(validate(value), true); assert.deepEqual(validateBoundaryPolicy(value), [])
+})
