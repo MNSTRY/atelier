@@ -70,3 +70,32 @@ qualified binding before extending this inventory.
 The synthetic sample board intentionally gives a detector something to report.
 Its findings are not product defects. Real tenant captures, data and operational
 paths do not belong in the portable package or its fixtures.
+
+## Governed guidance template
+
+`templates/impeccable-capability/` contains a sealed resource-only capability
+package, version `0.1.0-preview.5`, using the existing
+`mnstry.atelier-capability-package@v1` contract. It carries all 24 command
+playbooks, the 62-rule inventory, pinned source digests, Apache/MIT licenses and
+modification notices. Its release digest establishes integrity, not publisher
+authentication or runtime acceptance.
+
+Use the existing [capability stewardship](../guides/capability-stewardship.md)
+workflow to inspect the package, choose explicit repository bindings and review
+the adoption plan. Codex and Claude repository file profiles are declared;
+actual host discovery and useful behavior require separate evidence for each
+binding and session. Choose an alias to coexist with an existing `impeccable`
+skill. No global installation or automatic adoption occurs.
+
+The active wrapper prepares reports and source-owner proposals. It declares only
+the `read-workspace` effect, with no required tools. Engine executors, hooks,
+agent configurations, asset/font payloads, live controllers and writers are
+excluded. Upstream reference commands do not grant permission to download,
+execute, publish, dispatch agents or change source. Existing host instructions
+and the user's brief govern the work.
+
+The source inventory records every copied or adapted upstream file and its
+input/output digest. Licenses and notices also live inside the skill, so they
+remain available after projection. Preserve this sealed package; customizations
+belong in the existing customized-adoption workflow. Withdrawal, local drift,
+retirement and recovery use existing capability stewardship controls.

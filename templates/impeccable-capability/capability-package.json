@@ -1,0 +1,64 @@
+{
+  "schema": "mnstry.atelier-capability-package@v1",
+  "id": "mnstry/impeccable",
+  "version": "0.1.0-preview.5",
+  "title": "Governed Impeccable design guidance",
+  "summary": "Pinned design playbooks with source-bound report and proposal routing through existing host owners.",
+  "license": "Apache-2.0 AND MIT",
+  "source": {
+    "repository": "https://github.com/pbakaus/impeccable",
+    "revision": "924bbd194d02e5e15a227e75b5901fb0d7a4ecad",
+    "ext": {
+      "scope": "upstream resource provenance; governance wrapper is a local unreleased candidate"
+    }
+  },
+  "capabilities": [
+    {
+      "id": "design-guidance",
+      "description": "Prepare design reports and source-owner proposals from pinned guidance and host-supplied source context.",
+      "inputs": [
+        "Host-supplied source/context reference",
+        "Requested design operation"
+      ],
+      "outputs": [
+        "Source-bound report or proposal",
+        "Evidence and coverage limitations"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "governed-impeccable",
+      "name": "governed-impeccable",
+      "path": "skills/governed-impeccable",
+      "capabilities": [
+        "design-guidance"
+      ]
+    }
+  ],
+  "hosts": [
+    "codex-repo-v1",
+    "claude-repo-v1"
+  ],
+  "requirements": {
+    "tools": [],
+    "effects": [
+      "read-workspace"
+    ]
+  },
+  "dependencies": [],
+  "evaluations": [
+    {
+      "id": "synthetic-qualification",
+      "kind": "integration",
+      "path": "evaluation.md",
+      "outcome": "unknown"
+    }
+  ],
+  "migrations": [],
+  "limitations": [
+    "Unreleased resource-only candidate; no publisher authentication or host observation.",
+    "No engine, live-session, variant, writer, asset-service or hosted-account binding is supplied.",
+    "Runtime quality, source authority, actual host discovery and consequential acceptance remain with their existing owners."
+  ]
+}

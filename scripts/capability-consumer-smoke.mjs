@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 
 export async function verifyInstalledCapabilities({ installedRoot, consumerRoot }) {
   const api = await import(pathToFileURL(path.join(installedRoot, 'src/capabilities/index.mjs')).href)
+  verifyInstalledImpeccable(api, installedRoot)
   const fixtureRoot = path.join(installedRoot, 'fixtures/capability-packages')
   const adoption = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'adoption.example.json'), 'utf8'))
   const sources = ['evidence-review', 'research'].map(name => path.join(fixtureRoot, name))
@@ -37,4 +38,22 @@ export async function verifyInstalledCapabilities({ installedRoot, consumerRoot 
   assert.equal(api.inspectCapabilityFleet({ workspaces }).repositories.length, 2)
   if (process.platform === 'win32') console.log('[consumer:capabilities] sealed packages, read-only plans/fleet and refusal before adoption writes verified; Windows adoption is unsupported')
   else console.log('[consumer:capabilities] two packages, two repositories and two host projections verified; host execution remains unobserved')
+}
+
+function verifyInstalledImpeccable(api, installedRoot) {
+  const packageRoot = path.join(installedRoot, 'templates/impeccable-capability')
+  const release = api.verifyCapabilityRelease({ packageRoot })
+  assert.equal(release.package.id, 'mnstry/impeccable')
+  assert.equal(release.package.version, '0.1.0-preview.5')
+  const skillRoot = path.join(packageRoot, 'skills/governed-impeccable')
+  const resources = JSON.parse(fs.readFileSync(path.join(skillRoot, 'references/resources.json'), 'utf8'))
+  assert.equal(resources.commands.length, 24)
+  assert.equal(resources.rules.length, 62)
+  for (const command of resources.commands) {
+    assert.ok(fs.existsSync(path.join(skillRoot, 'references/upstream/reference', command + '.md')))
+  }
+  for (const license of ['apache-2.0.md', 'upstream-notice.md', 'platform-design-skills-mit.md']) {
+    assert.ok(fs.statSync(path.join(skillRoot, 'references/licenses', license)).size > 0)
+  }
+  console.log('[consumer:impeccable] sealed guidance template, command closure and projected licenses verified; host behavior remains unobserved')
 }
