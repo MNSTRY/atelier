@@ -159,7 +159,8 @@
     "./extensions/drizzle": "./src/extensions/drizzle.mjs",
     "./extensions/prisma": "./src/extensions/prisma.mjs",
     "./extensions/convex": "./src/extensions/convex.mjs",
-    "./impeccable": "./src/impeccable/index.mjs"
+    "./impeccable": "./src/impeccable/index.mjs",
+    "./impeccable/wasm": "./src/impeccable/wasm.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

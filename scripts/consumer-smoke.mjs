@@ -244,6 +244,16 @@ const failedScan = impeccable.interpretImpeccableDetection({ source: designSourc
 assert.equal(failedScan.status, 'inconclusive')
 assert.equal(failedScan.requiredFindingsStatus, 'unknown')
 assert.equal(failedScan.requiredPolicyPassed, undefined)
+const { detectImpeccableWasmSource } = await import('@mnstry/atelier/impeccable/wasm')
+const wasmRequest = { source: designSource, policy: designPolicy, engine: 'source', engineDigest: 'sha256:' + 'b'.repeat(64), file: 'sample.css', content: '.sample { padding: 1rem; }' }
+const wasmReport = detectImpeccableWasmSource(wasmRequest, { detect_text_json: () => '[]' })
+assert.equal(wasmReport.result.status, 'reported')
+assert.equal(wasmReport.exitCodeSource, 'derived-from-findings')
+assert.equal(wasmReport.result.requiredPolicyPassed, undefined)
+assert.notEqual(wasmReport.target.digest, designSource.digest)
+const wasmFailure = detectImpeccableWasmSource(wasmRequest, { detect_text_json() { throw new Error('Synthetic export failure') } })
+assert.equal(wasmFailure.result.status, 'inconclusive')
+assert.equal(wasmFailure.result.requiredFindingsStatus, 'unknown')
 
 const fixturePath = fileURLToPath(import.meta.resolve('@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json'))
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))

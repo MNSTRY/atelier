@@ -150,7 +150,7 @@ test('malformed and oversized scan strings retain exact raw evidence without a p
 })
 
 test('mandatory findings remain failures even when the upstream severity is advisory', () => {
-  const result = interpretImpeccableDetection(run({ exitCode: 2, stdout: JSON.stringify([{ ...finding('broken-image'), severity: 'advisory', advisory: true }]) }))
+  const result = interpretImpeccableDetection(run({ exitCode: 0, stdout: JSON.stringify([{ ...finding('broken-image'), severity: 'advisory', advisory: true }]) }))
   assert.equal(result.status, 'failed')
   assert.equal(result.requiredFindingsStatus, 'present')
   assert.equal(result.findings[0].raw.advisory, true)
@@ -202,4 +202,22 @@ test('the pinned zero location sentinel remains valid and non-string streams are
   const result = interpretImpeccableDetection(run({ exitCode: 2, stdout: JSON.stringify([{ ...finding(), line: 0 }]) }))
   assert.equal(result.status, 'reported')
   for (const field of ['stdout', 'stderr']) assert.throws(() => interpretImpeccableDetection(run({ [field]: [] })))
+})
+
+test('advisory-only native runs use exit zero and preserve explicit policy disposition', () => {
+  for (const advisory of [{ severity: 'advisory' }, { advisory: true }]) {
+    const result = interpretImpeccableDetection(run({ exitCode: 0, stdout: JSON.stringify([{ ...finding(), ...advisory }]) }))
+    assert.equal(result.status, 'reported')
+    assert.equal(result.findings[0].disposition, 'advisory')
+    assert.equal(result.requiredFindingsStatus, 'absent-in-reported-run')
+    assert.equal('requiredPolicyPassed' in result, false)
+  }
+})
+
+test('advisory exit mismatches and malformed advisory flags remain inconclusive', () => {
+  for (const findingValue of [{ ...finding(), severity: 'advisory' }, { ...finding(), advisory: true }, { ...finding(), advisory: 'false' }, { ...finding(), advisory: null }]) {
+    const result = interpretImpeccableDetection(run({ exitCode: 2, stdout: JSON.stringify([findingValue]) }))
+    assert.equal(result.status, 'inconclusive')
+    assert.equal(result.requiredFindingsStatus, 'unknown')
+  }
 })

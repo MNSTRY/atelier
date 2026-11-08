@@ -1,6 +1,7 @@
 // Portable, pure adapters over pinned Impeccable resources. They perform no
 // filesystem writes, process execution, network requests or canonical admission.
 import resources from './resources.mjs'
+import { impeccableFindingExitCode } from './engine-contract.mjs'
 import { digest, objectDigest } from '../capabilities/files.mjs'
 
 const MAX_TEXT = 2 * 1024 * 1024
@@ -164,6 +165,7 @@ export function interpretImpeccableDetection(input) {
     if (!finding || typeof finding !== 'object' || Array.isArray(finding) ||
         !rules.has(finding.antipattern) ||
         !['error', 'warning', 'advisory'].includes(finding.severity) ||
+        (finding.advisory !== undefined && typeof finding.advisory !== 'boolean') ||
         typeof finding.name !== 'string' || typeof finding.description !== 'string' ||
         !(finding.category === null || typeof finding.category === 'string') ||
         typeof finding.file !== 'string' || typeof finding.snippet !== 'string' ||
@@ -171,7 +173,7 @@ export function interpretImpeccableDetection(input) {
       return failed('findings do not match the pinned resource contract')
     }
   }
-  if ((input.exitCode === 0) !== (findings.length === 0)) return failed('exit code and findings disagree')
+  if (input.exitCode !== impeccableFindingExitCode(findings)) return failed('exit code and findings disagree')
   const projected = findings.map(finding => ({
     raw: structuredClone(finding),
     disposition: policy.requiredRules.includes(finding.antipattern) ? 'required-failure' :
