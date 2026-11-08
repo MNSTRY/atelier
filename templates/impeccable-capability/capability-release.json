@@ -1,0 +1,375 @@
+{
+  "schema": "mnstry.atelier-capability-release@v1",
+  "package": {
+    "schema": "mnstry.atelier-capability-package@v1",
+    "id": "mnstry/impeccable",
+    "version": "0.1.0-preview.5",
+    "title": "Governed Impeccable design guidance",
+    "summary": "Pinned design playbooks with source-bound report and proposal routing through existing host owners.",
+    "license": "Apache-2.0 AND MIT",
+    "source": {
+      "repository": "https://github.com/pbakaus/impeccable",
+      "revision": "924bbd194d02e5e15a227e75b5901fb0d7a4ecad",
+      "ext": {
+        "scope": "upstream resource provenance; governance wrapper is a local unreleased candidate"
+      }
+    },
+    "capabilities": [
+      {
+        "id": "design-guidance",
+        "description": "Prepare design reports and source-owner proposals from pinned guidance and host-supplied source context.",
+        "inputs": [
+          "Host-supplied source/context reference",
+          "Requested design operation"
+        ],
+        "outputs": [
+          "Source-bound report or proposal",
+          "Evidence and coverage limitations"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "id": "governed-impeccable",
+        "name": "governed-impeccable",
+        "path": "skills/governed-impeccable",
+        "capabilities": [
+          "design-guidance"
+        ]
+      }
+    ],
+    "hosts": [
+      "codex-repo-v1",
+      "claude-repo-v1"
+    ],
+    "requirements": {
+      "tools": [],
+      "effects": [
+        "read-workspace"
+      ]
+    },
+    "dependencies": [],
+    "evaluations": [
+      {
+        "id": "synthetic-qualification",
+        "kind": "integration",
+        "path": "evaluation.md",
+        "outcome": "unknown"
+      }
+    ],
+    "migrations": [],
+    "limitations": [
+      "Unreleased resource-only candidate; no publisher authentication or host observation.",
+      "No engine, live-session, variant, writer, asset-service or hosted-account binding is supplied.",
+      "Runtime quality, source authority, actual host discovery and consequential acceptance remain with their existing owners."
+    ]
+  },
+  "files": [
+    {
+      "path": "LICENSE-platform-design-skills.md",
+      "digest": "sha256:1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685",
+      "bytes": 1056
+    },
+    {
+      "path": "LICENSE.md",
+      "digest": "sha256:02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "bytes": 10766
+    },
+    {
+      "path": "NOTICE.md",
+      "digest": "sha256:c60a093c2845fd9fb82f9c6f742ece31f379f8190b535309d32d66c45ccffdcb",
+      "bytes": 503
+    },
+    {
+      "path": "capability-package.json",
+      "digest": "sha256:84cfed94b15e6ab2a26b9f38023cc58b4e2e4e160ed7bca806d2c025744d565d",
+      "bytes": 1899
+    },
+    {
+      "path": "engine-checksums.md",
+      "digest": "sha256:d1acb01e7e1ab1e5a1f691af710146de82c1915a3e360ae94e9d8eaa6fc3c875",
+      "bytes": 787
+    },
+    {
+      "path": "evaluation.md",
+      "digest": "sha256:97cbc913d8715c050e3be5fcb7717a618ea3fcd4d87c58de6bcdf53dfcaa5d1f",
+      "bytes": 704
+    },
+    {
+      "path": "skills/governed-impeccable/SKILL.md",
+      "digest": "sha256:e66fc064433684b3ad884608938a0bba8a5a11c904d19eeca2759f5bf549135b",
+      "bytes": 2271
+    },
+    {
+      "path": "skills/governed-impeccable/references/command-metadata.json",
+      "digest": "sha256:c6dcbeed7f13152205ca022c8f24d08683770835083f0a7325261c1c2d5f215c",
+      "bytes": 8318
+    },
+    {
+      "path": "skills/governed-impeccable/references/commands.md",
+      "digest": "sha256:68b6ef5568c223954aa94ab53342af6af1b77c208a8115a388fe309d6533d9e8",
+      "bytes": 2094
+    },
+    {
+      "path": "skills/governed-impeccable/references/licenses/apache-2.0.md",
+      "digest": "sha256:02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "bytes": 10766
+    },
+    {
+      "path": "skills/governed-impeccable/references/licenses/platform-design-skills-mit.md",
+      "digest": "sha256:1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685",
+      "bytes": 1056
+    },
+    {
+      "path": "skills/governed-impeccable/references/licenses/upstream-notice.md",
+      "digest": "sha256:c60a093c2845fd9fb82f9c6f742ece31f379f8190b535309d32d66c45ccffdcb",
+      "bytes": 503
+    },
+    {
+      "path": "skills/governed-impeccable/references/origin.md",
+      "digest": "sha256:fea27768ca5fb13704e2488e54fc6da64413913e14ca91d2bbff04bd59781219",
+      "bytes": 1381
+    },
+    {
+      "path": "skills/governed-impeccable/references/resources.json",
+      "digest": "sha256:94af4d1f7ea4492dddedd921c90c98050ea20b596d5b9568e013ec0f6f16131c",
+      "bytes": 6880
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/entrypoint.md",
+      "digest": "sha256:ec5c81f17af6476cafd351875d9109b7d03329e05b3f845cb2d0bbbd4bc31b2c",
+      "bytes": 11762
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/adapt.md",
+      "digest": "sha256:9807cdc112b8bcbdeff9cd2516cda4d07129f1d47f29df4d57645344f34950c1",
+      "bytes": 11313
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/adapt.native.md",
+      "digest": "sha256:2455a2613e1fa29b986521c73cbad9424ccda70ef6cbe505779dbca5e16272a2",
+      "bytes": 3910
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/android.md",
+      "digest": "sha256:43780abcf10ac12a569d98001ae38af2b337727a0f7ce66268246ac1d54b5d34",
+      "bytes": 4203
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/animate.md",
+      "digest": "sha256:d658c48ffbe0031e8e3b318996cad6ceafe29e40aa50d5bb25e4bf1d6839dc7c",
+      "bytes": 5236
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/audit.md",
+      "digest": "sha256:5ba9e3a090fc4c4d212c8cbfa5a48f7454ceb10fa81a284b4a7b4e8351ece2f1",
+      "bytes": 9584
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/audit.native.md",
+      "digest": "sha256:2898eff507738f9102107809e671df3e69f889dee30073030fe96fb2483d8ea3",
+      "bytes": 8326
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/bolder.md",
+      "digest": "sha256:05b78fb0595e4d5afbf5f17470c84e89cf82f205fea3a6e9b6d8d779b7c4aab1",
+      "bytes": 3566
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/clarify.md",
+      "digest": "sha256:173dd66abe65633910dcb04a51f40d6ff2a793f87088f022a02fc4cad24dd133",
+      "bytes": 4590
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/colorize.md",
+      "digest": "sha256:bc5f71f1129d0f2c310d913d07c8dc609a1d25644121bd78c308f42d52a0b9e9",
+      "bytes": 4537
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/component-review.md",
+      "digest": "sha256:10489e5265e49a4ef2737cd0e674c149ed41e1f703efe922e53ea3c91e833427",
+      "bytes": 8017
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/craft-floor.md",
+      "digest": "sha256:808a50e0e6c74617a07b0eaf7fd80f58d8e48a13f48e47c658c7534b1724e5c2",
+      "bytes": 5532
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/craft.md",
+      "digest": "sha256:9205e222bc6565b37fb504ceec93233c2d2a456802b69d16e6b1c44723907c4c",
+      "bytes": 555
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/critique.md",
+      "digest": "sha256:c210c9506877c6c8d88880a337fddd95d4315daf70ed6bc631ee6520481f1a0c",
+      "bytes": 48958
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/degraded/asset-producer.md",
+      "digest": "sha256:56f83829ad85154346d37f4a21992d2fb32a91e06e3849f272470e4b1d4e60d7",
+      "bytes": 8885
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/degraded/documenter.md",
+      "digest": "sha256:4d1553b781e4832919df01936e1959fca46765d4b2d7766503d0bb75e1bbd7d5",
+      "bytes": 3986
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/degraded/finish-reviewer.md",
+      "digest": "sha256:72bebc188d9b000062fc7b176633eb8937701c23cdaf42c5b52ed368014071fa",
+      "bytes": 16138
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/degraded/manual-edit-applier.md",
+      "digest": "sha256:1841fd01dc9065381c1153277a9425380c709f2d85eeb001e88ca84555813453",
+      "bytes": 7942
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/delight.md",
+      "digest": "sha256:098a891028ce59c212b747d3c70468dd750aff7053a703d1336045ed31e0da7c",
+      "bytes": 3716
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/distill.md",
+      "digest": "sha256:8b9283510e38f0d190652f300ea0793acfb5a514b38b991fdc0a289bade83391",
+      "bytes": 5598
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/doctor.md",
+      "digest": "sha256:33aff200de6f76a74b333d7ae4f7d2f4fc2a0da4c1a57264567d88eb8f33b52b",
+      "bytes": 5617
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/document.md",
+      "digest": "sha256:5ddd1bbda532b07aa1cbf336154c53d5b95735c87d24f7572514e7678e378a67",
+      "bytes": 27782
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/extract.md",
+      "digest": "sha256:a36fb764a74f18d5e371e259ed3633819751a5d8d7607ab3ecf2ecf5a7a597a7",
+      "bytes": 3657
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/generate.md",
+      "digest": "sha256:11385badfb532196cec249e73bac2b7f58ada033ed8c4b02b9f0d64ddb46f0dc",
+      "bytes": 13221
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/harden.md",
+      "digest": "sha256:c34ce4e0a68873ddc3a71fd74b11c7b34279ac5fe4b7721734df6539801d2e76",
+      "bytes": 10996
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/hooks.md",
+      "digest": "sha256:b0721af2df59dc9c7c7b341aa8dad36fa0da745a4acc79de51f699521ce4cfa8",
+      "bytes": 551
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/init.md",
+      "digest": "sha256:c2826a6369f86a325e84edb324021753fa8331b86f22a23c884b0b36b7a15488",
+      "bytes": 12229
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/ios.md",
+      "digest": "sha256:40c87038b5f75147a5952a96237acf312a327bf70c1bcd8e0a5f064625ae9668",
+      "bytes": 3812
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/layout.md",
+      "digest": "sha256:0bc7d7971b3edf2acd0580e847458dc6d84129d90715b452799ace3bed815c7c",
+      "bytes": 5161
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/live-setup.md",
+      "digest": "sha256:aeffc129731f55d3fb64453626ca528424e44d4d4953204ecde089138928c1fe",
+      "bytes": 8442
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/live.md",
+      "digest": "sha256:b6b0ace480692800ce19565a4155140e8d1031dc97fec863c45739db1f801129",
+      "bytes": 37836
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/mode-operate.md",
+      "digest": "sha256:7a52dd7a94ee75f6ae89542c86a1b6e1d306812b16e0d9dbf12d4acad44d148b",
+      "bytes": 4716
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/mode-persuade.md",
+      "digest": "sha256:21e78c8a77badb3f83290cd4577ed3b24bd4dd3b57136d7da75733d4f3ee9ac0",
+      "bytes": 3638
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/mode-read.md",
+      "digest": "sha256:a569989e6a3d6453b4c45e9474e162a15cc54e11732ac6baa7990a6e7cccc0b5",
+      "bytes": 4396
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/new-work.md",
+      "digest": "sha256:4d9410bf9dfdb0890769a2f45e634be809392ac293abd91ee9553e8eabb18fe5",
+      "bytes": 63005
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/onboard.md",
+      "digest": "sha256:a2b8fd01ea12139b39b3285393f805bb8c326e11b2234dbff4c26c17b4e9c280",
+      "bytes": 7688
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/operate.md",
+      "digest": "sha256:a9d2203acd45ca33a13d5c68b02b23ed512425ac15f0e8438318ed124b43729d",
+      "bytes": 4145
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/optimize.md",
+      "digest": "sha256:d6644fbe80469f997ac2464eef40e29ce3fa6a7f1ba74c87da13c317d4739a31",
+      "bytes": 7828
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/overdrive.md",
+      "digest": "sha256:0a0d4ae6eea720c6d6e1c073fc77192d7c2100f78a44d9a8d262ddf22270cf4d",
+      "bytes": 9079
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/polish.md",
+      "digest": "sha256:fa39af956bb23d474ead0183d533c3b4ae1940d6d4cf0746996a5febb07239c2",
+      "bytes": 6907
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/quieter.md",
+      "digest": "sha256:9e03b55c6bbdd4acba28cfa9c3b74ba1a4448cdbd35a7200990ab460c6eecaa0",
+      "bytes": 5020
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/region-map.md",
+      "digest": "sha256:778cedc9199b407d3e23fa1041e38d548b00b1101a33517aa2a2eb299f9d0edc",
+      "bytes": 3361
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/routing.md",
+      "digest": "sha256:77ae09542fbc10aa4e8b119d6fd19359908a47c13c30068d6a150bfdb50e3e10",
+      "bytes": 3336
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/shape.md",
+      "digest": "sha256:366fa99c6a8a95129bc9ae638cb55c55ad1fdec4e25da571b1b60d5f1bff9b7b",
+      "bytes": 3801
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/typeset.md",
+      "digest": "sha256:c26c5b4524f3ccb650ed0680c10c25fd18083f8ebfd00a54c4d983c4747aab70",
+      "bytes": 6263
+    },
+    {
+      "path": "skills/governed-impeccable/references/upstream/reference/visualize.md",
+      "digest": "sha256:801867394fd228c8dd52f16d072b9e14bb67a7bb42484f4685373e8b1a1575b4",
+      "bytes": 14210
+    },
+    {
+      "path": "source-inventory.json",
+      "digest": "sha256:935994bfdc5dde4afca57568a37a2237f70236593ba1bb89def791f91cb41260",
+      "bytes": 22673
+    }
+  ],
+  "digest": "sha256:1875f2417bb5a927d5efe419e2a978fed2bc3852f95b7adfb55a98b5e947c16a"
+}

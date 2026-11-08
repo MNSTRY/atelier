@@ -1,0 +1,382 @@
+{
+  "upstream": {
+    "repository": "pbakaus/impeccable",
+    "commit": "924bbd194d02e5e15a227e75b5901fb0d7a4ecad",
+    "skillVersion": "4.8.1",
+    "engineVersion": "0.1.19",
+    "license": "Apache-2.0"
+  },
+  "tree": "80fe8f812098acd955c1948e8b70fe3827701465",
+  "origins": [
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/adapt.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/adapt.md",
+      "upstreamSha256": "9807cdc112b8bcbdeff9cd2516cda4d07129f1d47f29df4d57645344f34950c1",
+      "packageSha256": "9807cdc112b8bcbdeff9cd2516cda4d07129f1d47f29df4d57645344f34950c1",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/adapt.native.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/adapt.native.md",
+      "upstreamSha256": "2455a2613e1fa29b986521c73cbad9424ccda70ef6cbe505779dbca5e16272a2",
+      "packageSha256": "2455a2613e1fa29b986521c73cbad9424ccda70ef6cbe505779dbca5e16272a2",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/android.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/android.md",
+      "upstreamSha256": "43780abcf10ac12a569d98001ae38af2b337727a0f7ce66268246ac1d54b5d34",
+      "packageSha256": "43780abcf10ac12a569d98001ae38af2b337727a0f7ce66268246ac1d54b5d34",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/animate.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/animate.md",
+      "upstreamSha256": "d658c48ffbe0031e8e3b318996cad6ceafe29e40aa50d5bb25e4bf1d6839dc7c",
+      "packageSha256": "d658c48ffbe0031e8e3b318996cad6ceafe29e40aa50d5bb25e4bf1d6839dc7c",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/audit.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/audit.md",
+      "upstreamSha256": "5ba9e3a090fc4c4d212c8cbfa5a48f7454ceb10fa81a284b4a7b4e8351ece2f1",
+      "packageSha256": "5ba9e3a090fc4c4d212c8cbfa5a48f7454ceb10fa81a284b4a7b4e8351ece2f1",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/audit.native.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/audit.native.md",
+      "upstreamSha256": "2898eff507738f9102107809e671df3e69f889dee30073030fe96fb2483d8ea3",
+      "packageSha256": "2898eff507738f9102107809e671df3e69f889dee30073030fe96fb2483d8ea3",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/bolder.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/bolder.md",
+      "upstreamSha256": "05b78fb0595e4d5afbf5f17470c84e89cf82f205fea3a6e9b6d8d779b7c4aab1",
+      "packageSha256": "05b78fb0595e4d5afbf5f17470c84e89cf82f205fea3a6e9b6d8d779b7c4aab1",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/clarify.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/clarify.md",
+      "upstreamSha256": "173dd66abe65633910dcb04a51f40d6ff2a793f87088f022a02fc4cad24dd133",
+      "packageSha256": "173dd66abe65633910dcb04a51f40d6ff2a793f87088f022a02fc4cad24dd133",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/colorize.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/colorize.md",
+      "upstreamSha256": "bc5f71f1129d0f2c310d913d07c8dc609a1d25644121bd78c308f42d52a0b9e9",
+      "packageSha256": "bc5f71f1129d0f2c310d913d07c8dc609a1d25644121bd78c308f42d52a0b9e9",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/component-review.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/component-review.md",
+      "upstreamSha256": "10489e5265e49a4ef2737cd0e674c149ed41e1f703efe922e53ea3c91e833427",
+      "packageSha256": "10489e5265e49a4ef2737cd0e674c149ed41e1f703efe922e53ea3c91e833427",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/craft-floor.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/craft-floor.md",
+      "upstreamSha256": "808a50e0e6c74617a07b0eaf7fd80f58d8e48a13f48e47c658c7534b1724e5c2",
+      "packageSha256": "808a50e0e6c74617a07b0eaf7fd80f58d8e48a13f48e47c658c7534b1724e5c2",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/craft.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/craft.md",
+      "upstreamSha256": "9205e222bc6565b37fb504ceec93233c2d2a456802b69d16e6b1c44723907c4c",
+      "packageSha256": "9205e222bc6565b37fb504ceec93233c2d2a456802b69d16e6b1c44723907c4c",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/critique.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/critique.md",
+      "upstreamSha256": "c210c9506877c6c8d88880a337fddd95d4315daf70ed6bc631ee6520481f1a0c",
+      "packageSha256": "c210c9506877c6c8d88880a337fddd95d4315daf70ed6bc631ee6520481f1a0c",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/degraded/asset-producer.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/degraded/asset-producer.md",
+      "upstreamSha256": "cf726ce0c7dd1005078fbf560745d4114afe363319648cc9de42d1536370d117",
+      "packageSha256": "56f83829ad85154346d37f4a21992d2fb32a91e06e3849f272470e4b1d4e60d7",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/degraded/documenter.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/degraded/documenter.md",
+      "upstreamSha256": "17b6328d809c86622789dcbe1bb1b12ec8937118ef6aa4b37bfd9130d79a205c",
+      "packageSha256": "4d1553b781e4832919df01936e1959fca46765d4b2d7766503d0bb75e1bbd7d5",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/degraded/finish-reviewer.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/degraded/finish-reviewer.md",
+      "upstreamSha256": "04ba3571cd0f405dffb6b51d892add0e4f19fd7e2bc4815320f2bd2ab5bd2a8a",
+      "packageSha256": "72bebc188d9b000062fc7b176633eb8937701c23cdaf42c5b52ed368014071fa",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/degraded/manual-edit-applier.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/degraded/manual-edit-applier.md",
+      "upstreamSha256": "357b19acc7ef688c337a4f020633a49db23c84620b13636f9ff20d3ab934df1a",
+      "packageSha256": "1841fd01dc9065381c1153277a9425380c709f2d85eeb001e88ca84555813453",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/delight.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/delight.md",
+      "upstreamSha256": "098a891028ce59c212b747d3c70468dd750aff7053a703d1336045ed31e0da7c",
+      "packageSha256": "098a891028ce59c212b747d3c70468dd750aff7053a703d1336045ed31e0da7c",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/distill.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/distill.md",
+      "upstreamSha256": "8b9283510e38f0d190652f300ea0793acfb5a514b38b991fdc0a289bade83391",
+      "packageSha256": "8b9283510e38f0d190652f300ea0793acfb5a514b38b991fdc0a289bade83391",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/doctor.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/doctor.md",
+      "upstreamSha256": "33aff200de6f76a74b333d7ae4f7d2f4fc2a0da4c1a57264567d88eb8f33b52b",
+      "packageSha256": "33aff200de6f76a74b333d7ae4f7d2f4fc2a0da4c1a57264567d88eb8f33b52b",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/document.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/document.md",
+      "upstreamSha256": "7e7e97388cac7b5af7afa5b6fec19a6576c89ce6a998c973cb007b8e5494a8c9",
+      "packageSha256": "5ddd1bbda532b07aa1cbf336154c53d5b95735c87d24f7572514e7678e378a67",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/extract.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/extract.md",
+      "upstreamSha256": "5477ae97189e5c1236cee71a25a5ae50014429a5a2e6da28355c8021a6cdeddd",
+      "packageSha256": "a36fb764a74f18d5e371e259ed3633819751a5d8d7607ab3ecf2ecf5a7a597a7",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/generate.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/generate.md",
+      "upstreamSha256": "11385badfb532196cec249e73bac2b7f58ada033ed8c4b02b9f0d64ddb46f0dc",
+      "packageSha256": "11385badfb532196cec249e73bac2b7f58ada033ed8c4b02b9f0d64ddb46f0dc",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/harden.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/harden.md",
+      "upstreamSha256": "4167eb7fc456cdfe09ff0ac2dbcb5e59cee57e590137aab6cc8ec08aafb6d775",
+      "packageSha256": "c34ce4e0a68873ddc3a71fd74b11c7b34279ac5fe4b7721734df6539801d2e76",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/hooks.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/hooks.md",
+      "upstreamSha256": "22f99dc8f891dcc620fb6dc670eab09b84585c1810bf7a3c2063a6e6f7f42152",
+      "packageSha256": "b0721af2df59dc9c7c7b341aa8dad36fa0da745a4acc79de51f699521ce4cfa8",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/init.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/init.md",
+      "upstreamSha256": "c2826a6369f86a325e84edb324021753fa8331b86f22a23c884b0b36b7a15488",
+      "packageSha256": "c2826a6369f86a325e84edb324021753fa8331b86f22a23c884b0b36b7a15488",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/ios.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/ios.md",
+      "upstreamSha256": "40c87038b5f75147a5952a96237acf312a327bf70c1bcd8e0a5f064625ae9668",
+      "packageSha256": "40c87038b5f75147a5952a96237acf312a327bf70c1bcd8e0a5f064625ae9668",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/layout.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/layout.md",
+      "upstreamSha256": "0bc7d7971b3edf2acd0580e847458dc6d84129d90715b452799ace3bed815c7c",
+      "packageSha256": "0bc7d7971b3edf2acd0580e847458dc6d84129d90715b452799ace3bed815c7c",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/live-setup.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/live-setup.md",
+      "upstreamSha256": "2b5b2fbf5f658f34ea1997fb1aeebe01604d05187f75c6a4f1f55a5bc78520a4",
+      "packageSha256": "aeffc129731f55d3fb64453626ca528424e44d4d4953204ecde089138928c1fe",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/live.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/live.md",
+      "upstreamSha256": "b8ff9aaf183187e52eb10a24b1036b4725ff51eb11abd97a360d5678e32561dc",
+      "packageSha256": "b6b0ace480692800ce19565a4155140e8d1031dc97fec863c45739db1f801129",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/mode-operate.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/mode-operate.md",
+      "upstreamSha256": "7a52dd7a94ee75f6ae89542c86a1b6e1d306812b16e0d9dbf12d4acad44d148b",
+      "packageSha256": "7a52dd7a94ee75f6ae89542c86a1b6e1d306812b16e0d9dbf12d4acad44d148b",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/mode-persuade.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/mode-persuade.md",
+      "upstreamSha256": "21e78c8a77badb3f83290cd4577ed3b24bd4dd3b57136d7da75733d4f3ee9ac0",
+      "packageSha256": "21e78c8a77badb3f83290cd4577ed3b24bd4dd3b57136d7da75733d4f3ee9ac0",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/mode-read.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/mode-read.md",
+      "upstreamSha256": "a569989e6a3d6453b4c45e9474e162a15cc54e11732ac6baa7990a6e7cccc0b5",
+      "packageSha256": "a569989e6a3d6453b4c45e9474e162a15cc54e11732ac6baa7990a6e7cccc0b5",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/new-work.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/new-work.md",
+      "upstreamSha256": "4d9410bf9dfdb0890769a2f45e634be809392ac293abd91ee9553e8eabb18fe5",
+      "packageSha256": "4d9410bf9dfdb0890769a2f45e634be809392ac293abd91ee9553e8eabb18fe5",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/onboard.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/onboard.md",
+      "upstreamSha256": "a2b8fd01ea12139b39b3285393f805bb8c326e11b2234dbff4c26c17b4e9c280",
+      "packageSha256": "a2b8fd01ea12139b39b3285393f805bb8c326e11b2234dbff4c26c17b4e9c280",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/operate.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/operate.md",
+      "upstreamSha256": "a9d2203acd45ca33a13d5c68b02b23ed512425ac15f0e8438318ed124b43729d",
+      "packageSha256": "a9d2203acd45ca33a13d5c68b02b23ed512425ac15f0e8438318ed124b43729d",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/optimize.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/optimize.md",
+      "upstreamSha256": "092c85e5a644e6e528aaff0f341ee1ed57e012c195162fef0a5fc97605f9bb73",
+      "packageSha256": "d6644fbe80469f997ac2464eef40e29ce3fa6a7f1ba74c87da13c317d4739a31",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/overdrive.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/overdrive.md",
+      "upstreamSha256": "0a0d4ae6eea720c6d6e1c073fc77192d7c2100f78a44d9a8d262ddf22270cf4d",
+      "packageSha256": "0a0d4ae6eea720c6d6e1c073fc77192d7c2100f78a44d9a8d262ddf22270cf4d",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/polish.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/polish.md",
+      "upstreamSha256": "81666fc7f783b4e3514db6554e713dc0479bd9cdedb06e93d15f8b579aae869a",
+      "packageSha256": "fa39af956bb23d474ead0183d533c3b4ae1940d6d4cf0746996a5febb07239c2",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/quieter.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/quieter.md",
+      "upstreamSha256": "9e03b55c6bbdd4acba28cfa9c3b74ba1a4448cdbd35a7200990ab460c6eecaa0",
+      "packageSha256": "9e03b55c6bbdd4acba28cfa9c3b74ba1a4448cdbd35a7200990ab460c6eecaa0",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/region-map.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/region-map.md",
+      "upstreamSha256": "778cedc9199b407d3e23fa1041e38d548b00b1101a33517aa2a2eb299f9d0edc",
+      "packageSha256": "778cedc9199b407d3e23fa1041e38d548b00b1101a33517aa2a2eb299f9d0edc",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/routing.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/routing.md",
+      "upstreamSha256": "77ae09542fbc10aa4e8b119d6fd19359908a47c13c30068d6a150bfdb50e3e10",
+      "packageSha256": "77ae09542fbc10aa4e8b119d6fd19359908a47c13c30068d6a150bfdb50e3e10",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/shape.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/shape.md",
+      "upstreamSha256": "a55f016c046cb6a27c55bd7f346375aeb506a755c4fbca19a5f92dbd42309c23",
+      "packageSha256": "366fa99c6a8a95129bc9ae638cb55c55ad1fdec4e25da571b1b60d5f1bff9b7b",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/typeset.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/typeset.md",
+      "upstreamSha256": "c26c5b4524f3ccb650ed0680c10c25fd18083f8ebfd00a54c4d983c4747aab70",
+      "packageSha256": "c26c5b4524f3ccb650ed0680c10c25fd18083f8ebfd00a54c4d983c4747aab70",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/reference/visualize.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/reference/visualize.md",
+      "upstreamSha256": "0c431d0dafbcac7ae8bde70ffa622f9ee542c44ec12e14b48bb44b269bef67eb",
+      "packageSha256": "801867394fd228c8dd52f16d072b9e14bb67a7bb42484f4685373e8b1a1575b4",
+      "modification": "governed terminology/host-guidance/whitespace adaptation; input and output digests retained"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/SKILL.md",
+      "packagePath": "skills/governed-impeccable/references/upstream/entrypoint.md",
+      "upstreamSha256": "ec5c81f17af6476cafd351875d9109b7d03329e05b3f845cb2d0bbbd4bc31b2c",
+      "packageSha256": "ec5c81f17af6476cafd351875d9109b7d03329e05b3f845cb2d0bbbd4bc31b2c",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": "LICENSE",
+      "packagePath": "LICENSE.md",
+      "upstreamSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "packageSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": "NOTICE.md",
+      "packagePath": "NOTICE.md",
+      "upstreamSha256": "c60a093c2845fd9fb82f9c6f742ece31f379f8190b535309d32d66c45ccffdcb",
+      "packageSha256": "c60a093c2845fd9fb82f9c6f742ece31f379f8190b535309d32d66c45ccffdcb",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": "LICENSE",
+      "packagePath": "skills/governed-impeccable/references/licenses/apache-2.0.md",
+      "upstreamSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "packageSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": "NOTICE.md",
+      "packagePath": "skills/governed-impeccable/references/licenses/upstream-notice.md",
+      "upstreamSha256": "c60a093c2845fd9fb82f9c6f742ece31f379f8190b535309d32d66c45ccffdcb",
+      "packageSha256": "c60a093c2845fd9fb82f9c6f742ece31f379f8190b535309d32d66c45ccffdcb",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/scripts/command-metadata.json",
+      "packagePath": "skills/governed-impeccable/references/command-metadata.json",
+      "upstreamSha256": "c6dcbeed7f13152205ca022c8f24d08683770835083f0a7325261c1c2d5f215c",
+      "packageSha256": "c6dcbeed7f13152205ca022c8f24d08683770835083f0a7325261c1c2d5f215c",
+      "modification": "none; path relocation only"
+    },
+    {
+      "upstreamPath": ".agents/skills/impeccable/scripts/engine-checksums.txt",
+      "packagePath": "engine-checksums.md",
+      "upstreamSha256": "d1acb01e7e1ab1e5a1f691af710146de82c1915a3e360ae94e9d8eaa6fc3c875",
+      "packageSha256": "d1acb01e7e1ab1e5a1f691af710146de82c1915a3e360ae94e9d8eaa6fc3c875",
+      "modification": "none; path relocation only"
+    }
+  ],
+  "platformLicense": {
+    "repository": "https://github.com/ehmo/platform-design-skills",
+    "path": "LICENSE",
+    "blob": "14fac913ccf80234b1848540089a3bbcb6e5283d",
+    "sha256": "1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685"
+  }
+}
