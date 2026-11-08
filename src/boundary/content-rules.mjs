@@ -1040,13 +1040,16 @@ const artifactDigest = value => createHash('sha256').update(canonicalArtifactJso
 
 export function validateArtifactScan(profile, rules = DEFAULT_CONTENT_RULES) {
   const errors = []
-  if (!isObject(profile) || Object.keys(profile).some(key => !['artifacts', 'limits'].includes(key))) return ['artifactScan must contain only artifacts and limits']
+  if (!isObject(profile) || Object.keys(profile).some(key => !['artifacts', 'limits', 'ext'].includes(key))) return ['artifactScan must contain only artifacts, limits and optional ext metadata']
+  if (Object.hasOwn(profile, 'ext') && !isObject(profile.ext)) errors.push('artifactScan.ext must be an object')
   const limits = profile.limits
-  if (!isObject(limits) || Object.keys(limits).some(key => ![...limitKeys, 'maxDepth'].includes(key)) || limitKeys.some((key, i) => !Number.isSafeInteger(limits[key]) || limits[key] < 1 || limits[key] > maxima[i])) errors.push('artifactScan limits must be explicit positive integers within supported maxima')
+  if (!isObject(limits) || Object.keys(limits).some(key => ![...limitKeys, 'maxDepth', 'ext'].includes(key)) || limitKeys.some((key, i) => !Number.isSafeInteger(limits[key]) || limits[key] < 1 || limits[key] > maxima[i])) errors.push('artifactScan limits must be explicit positive integers within supported maxima')
+  if (isObject(limits) && Object.hasOwn(limits, 'ext') && !isObject(limits.ext)) errors.push('artifactScan limits.ext must be an object')
   if (!Array.isArray(profile.artifacts) || !profile.artifacts.length || profile.artifacts.length > 128) errors.push('artifactScan requires 1 through 128 exact artifact bindings')
   const seen = new Set()
   for (const item of Array.isArray(profile.artifacts) ? profile.artifacts : []) {
-    if (!isObject(item) || Object.keys(item).some(key => !artifactKeys.includes(key)) || artifactKeys.some(key => !Object.hasOwn(item, key)) ||
+    if (!isObject(item) || Object.keys(item).some(key => ![...artifactKeys, 'ext'].includes(key)) || artifactKeys.some(key => !Object.hasOwn(item, key)) ||
+        (Object.hasOwn(item, 'ext') && !isObject(item.ext)) ||
         typeof item.repo !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item.repo) || !portableArtifactPath(item.path) ||
         typeof item.blob !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(item.blob) || typeof item.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(item.sha256) ||
         !Number.isSafeInteger(item.bytes) || item.bytes < 0 || item.bytes > (limits?.maxArtifactBytes ?? 0) || !['raw-bytes', 'zip-flat-entries', 'zip-tree-entries'].includes(item.coverage)) {

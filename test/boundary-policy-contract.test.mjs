@@ -115,3 +115,25 @@ test('v2 ZIP tree coverage requires a finite supported depth in schema and runti
   assert.equal(validate(value), true, formatErrors(validate))
   assert.deepEqual(validateBoundaryPolicy(value), [])
 })
+
+
+test('v2 reserved profile ext metadata is accepted as data and cannot supply authority', async () => {
+  const { validateBoundaryPolicy } = await import('../src/boundary/policy.mjs')
+  const v1 = readJson(fixtureFiles('valid')[0]), repo = Object.keys(v1.repos)[0]
+  const value = { ...v1, schema: 'mnstry.atelier-boundary-policy@v2', artifactScan: { ext: { coverage: 'zip-tree-entries' }, artifacts: [{ repo, path: 'sample.bin', blob: 'a'.repeat(40), sha256: 'b'.repeat(64), bytes: 10, coverage: 'raw-bytes', ext: { bytes: 1000 } }], limits: { maxArtifactBytes: 100, maxExpandedBytes: 100, maxEntryBytes: 100, maxEntries: 10, maxWorkBytes: 1000, timeoutMs: 1000, ext: { maxDepth: 4, maxWorkBytes: 1000000 } } } }
+  delete value.contractVersion
+  const validate = new Ajv2020({ strict: false }).compile(readJson(path.join(ROOT, 'contracts/atelier-boundary-policy.v2.schema.json')))
+  assert.equal(validate(value), true)
+  assert.deepEqual(validateBoundaryPolicy(value), [])
+  value.artifactScan.artifacts[0].coverage = 'zip-tree-entries'
+  assert.equal(validate(value), false, 'ext maxDepth cannot supply a required first-class bound')
+  assert.ok(validateBoundaryPolicy(value).length)
+  value.artifactScan.limits.maxDepth = 2
+  assert.deepEqual(validateBoundaryPolicy(value), [])
+  for (const target of [value.artifactScan, value.artifactScan.artifacts[0], value.artifactScan.limits]) {
+    const previous = target.ext;target.ext = null
+    assert.equal(validate(value), false)
+    assert.ok(validateBoundaryPolicy(value).length)
+    target.ext = previous
+  }
+})

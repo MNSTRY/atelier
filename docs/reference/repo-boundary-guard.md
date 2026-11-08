@@ -363,7 +363,9 @@ dispatcher now refuses unknown policy versions explicitly.
 V2 requires `artifactScan` with explicit `artifacts` and `limits`. Each binding
 names the existing policy repository, exact repository-relative `path`, Git
 `blob` object ID (40 or 64 lowercase hex), `sha256` (64 lowercase hex), `bytes`
-and `coverage`. Coverage is `raw-bytes`, `zip-flat-entries` or explicit `zip-tree-entries`. Bind every introduced
+and `coverage`. Optional object-valued `ext` metadata at the profile, binding
+and limits levels is ignored and cannot supply identity, coverage, depth or
+resource authority. Coverage is `raw-bytes`, `zip-flat-entries` or explicit `zip-tree-entries`. Bind every introduced
 version that a push carries, including historical blobs removed from the tip.
 The policy has at most 128 bindings and 128 content rules. An altered blob at a
 bound path refuses until its new identity is explicitly reviewed and bound.
