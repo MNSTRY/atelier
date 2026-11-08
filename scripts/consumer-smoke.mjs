@@ -234,6 +234,17 @@ import {
   validateRepositoryObservation,
 } from '@mnstry/atelier/runtime/observation'
 
+const impeccable = await import('@mnstry/atelier/impeccable')
+assert.equal(impeccable.impeccableResources().rules.length, 62)
+const designSource = { id: 'synthetic/consumer', revision: 'one', digest: 'sha256:' + 'a'.repeat(64) }
+const designContext = impeccable.projectImpeccableContext({ source: designSource, productMarkdown: '# Invented board' })
+assert.equal(designContext.authority, 'projection-only')
+const designPolicy = impeccable.compileImpeccablePolicy({ requiredRules: ['broken-image'], advisoryRules: [] })
+const failedScan = impeccable.interpretImpeccableDetection({ source: designSource, policy: designPolicy, engine: 'static-html', engineDigest: 'sha256:' + 'b'.repeat(64), exitCode: 1, stdout: '', stderr: 'Synthetic scan unavailable' })
+assert.equal(failedScan.status, 'inconclusive')
+assert.equal(failedScan.requiredFindingsStatus, 'unknown')
+assert.equal(failedScan.requiredPolicyPassed, undefined)
+
 const fixturePath = fileURLToPath(import.meta.resolve('@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json'))
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
 const report = validateAtelierExportDryRun(fixture)

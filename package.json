@@ -158,7 +158,8 @@
     "./contracts/atelier-extension-manifest.v1.schema.json": "./contracts/atelier-extension-manifest.v1.schema.json",
     "./extensions/drizzle": "./src/extensions/drizzle.mjs",
     "./extensions/prisma": "./src/extensions/prisma.mjs",
-    "./extensions/convex": "./src/extensions/convex.mjs"
+    "./extensions/convex": "./src/extensions/convex.mjs",
+    "./impeccable": "./src/impeccable/index.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",
