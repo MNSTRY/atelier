@@ -1,0 +1,264 @@
+{
+  "upstream": {
+    "repository": "pbakaus/impeccable",
+    "commit": "924bbd194d02e5e15a227e75b5901fb0d7a4ecad",
+    "skillVersion": "4.8.1",
+    "engineVersion": "0.1.19",
+    "license": "Apache-2.0"
+  },
+  "closure": {
+    "digest": "sha256:939850da4072d73c91c0c2d04f4ce6447c4c196ec28e3083db2f6189100424cc",
+    "rust": "1.98.0",
+    "wasmBindgen": "0.2.127",
+    "profile": "nodejs,upstreamdetectfeature",
+    "files": [
+      {
+        "path": "impeccable_source.d.ts",
+        "sha256": "56601e24a0f7276177af15286cc4d4d14f80d50ad9c7116f33e69c77e0c3be90",
+        "bytes": 10493
+      },
+      {
+        "path": "impeccable_source.js",
+        "sha256": "739815ac60d0a0c2e022b78d88c96eb117de95facf632f78814273daaf83b9a1",
+        "bytes": 66499
+      },
+      {
+        "path": "impeccable_source_bg.wasm",
+        "sha256": "d18198162e4c1427615993f7934e0c7c7915cbbca3c78fc45446607103e64ac8",
+        "bytes": 5038690
+      },
+      {
+        "path": "impeccable_source_bg.wasm.d.ts",
+        "sha256": "064d769587fbe0694ede397862ae2d586896bdda8292c977a6a2a98830b986d3",
+        "bytes": 4578
+      },
+      {
+        "path": "package.json",
+        "sha256": "eb5f3182658b0282ad147e535c62d2b788d2baabc44448b74fe5dc1f66821fad",
+        "bytes": 35
+      }
+    ],
+    "source": "924bbd194d02e5e15a227e75b5901fb0d7a4ecad"
+  },
+  "purpose": "Invented contrasting source/static test inputs; expectations are test assertions, not canonical policy or coverage evidence.",
+  "pairs": [
+    {
+      "id": "named-motion",
+      "engine": "source",
+      "file": "conformance/named-motion.css",
+      "targets": [
+        "bounce-easing"
+      ],
+      "positive": ".specimen { animation: bounce 700ms; }",
+      "negative": ".specimen { animation: settle 700ms ease-out; }",
+      "referenceTests": [
+        "crates/wasm/tests/detect_exports.rs"
+      ]
+    },
+    {
+      "id": "overshoot-motion",
+      "engine": "source",
+      "file": "conformance/overshoot-motion.css",
+      "targets": [
+        "bounce-easing"
+      ],
+      "positive": ".specimen { transition: transform 250ms cubic-bezier(.2,1.6,.5,1); }",
+      "negative": ".specimen { transition: transform 250ms cubic-bezier(.2,0,.5,1); }",
+      "referenceTests": [
+        "crates/core/src/checks/vectors_a.rs"
+      ]
+    },
+    {
+      "id": "ignored-motion",
+      "engine": "source",
+      "file": "conformance/ignored-motion.css",
+      "targets": [
+        "bounce-easing"
+      ],
+      "positive": "/* impeccable-disable bounce-easing */\n.specimen { animation: bounce 700ms; }",
+      "negative": "/* impeccable-disable bounce-easing */\n.specimen { animation: settle 700ms ease-out; }",
+      "referenceTests": [
+        "crates/wasm/tests/detect_exports.rs"
+      ]
+    },
+    {
+      "id": "font-family",
+      "engine": "source",
+      "file": "conformance/font-family.css",
+      "targets": [
+        "overused-font"
+      ],
+      "positive": ".specimen { font-family: Inter, sans-serif; }",
+      "negative": ".specimen { font-family: Georgia, serif; }",
+      "referenceTests": [
+        "crates/core/src/checks/vectors_a.rs"
+      ]
+    },
+    {
+      "id": "source-side-accent",
+      "engine": "source",
+      "file": "conformance/source-side-accent.css",
+      "targets": [
+        "side-tab"
+      ],
+      "positive": ".specimen { border-left: 6px solid #d54531; border-radius: 14px; }",
+      "negative": ".specimen { border-left: 6px solid #d54531; border-radius: 0; }",
+      "referenceTests": [
+        "crates/wasm/tests/detect_exports.rs",
+        "crates/html/tests/side_accent_radius.rs"
+      ]
+    },
+    {
+      "id": "source-gradient-text",
+      "engine": "source",
+      "file": "conformance/source-gradient-text.css",
+      "targets": [
+        "gradient-text"
+      ],
+      "positive": ".specimen { background: linear-gradient(45deg, #b34132, #edbe31); background-clip: text; color: transparent; }",
+      "negative": ".specimen { color: #b34132; }",
+      "referenceTests": [
+        "crates/core/src/checks/vectors_a.rs"
+      ]
+    },
+    {
+      "id": "static-glow",
+      "engine": "static-html",
+      "file": "conformance/static-glow.html",
+      "targets": [
+        "dark-glow"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { box-shadow: 0 0 30px #cb236c; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { box-shadow: 0 5px 12px rgba(0,0,0,.15); }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "referenceTests": [
+        "crates/core/src/checks/vectors_a.rs"
+      ]
+    },
+    {
+      "id": "static-halo",
+      "engine": "static-html",
+      "file": "conformance/static-halo.html",
+      "targets": [
+        "radial-halo"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>body { background: #101014; } .specimen { background: radial-gradient(circle, #db236c 0%, transparent 75%); }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>body { background: #101014; } .specimen { background: #303038; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "referenceTests": [
+        "crates/core/src/checks/vectors_a.rs"
+      ]
+    },
+    {
+      "id": "source-image",
+      "engine": "source",
+      "file": "conformance/source-image.tsx",
+      "targets": [
+        "broken-image"
+      ],
+      "positive": "export const Specimen = () => <img alt=\"Invented marker\" />;",
+      "negative": "export const Specimen = () => <img alt=\"Invented marker\" src={marker} />;",
+      "referenceTests": [
+        "crates/detect/tests/broken_image_source.rs"
+      ]
+    },
+    {
+      "id": "static-side-accent",
+      "engine": "static-html",
+      "file": "conformance/static-side-accent.html",
+      "targets": [
+        "side-tab"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { width:360px; height:110px; padding:18px; border-left:6px solid #d54531; border-radius:14px; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { width:360px; height:110px; padding:18px; border-left:6px solid #d54531; border-radius:0; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "referenceTests": [
+        "crates/html/tests/side_accent_radius.rs"
+      ]
+    },
+    {
+      "id": "static-shadow",
+      "engine": "static-html",
+      "file": "conformance/static-shadow.html",
+      "targets": [
+        "hard-offset-shadow"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { width:240px; height:100px; box-shadow:6px 6px #333; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { width:240px; height:100px; box-shadow:0 3px 10px rgba(0,0,0,.15); }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "referenceTests": [
+        "crates/html/tests/hard_offset_shadow.rs"
+      ]
+    },
+    {
+      "id": "static-contrast",
+      "engine": "static-html",
+      "file": "conformance/static-contrast.html",
+      "targets": [
+        "low-contrast"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>body { background:#fff; } .specimen { color:#bdbdbd; font-size:16px; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>body { background:#fff; } .specimen { color:#202020; font-size:16px; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "referenceTests": [
+        "crates/html/tests/gradient_surface_contrast.rs"
+      ]
+    },
+    {
+      "id": "static-type-scale",
+      "engine": "static-html",
+      "file": "conformance/static-type-scale.html",
+      "targets": [
+        "flat-type-hierarchy"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>h1 { font-size:19px; } h2 { font-size:18px; } p { font-size:17px; }</style></head><body><main><h1>Invented heading</h1><h2>Invented section</h2><p>Invented body copy.</p></main></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>h1 { font-size:40px; } h2 { font-size:26px; } p { font-size:17px; }</style></head><body><main><h1>Invented heading</h1><h2>Invented section</h2><p>Invented body copy.</p></main></body></html>",
+      "referenceTests": [
+        "crates/core/src/checks/vectors_a.rs"
+      ]
+    },
+    {
+      "id": "source-top-accent",
+      "engine": "source",
+      "file": "conformance/source-top-accent.css",
+      "targets": [
+        "border-accent-on-rounded"
+      ],
+      "positive": ".specimen { border-top:6px solid #d54531; border-radius:14px; }",
+      "negative": ".specimen { border-top:1px solid #d54531; border-radius:14px; }",
+      "referenceTests": [
+        "crates/detect/src/detect_text.rs",
+        "crates/html/tests/side_accent_radius.rs"
+      ]
+    },
+    {
+      "id": "static-html-top-accent",
+      "engine": "static-html",
+      "file": "conformance/static-html-top-accent.html",
+      "targets": [
+        "border-accent-on-rounded"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { border-top:6px solid #d54531; border-radius:14px; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { border-top:6px solid #d54531; border-radius:0; }</style></head><body><article class=\"specimen\">Invented specimen.</article></body></html>",
+      "referenceTests": [
+        "crates/detect/src/detect_text.rs",
+        "crates/html/tests/side_accent_radius.rs"
+      ]
+    }
+  ],
+  "limitations": [
+    "Source/static HTML only; no rendered, browser, native-product or hosted acceptance.",
+    "No script execution, resource fetching, design-system input or custom rule packs.",
+    "Unattempted or unobserved registered rules remain NOT_QUALIFIED.",
+    "Pinned source top-accent heuristic can report a radius:0 declaration; the source width pair qualifies only its width threshold, not square-corner discrimination or static parity."
+  ],
+  "refusals": [
+    {
+      "id": "scoped-shadow-positive",
+      "engine": "static-html",
+      "file": "conformance/static-ignored-shadow.html",
+      "content": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { width:240px; height:100px; box-shadow:6px 6px #333; }</style></head><body><article class=\"specimen\" data-impeccable-ignore=\"hard-offset-shadow\">Invented specimen.</article></body></html>"
+    },
+    {
+      "id": "scoped-shadow-negative",
+      "engine": "static-html",
+      "file": "conformance/static-ignored-shadow.html",
+      "content": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented specimen</title><style>.specimen { width:240px; height:100px; box-shadow:none; }</style></head><body><article class=\"specimen\" data-impeccable-ignore=\"hard-offset-shadow\">Invented specimen.</article></body></html>"
+    }
+  ]
+}

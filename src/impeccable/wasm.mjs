@@ -26,6 +26,10 @@ export function detectImpeccableWasmSource(input, module) {
   const policySnapshot = compileImpeccablePolicy({ requiredRules: policy.requiredRules, advisoryRules: policy.advisoryRules })
   if (policySnapshot.digest !== checked.policyDigest) throw new Error('policy changed during snapshot')
   const base = { source: checked.source, policy: policySnapshot, engine, engineDigest }
+  // The pinned HTML engine applies scoped attribute waivers before its final
+  // inlineIgnores filter. Refuse this marker conservatively, even in literals,
+  // rather than silently accepting suppression or rewriting the source.
+  if (/data-impeccable-ignore/i.test(content)) throw new Error('unsupported WASM scoped-waiver marker')
   const name = engine === 'source' ? 'detect_text_json' : 'detect_html_source_json'
   const detect = module?.[name]
   if (typeof detect !== 'function') throw new Error('required WASM detector export is unavailable')
