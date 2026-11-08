@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import {
   impeccableResources, describeImpeccableCommand, projectImpeccableContext,
   compileImpeccablePolicy, interpretImpeccableDetection,
@@ -19,6 +20,129 @@ const context = overrides => ({
   source: source(), productMarkdown: '# Sample product\n\nA fictional task board.\n',
   designMarkdown: '# Sample design\n\nUse the declared role scale.\n',
   ...overrides,
+})
+
+test('composition preserves supplied requirements and emits only the existing effective policy shape', async () => {
+  const { composeImpeccablePolicies } = await import('../src/impeccable/index.mjs')
+  const first = compileImpeccablePolicy({ requiredRules: ['broken-image'], advisoryRules: ['side-tab'] })
+  const later = compileImpeccablePolicy({ requiredRules: ['side-tab'], advisoryRules: ['broken-image', 'bounce-easing'] })
+  const result = composeImpeccablePolicies({ policies: [first, later] })
+  assert.deepEqual(Object.keys(result.policy).sort(), ['upstream', 'requiredRules', 'advisoryRules', 'digest'].sort())
+  assert.deepEqual(result.policy.requiredRules, ['broken-image', 'side-tab'])
+  assert.deepEqual(result.policy.advisoryRules, ['bounce-easing'])
+  assert.deepEqual(result.lineage.inputPolicyDigests, [first.digest, later.digest].sort())
+  assert.equal(result.lineage.effectivePolicyDigest, result.policy.digest)
+  const observed = interpretImpeccableDetection(run({ policy: result.policy, exitCode: 2, stdout: JSON.stringify([finding()]) }))
+  assert.equal(observed.status, 'failed'); assert.equal(observed.findings[0].disposition, 'required-failure')
+  assert.equal(result.authority, 'projection-only')
+})
+
+test('composition normalizes permutations and duplicates without discarding validation', async () => {
+  const { composeImpeccablePolicies: compose } = await import('../src/impeccable/index.mjs')
+  const a = policy(), b = compileImpeccablePolicy({ requiredRules: ['side-tab'], advisoryRules: ['bounce-easing'] })
+  const expected = compose({ policies: [a, b] })
+  for (const inputs of [[b, a], [a, a, b], [b, a, b, a]]) assert.deepEqual(compose({ policies: inputs }), expected)
+  assert.deepEqual(compose({ policies: Array(64).fill(a) }), compose({ policies: [a] }))
+  const changed = structuredClone(a); changed.requiredRules = []
+  assert.throws(() => compose({ policies: [a, changed] }), 'a reused digest cannot hide an invalid input before deduplication')
+  assert.throws(() => compose({ policies: [] }))
+  assert.throws(() => compose({ policies: Array(65).fill(a) }))
+})
+
+test('composition preserves every supplied pinned rule across conflicting classifications', async () => {
+  const { composeImpeccablePolicies: compose } = await import('../src/impeccable/index.mjs')
+  const ids = impeccableResources().rules.map(rule => rule.id).sort(), middle = Math.floor(ids.length / 2)
+  const a = compileImpeccablePolicy({ requiredRules: ids.slice(0, middle), advisoryRules: ids.slice(middle) })
+  const b = compileImpeccablePolicy({ requiredRules: ids.slice(middle), advisoryRules: ids.slice(0, middle) })
+  const result = compose({ policies: [a, b] })
+  assert.deepEqual(result.policy.requiredRules, ids); assert.deepEqual(result.policy.advisoryRules, [])
+  const empty = compileImpeccablePolicy({ requiredRules: [], advisoryRules: [] })
+  assert.deepEqual(compose({ policies: [a, empty] }).policy, a, 'an empty later input cannot clear supplied obligations')
+})
+
+test('composition snapshots are detached and frozen without changing ordinary compiler results', async () => {
+  const { composeImpeccablePolicies: compose } = await import('../src/impeccable/index.mjs')
+  const original = policy(), expected = structuredClone(original), list = [original]
+  const result = compose({ policies: list })
+  original.requiredRules.length = 0; original.advisoryRules.push('bounce-easing'); original.upstream.commit = 'changed'; list.length = 0
+  assert.deepEqual(result.policy, expected)
+  for (const value of [result, result.policy, result.policy.upstream, result.policy.requiredRules, result.policy.advisoryRules, result.lineage, result.lineage.inputPolicyDigests]) assert.ok(Object.isFrozen(value))
+  assert.throws(() => result.policy.requiredRules.pop(), TypeError)
+  assert.throws(() => { result.policy.upstream.commit = 'changed' }, TypeError)
+  assert.throws(() => result.lineage.inputPolicyDigests.push('changed'), TypeError)
+  assert.equal(Object.isFrozen(policy()), false, 'the existing compiler behavior remains unchanged')
+})
+
+test('composition refuses malformed, stale and mismatched policy values before hashing unbounded data', async () => {
+  const { composeImpeccablePolicies: compose } = await import('../src/impeccable/index.mjs')
+  const changes = [
+    value => { value.digest = 'sha256:' + '0'.repeat(64) },
+    value => { value.digest = [value.digest] },
+    value => { value.requiredRules.push('unknown-rule') },
+    value => { value.requiredRules.push('broken-image') },
+    value => { value.advisoryRules.push('broken-image') },
+    value => { value.requiredRules = Array(63).fill('broken-image') },
+    value => { value.upstream.commit = '0'.repeat(40) },
+    value => { value.upstream.engineVersion = 'future' },
+    value => { value.upstream.repository = { value: value.upstream.repository } },
+    value => { value.upstream.extra = value.upstream },
+    value => { delete value.upstream.license },
+    value => { value.extraAuthority = true },
+    value => { value.requiredRules = 'broken-image' },
+    value => { value.requiredRules = [null] },
+    value => { value.requiredRules = ['x'.repeat(100000)] },
+    value => { value.digest = 'sha256:' + 'a'.repeat(100000) },
+  ]
+  for (const [i, change] of changes.entries()) { const value = policy(); change(value); assert.throws(() => compose({ policies: [value] }), undefined, `case ${i}`) }
+  for (const request of [null, [], {}, { policies: null }, { policies: [null] }, { policies: [new Date()] }, { policies: [policy()], rootApproved: true }]) assert.throws(() => compose(request))
+})
+
+test('composition refuses accessors, sparse arrays and custom iteration without executing callbacks', async () => {
+  const { composeImpeccablePolicies: compose } = await import('../src/impeccable/index.mjs')
+  let calls = 0
+  const request = Object.defineProperty({}, 'policies', { get() { calls++; return [policy()] } })
+  assert.throws(() => compose(request))
+  const value = policy(); Object.defineProperty(value, 'digest', { get() { calls++; return 'unused' } })
+  assert.throws(() => compose({ policies: [value] }))
+  const array = [policy()]; array[Symbol.iterator] = () => { calls++; throw new Error('unused iterator') }
+  assert.throws(() => compose({ policies: array }))
+  const indexed = [policy()]; Object.defineProperty(indexed, '0', { get() { calls++; return policy() } })
+  assert.throws(() => compose({ policies: indexed }))
+  const rules = policy(); Object.defineProperty(rules.requiredRules, '0', { get() { calls++; return 'broken-image' } })
+  assert.throws(() => compose({ policies: [rules] }))
+  const upstream = policy(); Object.defineProperty(upstream.upstream, 'commit', { get() { calls++; return 'unused' } })
+  assert.throws(() => compose({ policies: [upstream] }))
+  assert.throws(() => compose({ policies: Array(1) }))
+  const extra = [policy()]; extra.override = true; assert.throws(() => compose({ policies: extra }))
+  assert.equal(calls, 0)
+})
+
+test('composition remains compatible with WASM evidence and cannot enable inline waivers', async () => {
+  const { composeImpeccablePolicies: compose } = await import('../src/impeccable/index.mjs')
+  const { detectImpeccableWasmSource } = await import('../src/impeccable/wasm.mjs')
+  const required = compileImpeccablePolicy({ requiredRules: ['bounce-easing'], advisoryRules: [] })
+  const taste = compileImpeccablePolicy({ requiredRules: [], advisoryRules: ['bounce-easing'] })
+  const composed = compose({ policies: [required, taste] })
+  const raw = JSON.stringify([{ ...finding('bounce-easing'), severity: 'advisory', advisory: true }])
+  const output = detectImpeccableWasmSource({ source: source(), policy: composed.policy, engine: 'source', engineDigest: 'sha256:' + 'b'.repeat(64), file: 'sample.css', content: '/* invented source */' }, {
+    detect_text_json(_content, _file, options) { assert.deepEqual(JSON.parse(options), { inlineIgnores: false }); return raw },
+  })
+  assert.equal(output.result.raw.stdout, raw)
+  assert.equal(output.result.raw.exitCode, 0, 'engine advisory status remains raw evidence')
+  assert.equal(output.result.status, 'failed', 'supplied required classification still governs the finding')
+  assert.equal(output.result.findings[0].disposition, 'required-failure')
+})
+
+test('composition cannot adopt a changed resource pin through a mutable module alias', () => {
+  const moduleUrl = new URL('../src/impeccable/index.mjs', import.meta.url).href
+  const resourceUrl = new URL('../src/impeccable/resources.mjs', import.meta.url).href
+  const script = `import {compileImpeccablePolicy,composeImpeccablePolicies} from ${JSON.stringify(moduleUrl)};
+    import resources from ${JSON.stringify(resourceUrl)};
+    const policy=compileImpeccablePolicy({requiredRules:['broken-image'],advisoryRules:[]});
+    resources.upstream.commit='0'.repeat(40);
+    try { composeImpeccablePolicies({policies:[policy]}); process.exitCode=1; } catch { process.stdout.write('refused'); }`
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10000 })
+  assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, 'refused')
 })
 
 test('pinned resource view is complete, detached and carries no execution authority', () => {

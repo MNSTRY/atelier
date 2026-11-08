@@ -14,6 +14,10 @@ const commands = new Set(resources.commands)
 const readOnly = new Set(['audit', 'critique'])
 const session = new Set(['live', 'generate'])
 const sourceWork = new Set(['extract', 'harden', 'optimize', 'overdrive'])
+// A validation projection of the existing pin, never an input-issued authority.
+const compositionUpstream = Object.freeze({ ...resources.upstream })
+const compositionUpstreamKeys = Object.freeze(Object.keys(compositionUpstream))
+const MAX_COMPOSITION_POLICIES = 64
 
 function plain(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -131,6 +135,75 @@ function checkedPolicy(value) {
     throw new Error('policy identity mismatch')
   }
   return rebuilt
+}
+
+// Composition consumes bounded plain data without invoking input accessors or
+// custom iterators. The host still owns admission and execution isolation.
+function compositionObject(value, keys, label) {
+  plain(value, label)
+  const supplied = Reflect.ownKeys(value)
+  if (supplied.length !== keys.length || supplied.some(key => typeof key !== 'string' || !keys.includes(key))) throw new Error(`invalid ${label} fields`)
+  const copy = {}
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) throw new Error(`data properties required for ${label}`)
+    copy[key] = descriptor.value
+  }
+  return copy
+}
+
+function compositionArray(value, maximum, label) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new Error(`ordinary array required for ${label}`)
+  const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
+  if (!Number.isSafeInteger(length) || length < 0 || length > maximum) throw new Error(`invalid or oversized ${label}`)
+  const keys = Reflect.ownKeys(value)
+  if (keys.length !== length + 1 || keys.some(key => key !== 'length' && (typeof key !== 'string' || !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length))) throw new Error(`dense data array required for ${label}`)
+  const copy = []
+  for (let index = 0; index < length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) throw new Error(`data elements required for ${label}`)
+    copy.push(descriptor.value)
+  }
+  return copy
+}
+
+function compositionRules(value, label) {
+  const copy = compositionArray(value, rules.size, label)
+  if (copy.some(id => typeof id !== 'string' || id.length > 96 || !SLUG.test(id))) throw new Error(`bounded rule identities required for ${label}`)
+  return copy
+}
+
+export function composeImpeccablePolicies(input) {
+  const request = compositionObject(input, ['policies'], 'policy composition')
+  const supplied = compositionArray(request.policies, MAX_COMPOSITION_POLICIES, 'policy list')
+  if (!supplied.length) throw new Error('at least one compiled policy required')
+  const upstreamSnapshot = value => {
+    const copy = compositionObject(value, compositionUpstreamKeys, 'policy upstream')
+    if (compositionUpstreamKeys.some(key => copy[key] !== compositionUpstream[key])) throw new Error('policy upstream identity mismatch')
+    return copy
+  }
+  // A mutable module alias cannot silently change the pin used by the existing
+  // compiler/checker. Refuse drift without changing their established behavior.
+  const reference = Object.getOwnPropertyDescriptor(resources, 'upstream')
+  if (!reference || !Object.hasOwn(reference, 'value')) throw new Error('resource upstream reference changed')
+  upstreamSnapshot(reference.value)
+  const snapshots = supplied.map(value => {
+    const copy = compositionObject(value, ['upstream', 'requiredRules', 'advisoryRules', 'digest'], 'compiled policy')
+    if (typeof copy.digest !== 'string' || copy.digest.length !== 71 || !isDigest(copy.digest)) throw new Error('compiled policy digest required')
+    return checkedPolicy({
+      upstream: upstreamSnapshot(copy.upstream),
+      requiredRules: compositionRules(copy.requiredRules, 'required rule list'),
+      advisoryRules: compositionRules(copy.advisoryRules, 'advisory rule list'),
+      digest: copy.digest,
+    })
+  })
+  const required = new Set(snapshots.flatMap(policy => policy.requiredRules))
+  const advisory = new Set(snapshots.flatMap(policy => policy.advisoryRules))
+  const policy = checkedPolicy(compileImpeccablePolicy({ requiredRules: [...required], advisoryRules: [...advisory].filter(id => !required.has(id)) }))
+  const lineage = { inputPolicyDigests: [...new Set(snapshots.map(value => value.digest))].sort(), effectivePolicyDigest: policy.digest }
+  Object.freeze(policy.upstream); Object.freeze(policy.requiredRules); Object.freeze(policy.advisoryRules); Object.freeze(policy)
+  Object.freeze(lineage.inputPolicyDigests); Object.freeze(lineage)
+  return Object.freeze({ policy, lineage, authority: 'projection-only' })
 }
 
 export function interpretImpeccableDetection(input) {

@@ -28,6 +28,9 @@ store, ontology, action contract or source owner.
   host's source assertion is true or that every upstream format feature is valid.
 - `compileImpeccablePolicy(input)` validates explicit required/advisory rule
   lists. Unknown rules, overlap and undeclared configuration fields refuse.
+- `composeImpeccablePolicies({policies})` validates already-compiled policies
+  and produces their immutable required/advisory combination. It establishes
+  computation lineage, not the authority or completeness of the host's inputs.
 - `interpretImpeccableDetection(input)` retains raw engine output and applies
   that policy. Failed/malformed scans and unclassified findings remain
   inconclusive.
@@ -35,6 +38,44 @@ store, ontology, action contract or source owner.
 The host owns source authentication, scope, compiler resolution, engine
 acquisition/execution, applicable-rule coverage and result retention. A report
 does not authorize an edit or establish release readiness.
+
+## Composition of compiled policies
+
+Pass one to 64 policies produced by `compileImpeccablePolicy`. Every supplied
+policy must retain its exact upstream identity, known rule IDs and valid digest.
+The operation checks every input before deduplicating, including inputs claiming
+the same digest. Unknown fields, incompatible pins, changed digests, overlapping
+classes and malformed data refuse. Requests use plain data objects and ordinary
+dense arrays; accessors, custom array properties/iterators and redirected
+prototypes are not accepted. Each rule list is bounded by the pinned inventory,
+with bounded literal IDs, before hashing. The host owns process isolation and
+execution budgets; this synchronous Node computation is not a sandbox for
+arbitrary JavaScript objects or proxy traps.
+
+Required rules are the union of all supplied required sets. Advisory rules are
+the union of supplied advisory sets with required rules removed. Required wins
+every conflict, and a later empty or advisory-only input cannot delete or demote
+a supplied requirement. Input permutations and duplicate policy values yield the
+same result and computation lineage.
+
+The result is `{policy, lineage, authority: 'projection-only'}`. `policy` keeps
+EXACTLY the existing `{upstream, requiredRules, advisoryRules, digest}` shape and
+can be passed to `interpretImpeccableDetection` or the existing WASM source
+adapter. `lineage` contains sorted unique immediate `inputPolicyDigests` and
+`effectivePolicyDigest`; it remains outside the policy value. The entire result
+is detached from input objects and frozen, including nested arrays and upstream
+metadata. Ordinary compilation and interpretation retain their existing behavior.
+
+The host must select, authenticate and supply the complete admitted root/tenant
+policy set, preserving its actual source records outside this computation.
+Digests identify policy contents, not the policy owner or its authority. Equal
+compiled values can represent different source records; the unique digest list
+does not replace those records. Omitting an authoritative input cannot be
+detected by this function, and the effective digest is not an approval receipt
+or evidence of root-policy completeness. No suppression, waiver, triage
+lifecycle, new rule pack, write permission or hosted/native acceptance is added.
+Raw findings remain retained, WASM inline ignores stay disabled, and absent
+findings still do not prove that every required check was attempted.
 
 ## Context inputs
 
