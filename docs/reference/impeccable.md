@@ -54,6 +54,10 @@ permission to change the host's instructions.
 
 The host supplies the exact engine kind, build digest, source reference and
 compiled policy, plus raw exit code/stdout/stderr from the pinned JSON command.
+Exit 0 permits an empty array or advisory-only findings; exit 2 requires a primary finding.
+This matches the pinned engine: `advisory: true` or severity `advisory` marks
+an advisory finding. The explicit host policy still decides the required class,
+so an engine advisory can fail a required rule policy.
 Both streams must be primitive strings. Malformed or oversized strings remain
 in the raw evidence and produce an inconclusive result. Parsing is bounded to
 2 MiB per stream; the executing host owns capture limits and raw retention.
@@ -99,3 +103,68 @@ input/output digest. Licenses and notices also live inside the skill, so they
 remain available after projection. Preserve this sealed package; customizations
 belong in the existing customized-adoption workflow. Withdrawal, local drift,
 retirement and recovery use existing capability stewardship controls.
+
+## Node-hosted WASM source binding
+
+`@mnstry/atelier/impeccable/wasm` exports `detectImpeccableWasmSource`.
+The host supplies an already admitted, instantiated synchronous module exposing
+`detect_text_json` for `engine: 'source'`, or `detect_html_source_json` for
+`engine: 'static-html'`. This Node-only adapter does not load a module, fetch a
+binary, start a worker, or provide an execution sandbox. A browser/Worker
+binding is not established by using a WASM engine here.
+
+```js
+import { compileImpeccablePolicy } from '@mnstry/atelier/impeccable'
+import { detectImpeccableWasmSource } from '@mnstry/atelier/impeccable/wasm'
+
+// The host authenticates sourceRef and engineDigest and loads admittedModule.
+const report = detectImpeccableWasmSource({
+  source: sourceRef,
+  policy: compileImpeccablePolicy({
+    requiredRules: ['broken-image'], advisoryRules: ['bounce-easing'],
+  }),
+  engine: 'source', engineDigest,
+  file: 'sample.css', content: '.sample { padding: 1rem; }',
+}, admittedModule)
+```
+
+`file` is a bounded relative display label, not a filesystem instruction. The
+returned `target.digest` hashes the supplied content; it does not authenticate
+its relationship to the canonical `source` reference. The adapter snapshots
+source and policy before calling the export and explicitly disables inline
+ignore directives. It accepts at most 2 MiB of source without NUL bytes.
+Malformed/oversized JSON, unclassified findings and export exceptions remain
+inconclusive. Raw output is retained under the existing interpreter's contract;
+the host must also bound capture and retention. A missing export or non-string
+return is an API contract error. The reported exit code is derived from the
+returned findings, never represented as an observed process exit.
+
+The host owns module provenance, integrity, dependency licensing, isolation,
+time and memory budgets. A synchronous call cannot be interrupted by this
+helper. Run it in a host-controlled isolated process where bounded execution is
+required. Source detection does not establish rendered coverage; this static
+HTML profile sees inline CSS, not external stylesheets or a browser layout.
+
+To prepare the pinned upstream module in an explicitly authorized build area,
+inspect its source and locked dependencies, acquire them separately, then build:
+
+```sh
+cargo build --offline --locked --release -p impeccable -j1
+cargo build --offline --locked --release -p impeccable-wasm --features detect --target wasm32-unknown-unknown -j1
+wasm-bindgen --target nodejs --out-dir wasm-node --out-name impeccable_source target/wasm32-unknown-unknown/release/impeccable_wasm.wasm
+```
+
+The WASM standard library must match the admitted Rust toolchain; the generator
+must match `Cargo.lock` (0.2.127 at this source pin). Resolve host-specific linker
+requirements within that build area. Retain source/toolchain identities,
+archive hashes, actual build results, and generated glue/WASM hashes together.
+The generated Node glue is CommonJS: place it in a CommonJS package scope and
+load it through the host's normal module loader. Hash the complete admitted
+closure rather than treating a caller-supplied digest as verification. No engine
+binary, generated glue or Rust toolchain ships with the Atelier package.
+
+Qualification should compare native JSON and WASM JSON on the same explicit
+synthetic inputs, recording any display-file label mapping. Clean, advisory-only,
+primary-finding and failed execution cases exercise different result paths.
+Agreement on fixtures establishes only those cases, not all-rule coverage,
+usefulness on a real product, or release acceptance.
