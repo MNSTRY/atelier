@@ -25,6 +25,9 @@ import { delegationsPathFor, loadDelegationsFile, ownerKeysForCommand, resolveDe
 
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
 export const BOUNDARY_POLICY_SCHEMA_V2 = 'mnstry.atelier-boundary-policy@v2'
+export const BOUNDARY_POLICY_SCHEMA_V3 = 'mnstry.atelier-boundary-policy@v3'
+const artifactPolicySchema = policy => [BOUNDARY_POLICY_SCHEMA_V2, BOUNDARY_POLICY_SCHEMA_V3].includes(policy?.schema)
+const artifactExceptionOptions = policy => policy?.schema === BOUNDARY_POLICY_SCHEMA_V3 ? { exceptions: asArray(policy.contentRuleExceptions) } : {}
 export const PROMOTE_EVENT_SCHEMA = 'git-promote-event@v1'
 // Promote events append to a durable governance ledger; lines written before the
 // contract-stability epoch carry the legacy schema id and must stay readable.
@@ -142,12 +145,12 @@ function validAudienceList(value, label, required = false) {
 export function validateBoundaryPolicy(policy, project = null) {
   const errors = []
   if (!isObject(policy)) return ['boundary policy must be a JSON object']
-  const v2 = policy.schema === BOUNDARY_POLICY_SCHEMA_V2
-  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'contractVersion', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath', 'ext', ...(v2 ? ['artifactScan'] : [])])))
-  if (![BOUNDARY_POLICY_SCHEMA, BOUNDARY_POLICY_SCHEMA_V2].includes(policy.schema)) errors.push(`schema must be ${BOUNDARY_POLICY_SCHEMA} or ${BOUNDARY_POLICY_SCHEMA_V2}`)
-  if (v2) errors.push(...validateArtifactScan(policy.artifactScan, resolveContentRules(policy)))
-  if (policy.contractVersion != null && !(typeof policy.contractVersion === 'string' && (v2 ? /^2\.[0-9]+\.[0-9]+$/ : /^1\.[0-9]+\.[0-9]+$/).test(policy.contractVersion))) {
-    errors.push(`contractVersion must be a ${v2 ? 2 : 1}.x.y version`)
+  const artifact = artifactPolicySchema(policy), v3 = policy.schema === BOUNDARY_POLICY_SCHEMA_V3
+  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'contractVersion', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath', 'ext', ...(artifact ? ['artifactScan'] : [])])))
+  if (![BOUNDARY_POLICY_SCHEMA, BOUNDARY_POLICY_SCHEMA_V2, BOUNDARY_POLICY_SCHEMA_V3].includes(policy.schema)) errors.push('boundary policy schema is unsupported')
+  if (artifact) errors.push(...validateArtifactScan(policy.artifactScan, resolveContentRules(policy)))
+  if (policy.contractVersion != null && !(typeof policy.contractVersion === 'string' && (v3 ? /^3\.[0-9]+\.[0-9]+$/ : artifact ? /^2\.[0-9]+\.[0-9]+$/ : /^1\.[0-9]+\.[0-9]+$/).test(policy.contractVersion))) {
+    errors.push(`contractVersion must be a ${v3 ? 3 : artifact ? 2 : 1}.x.y version`)
   }
   errors.push(...extErrors(policy, '/'))
   if (!VALID_BOUNDARY_MODES.has(policy.mode)) errors.push('mode must be strict or legacy-warning')
@@ -162,10 +165,10 @@ export function validateBoundaryPolicy(policy, project = null) {
   errors.push(...extErrors(promotion, 'promotion'))
   if (policy.forbiddenPaths != null && !Array.isArray(policy.forbiddenPaths)) errors.push('forbiddenPaths must be a list')
   if (policy.contentRules != null) errors.push(...validateContentRules(policy.contentRules))
-  if (policy.contentRuleExceptions != null) {
-    errors.push(...validateContentRuleExceptions(policy.contentRuleExceptions, resolveContentRules(policy)))
+  if (policy.contentRuleExceptions != null || (v3 && Object.hasOwn(policy, 'contentRuleExceptions'))) {
+    errors.push(...validateContentRuleExceptions(policy.contentRuleExceptions, resolveContentRules(policy), { allowArtifactEntries: v3, artifactScan: policy.artifactScan }))
     const declaredRepos = isObject(repos) ? repos : {}
-    for (const [index, exception] of policy.contentRuleExceptions.entries()) {
+    for (const [index, exception] of asArray(policy.contentRuleExceptions).entries()) {
       const name = firstString(exception?.repo)
       if (name && Object.keys(declaredRepos).length && !Object.hasOwn(declaredRepos, name)) {
         errors.push(`contentRuleExceptions[${index}].repo ${name} is not declared in repos`)
@@ -173,7 +176,7 @@ export function validateBoundaryPolicy(policy, project = null) {
     }
   }
 
-  if (v2 && Array.isArray(policy.artifactScan?.artifacts)) {
+  if (artifact && Array.isArray(policy.artifactScan?.artifacts)) {
     for (const item of policy.artifactScan.artifacts) if (!isObject(item) || !Object.hasOwn(isObject(repos) ? repos : {}, item.repo)) errors.push('artifact binding repository is not declared')
   }
 
@@ -684,7 +687,7 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
     const errors = [{ severity: 'error', code: 'boundary-policy-invalid', message: 'boundary artifact policy or schema is unsupported' }]
     return { ok: false, findings: errors, errors, warnings: [] }
   }
-  const artifactContext = policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? createArtifactScanContext(policy.artifactScan, rules) : null
+  const artifactContext = artifactPolicySchema(policy) ? createArtifactScanContext(policy.artifactScan, rules, artifactExceptionOptions(policy)) : null
   const findings = []
   let totalBytes = 0
   for (const update of updates) {
@@ -801,11 +804,11 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
   // member-derived semantic values through the legacy document scanner.
   if (validationErrors.length && policy?.schema !== BOUNDARY_POLICY_SCHEMA) {
     const errors = [finding({ severity: 'error', code: 'boundary-policy-invalid', message: 'boundary artifact policy or schema is unsupported' })]
-    return { ok: false, schema: policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? BOUNDARY_POLICY_SCHEMA_V2 : BOUNDARY_POLICY_SCHEMA, mode: null, graphCounts: null, artifactCoverage: [], findings: errors, errors, warnings: [] }
+    return { ok: false, schema: artifactPolicySchema(policy) ? policy.schema : BOUNDARY_POLICY_SCHEMA, mode: null, graphCounts: null, artifactCoverage: [], findings: errors, errors, warnings: [] }
   }
   let graph = null
   const artifactCoverage = []
-  const artifactContext = !validationErrors.length && policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? createArtifactScanContext(policy.artifactScan, resolveContentRules(policy)) : null
+  const artifactContext = !validationErrors.length && artifactPolicySchema(policy) ? createArtifactScanContext(policy.artifactScan, resolveContentRules(policy), artifactExceptionOptions(policy)) : null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
   if (!stagedOnly) {
     graph = buildGraph(project)
@@ -833,7 +836,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     findings.push(...listed.failures.map(({ repo, reason }) => unscannableRepoFinding(repo, `staged paths could not be listed (${reason})`)))
     findings.push(...forbiddenPathFindings({ policy, stagedPaths: listed.paths }))
     findings.push(...semanticDiffFindings({ targets, gitExecutable, artifactContext }))
-    if (!validationErrors.length || policy?.schema !== BOUNDARY_POLICY_SCHEMA_V2) findings.push(...stagedContentFindings({ policy, targets, gitExecutable, artifactCoverage, artifactContext }))
+    if (!validationErrors.length || !artifactPolicySchema(policy)) findings.push(...stagedContentFindings({ policy, targets, gitExecutable, artifactCoverage, artifactContext }))
   }
   if (artifactContext?.failed) findings.push(finding({ severity: 'error', code: 'content-scan-incomplete', message: 'shared artifact context failed; staged coverage is incomplete', details: { reason: 'artifact-context-failed' } }))
   const errors = findings.filter((item) => item.severity === 'error')
@@ -842,7 +845,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     ok: errors.length === 0,
     mode: policy?.mode ?? null,
     schema: policy?.schema ?? BOUNDARY_POLICY_SCHEMA,
-    ...(policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? { artifactCoverage } : {}),
+    ...(artifactPolicySchema(policy) ? { artifactCoverage } : {}),
     graphCounts: graph?.counts ?? null,
     findings,
     errors,

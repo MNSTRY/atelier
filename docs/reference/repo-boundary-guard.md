@@ -1,4 +1,4 @@
-# Repo Boundary Guard V1
+# Repo Boundary Guard
 
 Repo Boundary Guard V1 is the Atelier workspace convention for separating
 private domain source from shared project source before anything reaches the
@@ -466,3 +466,79 @@ is part of this route. Restore the retained v1 policy to roll back. Large eviden
 then refuses under v1's original limits. Fix the source/profile or obtain the
 required resources through the existing owner before rerunning a failed check;
 retain its failed outcome. No cached passing receipt overrides a fresh check.
+
+## V3 exact decoded-leaf source-reference exceptions
+
+`mnstry.atelier-boundary-policy@v3` is the next version of the same boundary
+policy, with optional `contractVersion: "3.0.0"`. V1 and V2 schemas and their
+valid-policy behavior remain unchanged. V3 retains the entire V2 artifact
+identity, decoding and resource profile. It adds one narrowly scoped disposition
+inside the existing `contentRuleExceptions` records; it does not skip scanning.
+
+An entry exception retains the existing `rule`, `repo`, `paths` and `reason`,
+and adds `artifactEntry`:
+
+| Field | Required meaning |
+| --- | --- |
+| `rule` | Exactly `browser-persistence`, with the unchanged effective default pattern, kind, severity and path scope. A replacement rule with the same ID receives no authority. Additional unrelated rules may still be declared. |
+| `repo`, `paths` | Declared repository and exactly one literal outer repository path. No glob syntax or broad outer exception. |
+| `reason` | Reviewable explanation, at least eight characters and at most 2048 UTF-8 bytes. |
+| `artifactEntry.purpose` | Exactly `archival-source-reference`. This is the owner's assertion about retained source, not proof of rights, isolation or runtime behavior. |
+| `artifactEntry.blob`, `sha256`, `bytes` | Exactly the parent identity already declared in `artifactScan.artifacts`, including Git object ID, separate SHA-256 and byte count. The parent must use decoded ZIP coverage. |
+| `artifactEntry.chain` | Ordered array of exact `{path, sha256, bytes}` member identities through each nested ZIP to one leaf. One to five members, also within the declared coverage/depth limit. |
+
+Every chain member uses the actual parsed member's literal case-sensitive NFC
+path, SHA-256 and complete byte count. Intermediate members must be decoded ZIP
+containers; the final member must be a nondirectory, noncontainer leaf. Paths
+must be portable and cannot contain glob syntax. Separate array members identify
+container transitions: a flattened `!/` display path or enumeration index is
+never an authority. Duplicate leaf declarations, missing members, changed
+parents, different hashes/sizes, ambiguous ZIP names and stale chains refuse.
+At most 128 exception records are admitted in V3. New closed objects have an
+optional object-valued `ext` for ignored metadata; it cannot supply or override
+any required identity, purpose, rule or bound.
+
+The guard still acquires and verifies the immutable parent, decodes every
+admitted member, checks complete sizes/CRC/header/path integrity, and runs all
+applicable content and path rules. Only the exact leaf's browser-persistence
+content finding can be disposed by this mechanism. It cannot suppress a sibling,
+container, outer raw match, secret-material finding, path rule, unrelated rule,
+semantic review signal, unsupported format, failed acquisition, checksum error,
+timeout, incomplete coverage or resource limit. It extracts and executes no
+member and creates no sanitized export. A consumer separately owns any inert
+review projection and must verify its actual runtime behavior.
+
+The entire V3 exception policy is frozen into the existing profile/rule snapshot
+digest. Complete `artifactCoverage` includes `entryExceptionDispositions`, each
+with `exceptionDigest`, `rule`, `entryIndex` and `applied`. `applied: true` means
+one fully verified leaf's matching content finding received that declared
+disposition. `false` means the exact leaf was verified but the rule did not
+match. Names, reasons and member content are not echoed. Missing/stale identity
+cannot become an unmatched success. These are observations of owner-declared
+policy, not an authenticated approval receipt, content-rights decision or cached
+passing result. A changed reason or declaration changes the snapshot identity.
+
+### V3 migration and rollback
+
+Retain the original policy and package first. Under the existing repository
+owner, adopt the exact supporting package bytes and verify BOTH actual installed
+staged and push dispatchers. Change the policy schema to V3 and, if emitted,
+`contractVersion` to `3.0.0`; keep existing actors, repositories, rules, exact
+artifact bindings and explicit limits. Add only the necessary leaf declaration
+using actual immutable Git and decoded identities. Select it through the same
+project `boundaries.policyPath`. No `ext` override or automatic migration exists.
+
+Current V1/V2-only dispatchers refuse V3 before content reads. The older
+push-only dispatcher caveat described above still applies to historical
+executables: a legacy raw-only push success is never V3 decoded acceptance.
+Read back the actual executables selected by both installed hooks, not just a
+package lock or version. Run the ordinary staged check, normal hooked commit and
+actual push/ref readback, inspecting complete coverage, the policy snapshot and
+per-leaf dispositions. Whole-tree `boundary audit` retains its older raw audit
+semantics and does not establish decoded V3 coverage.
+
+Rollback restores the retained original policy/package under the existing
+consumer owner. Original findings and limits apply again; an entry disposition
+is not silently translated to an outer exception. Public source landing and
+synthetic package tests do not establish a private consumer's installation,
+policy decision, content rights, inert export, adoption or runtime acceptance.

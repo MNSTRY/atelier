@@ -91,10 +91,12 @@ export function validateContentRules(rules, { label = 'contentRules' } = {}) {
   return errors
 }
 
-export function validateContentRuleExceptions(exceptions, rules = DEFAULT_CONTENT_RULES, { label = 'contentRuleExceptions' } = {}) {
+export function validateContentRuleExceptions(exceptions, rules = DEFAULT_CONTENT_RULES, { label = 'contentRuleExceptions', artifactScan = null, allowArtifactEntries = false } = {}) {
   const errors = []
   if (!Array.isArray(exceptions)) return [`${label} must be an array`]
   const ruleIds = new Set(rules.map((rule) => trimmed(rule.id)).filter(Boolean))
+  const entries = new Set()
+  if (allowArtifactEntries && exceptions.length > 128) errors.push(`${label} supports at most 128 v3 declarations`)
   for (const [index, exception] of exceptions.entries()) {
     const at = `${label}[${index}]`
     if (!isObject(exception)) {
@@ -102,7 +104,7 @@ export function validateContentRuleExceptions(exceptions, rules = DEFAULT_CONTEN
       continue
     }
     for (const key of Object.keys(exception)) {
-      if (!['rule', 'repo', 'paths', 'reason', 'ext'].includes(key)) errors.push(`${at} must not include additional property ${key}`)
+      if (!['rule', 'repo', 'paths', 'reason', 'ext', ...(allowArtifactEntries ? ['artifactEntry'] : [])].includes(key)) errors.push(`${at} must not include additional property ${key}`)
     }
     if (exception.ext != null && !isObject(exception.ext)) errors.push(`${at}.ext must be an object`)
     const rule = trimmed(exception.rule)
@@ -122,6 +124,20 @@ export function validateContentRuleExceptions(exceptions, rules = DEFAULT_CONTEN
     if (trimmed(exception.reason).length < MIN_REASON_LENGTH) {
       errors.push(`${at}.reason is required and must explain why this usage is accepted`)
     }
+    if (Object.hasOwn(exception, 'artifactEntry')) {
+      const entry = exception.artifactEntry, parent = (Array.isArray(artifactScan?.artifacts) ? artifactScan.artifacts : []).find(item => item?.repo === exception.repo && item.path === exception.paths?.[0] && item.blob === entry?.blob)
+      const browser = DEFAULT_CONTENT_RULES.find(item => item.id === 'browser-persistence'), effective = rules.find(item => item.id === 'browser-persistence')
+      const core = item => item && ({ kind: item.kind ?? 'content', severity: item.severity ?? 'error', pattern: item.pattern, paths: item.paths })
+      const validMember = item => isObject(item) && Object.keys(item).every(key => ['path', 'sha256', 'bytes', 'ext'].includes(key)) && (!Object.hasOwn(item, 'ext') || isObject(item.ext)) && exactArtifactPath(item.path) && item.path.normalize('NFC') === item.path && typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/.test(item.sha256) && Number.isSafeInteger(item.bytes) && item.bytes >= 0 && item.bytes <= ARTIFACT_SCAN_LIMITS.entryBytes
+      if (!allowArtifactEntries || exception.rule !== 'browser-persistence' || canonicalArtifactJson(core(browser)) !== canonicalArtifactJson(core(effective)) || !Array.isArray(exception.paths) || exception.paths.length !== 1 || !exactArtifactPath(exception.paths[0]) || typeof exception.reason !== 'string' || Array.from(exception.reason.trim()).length < MIN_REASON_LENGTH || Buffer.byteLength(exception.reason) > 2048 ||
+          !isObject(entry) || Object.keys(entry).some(key => !['purpose', 'blob', 'sha256', 'bytes', 'chain', 'ext'].includes(key)) || (Object.hasOwn(entry, 'ext') && !isObject(entry.ext)) || entry.purpose !== 'archival-source-reference' || !parent || parent.coverage === 'raw-bytes' || entry.sha256 !== parent.sha256 || entry.bytes !== parent.bytes || !Array.isArray(entry.chain) || !entry.chain.length || entry.chain.length > 5 || entry.chain.length > (parent.coverage === 'zip-tree-entries' ? artifactScan.limits?.maxDepth + 1 : 1) || entry.chain.some(item => !validMember(item))) {
+        errors.push(`${at}.artifactEntry requires an exact declared decoded parent/leaf chain and the unchanged default browser-persistence rule`)
+      } else {
+        const key = canonicalArtifactJson([exception.repo, exception.paths[0], entry.blob, entry.chain.map(item => item.path), exception.rule])
+        if (entries.has(key)) errors.push(`${at}.artifactEntry duplicates a leaf disposition`)
+        entries.add(key)
+      }
+    }
   }
   return errors
 }
@@ -140,6 +156,7 @@ export function findException({ exceptions = [], rule, repo, path: filePath }) {
   return (
     exceptions.find(
       (exception) =>
+        !Object.hasOwn(exception, 'artifactEntry') &&
         trimmed(exception.rule) === rule &&
         trimmed(exception.repo) === repo &&
         (Array.isArray(exception.paths) ? exception.paths : []).some((pattern) => matchesPathPattern(pattern, rel)),
@@ -1035,6 +1052,7 @@ const artifactKeys = ['repo', 'path', 'blob', 'sha256', 'bytes', 'coverage']
 const limitKeys = ['maxArtifactBytes', 'maxExpandedBytes', 'maxEntryBytes', 'maxEntries', 'maxWorkBytes', 'timeoutMs']
 const maxima = [ARTIFACT_SCAN_LIMITS.artifactBytes, ARTIFACT_SCAN_LIMITS.expandedBytes, ARTIFACT_SCAN_LIMITS.entryBytes, ARTIFACT_SCAN_LIMITS.entries, ARTIFACT_SCAN_LIMITS.workBytes, ARTIFACT_SCAN_LIMITS.timeoutMs]
 const portableArtifactPath = value => typeof value === 'string' && value.length <= 1024 && !/[\0-\x1f\x7f\\:]/.test(value) && !value.startsWith('/') && value.split('/').every(part => part && part !== '.' && part !== '..')
+const exactArtifactPath = value => portableArtifactPath(value) && !/[*?\[\]{}]/.test(value)
 const canonicalArtifactJson = value => Array.isArray(value) ? `[${value.map(canonicalArtifactJson).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalArtifactJson(value[key])}`).join(',')}}` : JSON.stringify(value)
 const artifactDigest = value => createHash('sha256').update(canonicalArtifactJson(value)).digest('hex')
 
@@ -1064,9 +1082,10 @@ export function validateArtifactScan(profile, rules = DEFAULT_CONTENT_RULES) {
   return errors
 }
 
-export function createArtifactScanContext(profile, rules = DEFAULT_CONTENT_RULES) {
+export function createArtifactScanContext(profile, rules = DEFAULT_CONTENT_RULES, options = {}) {
   if (validateArtifactScan(profile, rules).length) throw new Error('invalid artifact scan profile')
-  const snapshot = JSON.parse(JSON.stringify({ profile, rules }))
+  if (Object.hasOwn(options, 'exceptions') && validateContentRuleExceptions(options.exceptions, rules, { artifactScan: profile, allowArtifactEntries: true }).length) throw new Error('invalid artifact entry exception policy')
+  const snapshot = JSON.parse(JSON.stringify({ profile, rules, ...(Object.hasOwn(options, 'exceptions') ? { exceptions: options.exceptions } : {}) }))
   const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value) } }
   freeze(snapshot)
   return { ...snapshot, profileDigest: artifactDigest(snapshot), workBytes: 0, failed: false, coverage: [] }
@@ -1143,9 +1162,15 @@ function zipArtifactEntries(bytes, limits, remainingWork, { tree = false, budget
 // Runs only in an isolated child on a complete finite unit. No filesystem or
 // Git access occurs here. The caller owns the byte/profile identity checks.
 export function executeArtifactScan(input, bytes) {
-  const { binding, limits, rules, profileDigest, remainingWork, added } = input
+  const { binding, limits, rules, profileDigest, remainingWork, added, entryExceptions = [] } = input
+  const declarations = entryExceptions.map(({ exceptionDigest, ...declaration }) => {
+    if (exceptionDigest !== artifactDigest(declaration)) throw new Error('artifact-entry-policy-mismatch')
+    return declaration
+  })
+  if (validateContentRuleExceptions(declarations, rules, { artifactScan: { artifacts: [binding], limits }, allowArtifactEntries: true }).length) throw new Error('artifact-entry-policy-invalid')
   const matches = [], found = new Set()
-  const scan = (unit, filePath, content, entry = null) => {
+  const dispositions = new Map()
+  const scan = (unit, filePath, content, entry = null, exceptionDigest = null) => {
     for (const rule of rules) {
       const kind = rule.kind ?? 'content'
       if (kind === 'path' && !['entry-path', 'outer-path'].includes(unit)) continue
@@ -1153,7 +1178,11 @@ export function executeArtifactScan(input, bytes) {
       if (kind === 'content' && !rulePathMatches(rule, filePath)) continue
       if (!new RegExp(rule.pattern, kind === 'path' ? 'i' : '').test(content)) continue
       const key = `${rule.id}\0${entry}\0${unit}`
-      if (!found.has(key)) { matches.push({ rule: rule.id, entry, unit }); found.add(key) }
+      if (!found.has(key)) {
+        const excepted = exceptionDigest && unit === 'entry-bytes' && rule.id === 'browser-persistence'
+        matches.push({ rule: rule.id, entry, unit, ...(excepted ? { exceptionDigest } : {}) }); found.add(key)
+        if (excepted) dispositions.get(exceptionDigest).applied = true
+      }
       if (matches.length > 4096) throw new Error('artifact-result-limit')
     }
   }
@@ -1163,20 +1192,32 @@ export function executeArtifactScan(input, bytes) {
   let index = 0, depthReached = 0
   const tree = binding.coverage === 'zip-tree-entries'
   if (binding.coverage !== 'raw-bytes') {
-    const visit = (container, prefix, depth) => {
+    const visit = (container, prefix, depth, chain = []) => {
       if (depth > (tree ? limits.maxDepth : 0)) throw new Error('ZIP depth limit')
       depthReached = Math.max(depthReached, depth)
       const decoded = zipArtifactEntries(container, limits, remainingWork, { tree, budget })
       for (const entry of decoded.entries) {
         const position = index++, virtual = `${prefix}!/${entry.name}`
+        // Separate chain segments are identities; flattened display paths and
+        // enumeration positions never grant exception authority.
+        const memberChain = entryExceptions.length ? [...chain, { path: entry.name, sha256: createHash('sha256').update(entry.bytes).digest('hex'), bytes: entry.bytes.length }] : []
+        let exceptionDigest = null
+        for (const exception of entryExceptions) {
+          const declared = exception.artifactEntry.chain
+          if (declared.length !== memberChain.length || !declared.every((member, i) => member.path === memberChain[i].path)) continue
+          if (entry.directory || entry.nestedZip || !declared.every((member, i) => member.sha256 === memberChain[i].sha256 && member.bytes === memberChain[i].bytes) || dispositions.has(exception.exceptionDigest)) throw new Error('artifact-entry-identity-mismatch')
+          exceptionDigest = exception.exceptionDigest
+          dispositions.set(exceptionDigest, { exceptionDigest, rule: exception.rule, entryIndex: position, applied: false })
+        }
         scan('entry-path', virtual, entry.name, position)
-        if (!entry.directory) scan('entry-bytes', virtual, entry.bytes.toString('latin1'), position)
-        if (entry.nestedZip) visit(entry.bytes, virtual, depth + 1)
+        if (!entry.directory) scan('entry-bytes', virtual, entry.bytes.toString('latin1'), position, exceptionDigest)
+        if (entry.nestedZip) visit(entry.bytes, virtual, depth + 1, memberChain)
       }
     }
     visit(bytes, binding.path, 0)
   }
-  return { matches, expandedBytes: budget.expanded, entries: budget.entries, depthReached, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), profileDigest, coverage: binding.coverage }
+  if (dispositions.size !== entryExceptions.length) throw new Error('artifact-entry-unavailable')
+  return { matches, entryExceptionDispositions: [...dispositions.values()], expandedBytes: budget.expanded, entries: budget.entries, depthReached, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), profileDigest, coverage: binding.coverage }
 }
 
 function readArtifact({ context, section, repoRoot, repo, gitExecutable, gitRunner, exceptions }) {
@@ -1198,7 +1239,8 @@ function readArtifact({ context, section, repoRoot, repo, gitExecutable, gitRunn
   const sha256 = createHash('sha256').update(bytes).digest('hex')
   const object = createHash(binding.blob.length === 40 ? 'sha1' : 'sha256').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
   if (sha256 !== binding.sha256 || object !== binding.blob) return refuse('artifact-integrity-mismatch')
-  const input = { binding, limits, rules: context.rules, added: section.added, profileDigest: context.profileDigest, remainingWork: limits.maxWorkBytes - context.workBytes }
+  const entryExceptions = (context.exceptions ?? []).filter(item => item.artifactEntry && item.repo === repo && item.paths[0] === binding.path && item.artifactEntry.blob === binding.blob).map(item => ({ ...item, exceptionDigest: artifactDigest(item) }))
+  const input = { binding, limits, rules: context.rules, entryExceptions, added: section.added, profileDigest: context.profileDigest, remainingWork: limits.maxWorkBytes - context.workBytes }
   const header = Buffer.from(JSON.stringify(input)), length = Buffer.alloc(4); length.writeUInt32BE(header.length)
   if (header.length > 256 * 1024 || Date.now() - started >= limits.timeoutMs) return refuse('artifact-input-or-time-limit')
   const worker = `import fs from 'node:fs'; import { executeArtifactScan } from ${JSON.stringify(import.meta.url)}; try { const b=fs.readFileSync(0); const n=b.readUInt32BE(0); const result=executeArtifactScan(JSON.parse(b.subarray(4,4+n).toString()),b.subarray(4+n)); process.stdout.write(JSON.stringify(result)); } catch { process.exitCode=1; }`
@@ -1211,14 +1253,28 @@ function readArtifact({ context, section, repoRoot, repo, gitExecutable, gitRunn
   let output
   try { output = JSON.parse(child.stdout) } catch { return refuse('artifact-worker-output-invalid') }
   if (output.sha256 !== sha256 || output.bytes !== bytes.length || output.profileDigest !== context.profileDigest || output.coverage !== binding.coverage || !Array.isArray(output.matches) || !Number.isSafeInteger(output.entries) || output.entries < 0 || output.entries > limits.maxEntries || !Number.isSafeInteger(output.depthReached) || output.depthReached < 0 || output.depthReached > (binding.coverage === 'zip-tree-entries' ? limits.maxDepth : 0) || !artifactWork(context, output.expandedBytes)) return refuse('artifact-worker-binding-invalid')
+  const dispositions = new Map()
+  if (!Array.isArray(output.entryExceptionDispositions) || output.entryExceptionDispositions.length !== entryExceptions.length) return refuse('artifact-worker-exceptions-invalid')
+  for (const item of output.entryExceptionDispositions) {
+    if (!item || !entryExceptions.some(exception => exception.exceptionDigest === item.exceptionDigest && exception.rule === item.rule) || dispositions.has(item.exceptionDigest) || !Number.isSafeInteger(item.entryIndex) || item.entryIndex < 0 || item.entryIndex >= output.entries || typeof item.applied !== 'boolean') return refuse('artifact-worker-exceptions-invalid')
+    dispositions.set(item.exceptionDigest, item)
+  }
   const findings = []
+  const applied = new Set()
   for (const match of output.matches) {
     const rule = context.rules.find(rule => rule.id === match.rule)
     if (!rule || !['raw-bytes', 'entry-bytes', 'entry-path', 'outer-path'].includes(match.unit) || !(match.entry === null || (Number.isSafeInteger(match.entry) && match.entry >= 0 && match.entry < output.entries))) return refuse('artifact-worker-match-invalid')
+    if (Object.hasOwn(match, 'exceptionDigest')) {
+      const disposition = dispositions.get(match.exceptionDigest)
+      if (!disposition?.applied || disposition.rule !== rule.id || disposition.entryIndex !== match.entry || match.unit !== 'entry-bytes' || applied.has(match.exceptionDigest)) return refuse('artifact-worker-exceptions-invalid')
+      applied.add(match.exceptionDigest)
+      continue
+    }
     // Entry exceptions cannot silently inherit an outer-path carve-out.
-    if (match.entry === null && findException({ exceptions, rule: rule.id, repo, path: section.path })) continue
+    if (match.entry === null && findException({ exceptions: context.exceptions ?? exceptions, rule: rule.id, repo, path: section.path })) continue
     findings.push({ severity: rule.severity ?? 'error', code: 'content-rule-violation', rule: rule.id, repo, path: section.path, line: null, binary: true, message: `${repo ?? 'repository'}/${section.path}: artifact content rule matched`, details: { coverage: match.unit, entryIndex: match.entry } })
   }
-  context.coverage.push({ repo, path: section.path, blob: binding.blob, sha256, bytes: bytes.length, profileDigest: context.profileDigest, coverage: binding.coverage, entries: output.entries, depthReached: output.depthReached, expandedBytes: output.expandedBytes })
+  if ([...dispositions.values()].some(item => item.applied !== applied.has(item.exceptionDigest))) return refuse('artifact-worker-exceptions-invalid')
+  context.coverage.push({ repo, path: section.path, blob: binding.blob, sha256, bytes: bytes.length, profileDigest: context.profileDigest, coverage: binding.coverage, entries: output.entries, depthReached: output.depthReached, expandedBytes: output.expandedBytes, ...(context.exceptions ? { entryExceptionDispositions: [...dispositions.values()] } : {}) })
   return { diagnostics: [], findings }
 }
