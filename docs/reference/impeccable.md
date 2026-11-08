@@ -1,9 +1,12 @@
 # Impeccable resource adapters
 
-These internal adapters connect pinned Impeccable resources to an explicit host.
+The Node adapters at `@mnstry/atelier/impeccable` connect pinned Impeccable
+resources to an explicit host.
 They perform no network requests, process execution, filesystem writes,
-canonical admission or publication. This is implementation source, not a
-published package subpath or proof that an agent host has loaded the capability.
+canonical admission or publication. The subpath is available in this source
+candidate and subsequent package releases; it does not prove that an installed
+agent host has loaded the capability. Browser and Worker bindings remain
+unsupported because the digest dependency is Node-oriented.
 
 The resource inventory is derived from Impeccable commit
 `924bbd194d02e5e15a227e75b5901fb0d7a4ecad`, skill 4.8.1 and engine 0.1.19,
