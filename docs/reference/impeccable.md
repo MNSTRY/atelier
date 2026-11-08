@@ -209,3 +209,59 @@ synthetic inputs, recording any display-file label mapping. Clean, advisory-only
 primary-finding and failed execution cases exercise different result paths.
 Agreement on fixtures establishes only those cases, not all-rule coverage,
 usefulness on a real product, or release acceptance.
+
+## Contrasting source conformance fixtures
+
+`fixtures/impeccable/source-conformance.v1.json` contains invented positive/negative
+pairs for the existing source/static adapter. Its rule IDs and upstream pin are
+projections of the existing resources; the build closure is a retained qualification
+receipt. Neither is a new policy or rule registry. The corpus has at most64cases
+of at most64KiB each. Expectations assert target-rule presence or absence; unrelated
+findings remain in the raw result. No HTML/JavaScript fixture is executed.
+
+Normal `node --test test/impeccable-wasm.test.mjs` checks fixture bounds/pins and
+adapter routing with explicit protocol doubles. Those checks do not establish
+actual engine coverage. The actual-engine test is skipped and NOT_QUALIFIED unless
+the host supplies `ATELIER_IMPECCABLE_WASM_DIR`, an already admitted local Node WASM
+closure matching all five pinned files. The test checks those files before loading
+and after scanning, checks the actual62-ID registry, and emits
+`IMPECCABLE_SOURCE_CONFORMANCE_RESULT` followed by numbered8KiB base64 chunks of JSON (at most2MiB encoded, to preserve
+raw JSON through TAP console escaping and line splitting), with fixture/engine identities, every raw
+result, mismatches, observed IDs and separately paired-qualified IDs, pair outcomes and per-engine
+rule qualification. An ID qualified in one engine says nothing about the other. It performs
+no download, compilation, fallback, resource fetching or custom rule-pack setup.
+
+Run optional actual qualification in one finite isolated Node22worker under the
+host's existing process, custody and time/memory controls; bound the whole worker,
+including initialization and corpus, rather than resetting a deadline per case.
+The focused qualification budget is30seconds, with Node old-space384MiB. Old-space
+is a JS-heap setting, not a total RSS or WASM-linear-memory cap; the report records
+observed process/heap memory and does not claim a hard total-memory bound. Module
+checksums are local provenance checks, not isolation from same-process or same-user
+code. A refusal, timeout or incomplete run is not a passing qualification.
+
+A rule is paired-qualified only when its positive and negative cases both meet
+their expectations. An incidental observed finding alone does not qualify that
+rule. Every remaining registered ID is explicitly NOT_QUALIFIED, with a reason;
+absence from this corpus never means unsupported, waived or approved. These
+source/static observations do not close full P47 or establish rendered, browser,
+native-product, private-host, command usefulness or human acceptance. Inline ignores
+remain disabled by the existing adapter.
+
+The pinned upstream static engine applies `data-impeccable-ignore` on elements
+and ancestors before its final `inlineIgnores` filter. The WASM adapter therefore
+refuses that case-insensitive marker anywhere in bounded source content before
+looking up or invoking an export. This is a fixed non-clean refusal, including
+conservative false positives in comments, literals and unrelated containing text.
+It does not echo the input, parse HTML, remove a waiver or rewrite source. Marker-free
+source/static scans still use the original engine and retain all returned findings.
+The corpus also records explicit pre-execution refusals, separately from paired
+rule qualification. This adapter guard does not fix upstream Rust, direct CLI or
+other bindings; those routes need their own control and acceptance evidence.
+
+One retained initial observation illustrates the source heuristic boundary: a
+source top-accent rule can still report a `border-radius:0` declaration. The source
+pair therefore qualifies the documented border-width threshold; the separate
+static pair checks rounded versus square corners. Their outcomes do not establish
+source/static parity. The original failed observation remains qualification evidence
+for hosts evaluating that upstream limitation.
