@@ -8,6 +8,7 @@ import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 import {
   CHECK_AGGREGATE_MAX_BYTES,
   createArtifactScanContext,
+  artifactGitOutput,
   validateArtifactScan,
   canonicalDiffArgs,
   gitOutputResult,
@@ -440,7 +441,7 @@ function stagedTargets(project, hookIndex, gitExecutable = 'git') {
   return { targets, unresolved: null }
 }
 
-function stagedPathsResult(targets, { gitExecutable = 'git' } = {}) {
+function stagedPathsResult(targets, { gitExecutable = 'git', artifactContext = null } = {}) {
   const paths = []
   const failures = []
   for (const [repo, target] of targets) {
@@ -449,7 +450,7 @@ function stagedPathsResult(targets, { gitExecutable = 'git' } = {}) {
       continue
     }
     // NUL-separated names are exact: a quoted name could never match a forbidden-path glob.
-    const result = gitOutputResult(target.root, ['diff', '--cached', '--name-only', '-z', '--no-relative', '--no-renames', '--diff-filter=ACMRT'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES })
+    const result = artifactGitOutput(target.root, ['diff', '--cached', '--name-only', '-z', '--no-relative', '--no-renames', '--diff-filter=ACMRT'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES, artifactContext })
     if (!result.ok || (result.stdout && !result.stdout.endsWith('\0'))) {
       failures.push({ repo, reason: result.code ?? 'unterminated-staged-path-evidence' })
       continue
@@ -560,7 +561,7 @@ export function semanticChangesInFile(file) {
   return changes
 }
 
-function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
+function semanticDiffFindings({ targets, gitExecutable = 'git', artifactContext = null }) {
   const findings = []
   const severity = 'error'
   for (const [repo, target] of targets) {
@@ -569,7 +570,7 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
       continue
     }
     // --text: a document declared binary, or holding a NUL byte, still has its fields read.
-    const result = gitOutputResult(target.root, [...canonicalDiffArgs(['--cached'], ['--text', '--no-renames']), '--', '*.md', '*.kg.json'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES })
+    const result = artifactGitOutput(target.root, [...canonicalDiffArgs(['--cached'], ['--text', '--no-renames']), '--', '*.md', '*.kg.json'], { gitExecutable, indexFile: target.indexFile, maxBuffer: CHECK_AGGREGATE_MAX_BYTES, artifactContext })
     if (!result.ok) {
       findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
       continue
@@ -591,7 +592,9 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
       if (!changes.length) continue
       // The marker has to be added in the same file's diff as the change it approves:
       // a marker elsewhere in the commit, a removed one, or one in a file name approves nothing.
-      if (file.hunks.some((hunk) => hunk.added.some((line) => REVIEW_MARKER_RE.test(line)))) continue
+      const artifact = artifactContext?.profile.artifacts.some(item => item.repo === repo.name && item.path === file.path)
+      if (!artifact && file.hunks.some((hunk) => hunk.added.some((line) => REVIEW_MARKER_RE.test(line)))) continue
+      const reportedChanges = artifact ? ['declared artifact contains semantic field changes; values redacted'] : changes
       const label = `${repo.name}/${file.path ?? '(unknown path)'}`
       findings.push(
         finding({
@@ -599,8 +602,8 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
           code: 'semantic-field-change-needs-review',
           repo: repo.name,
           path: file.path,
-          message: `${label}: ${changes.join('; ')} — add an Atelier-Boundary-Review: approved marker to this file's diff`,
-          details: { changes },
+          message: artifact ? `${label}: declared artifact semantic changes require source-owner review; values redacted` : `${label}: ${reportedChanges.join('; ')} — add an Atelier-Boundary-Review: approved marker to this file's diff`,
+          details: { changes: reportedChanges },
         }),
       )
     }
@@ -608,11 +611,10 @@ function semanticDiffFindings({ targets, gitExecutable = 'git' }) {
   return findings
 }
 
-function stagedContentFindings({ policy, targets, gitExecutable = 'git', artifactCoverage = [] }) {
+function stagedContentFindings({ policy, targets, gitExecutable = 'git', artifactCoverage = [], artifactContext = null }) {
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
   const findings = []
-  const artifactContext = policy.schema === BOUNDARY_POLICY_SCHEMA_V2 ? createArtifactScanContext(policy.artifactScan, rules) : null
   let totalBytes = 0
   for (const [repo, target] of targets) {
     if (!target.root || !fs.existsSync(path.join(target.root, '.git'))) {
@@ -632,7 +634,7 @@ function stagedContentFindings({ policy, targets, gitExecutable = 'git', artifac
       break
     }
   }
-  if (artifactContext) artifactCoverage.push(...artifactContext.coverage)
+  if (artifactContext && !artifactContext.failed) artifactCoverage.push(...artifactContext.coverage)
   return findings
 }
 
@@ -686,6 +688,7 @@ export function checkPushContent({ project, policy, repo, updates, remote = null
   const findings = []
   let totalBytes = 0
   for (const update of updates) {
+    if (artifactContext?.failed) break
     const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, remote, gitRunner, maxBytes: CHECK_AGGREGATE_MAX_BYTES - totalBytes, aggregateLimitBytes: CHECK_AGGREGATE_MAX_BYTES, artifactContext })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
@@ -795,6 +798,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const artifactCoverage = []
+  const artifactContext = !validationErrors.length && policy?.schema === BOUNDARY_POLICY_SCHEMA_V2 ? createArtifactScanContext(policy.artifactScan, resolveContentRules(policy)) : null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
   if (!stagedOnly) {
     graph = buildGraph(project)
@@ -818,11 +822,11 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
         message: `${unresolved} is not a repo declared in ${project?.configPath ?? 'the project config'}, or several declared repos share its Git directory; the pre-commit guard cannot tell what is being committed`,
       }))
     }
-    const listed = stagedPathsResult(targets, { gitExecutable })
+    const listed = stagedPathsResult(targets, { gitExecutable, artifactContext })
     findings.push(...listed.failures.map(({ repo, reason }) => unscannableRepoFinding(repo, `staged paths could not be listed (${reason})`)))
     findings.push(...forbiddenPathFindings({ policy, stagedPaths: listed.paths }))
-    findings.push(...semanticDiffFindings({ targets, gitExecutable }))
-    if (!validationErrors.length || policy?.schema !== BOUNDARY_POLICY_SCHEMA_V2) findings.push(...stagedContentFindings({ policy, targets, gitExecutable, artifactCoverage }))
+    findings.push(...semanticDiffFindings({ targets, gitExecutable, artifactContext }))
+    if (!validationErrors.length || policy?.schema !== BOUNDARY_POLICY_SCHEMA_V2) findings.push(...stagedContentFindings({ policy, targets, gitExecutable, artifactCoverage, artifactContext }))
   }
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')

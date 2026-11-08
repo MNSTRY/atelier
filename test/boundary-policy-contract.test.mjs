@@ -98,3 +98,20 @@ test('v2 is explicit, preserves v1 schema and agrees with runtime profile refusa
   }
   assert.ok(validateBoundaryPolicy({ ...v1, artifactScan: profile }).length, 'v1 cannot receive a new first-class field')
 })
+
+
+test('v2 ZIP tree coverage requires a finite supported depth in schema and runtime', async () => {
+  const { validateBoundaryPolicy } = await import('../src/boundary/policy.mjs')
+  const v1 = readJson(fixtureFiles('valid')[0]), repo = Object.keys(v1.repos)[0]
+  const value = { ...v1, schema: 'mnstry.atelier-boundary-policy@v2', artifactScan: { artifacts: [{ repo, path: 'sample.zip', blob: 'a'.repeat(40), sha256: 'b'.repeat(64), bytes: 10, coverage: 'zip-tree-entries' }], limits: { maxArtifactBytes: 100, maxExpandedBytes: 100, maxEntryBytes: 100, maxEntries: 10, maxWorkBytes: 1000, timeoutMs: 1000 } } }
+  delete value.contractVersion
+  const validate = new Ajv2020({ strict: false }).compile(readJson(path.join(ROOT, 'contracts/atelier-boundary-policy.v2.schema.json')))
+  for (const depth of [undefined, 0, 5, '2']) {
+    value.artifactScan.limits.maxDepth = depth
+    assert.equal(validate(value), false)
+    assert.ok(validateBoundaryPolicy(value).length)
+  }
+  value.artifactScan.limits.maxDepth = 2
+  assert.equal(validate(value), true, formatErrors(validate))
+  assert.deepEqual(validateBoundaryPolicy(value), [])
+})

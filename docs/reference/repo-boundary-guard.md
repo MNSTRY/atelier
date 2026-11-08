@@ -363,7 +363,7 @@ dispatcher now refuses unknown policy versions explicitly.
 V2 requires `artifactScan` with explicit `artifacts` and `limits`. Each binding
 names the existing policy repository, exact repository-relative `path`, Git
 `blob` object ID (40 or 64 lowercase hex), `sha256` (64 lowercase hex), `bytes`
-and `coverage`. Coverage is `raw-bytes` or `zip-flat-entries`. Bind every introduced
+and `coverage`. Coverage is `raw-bytes`, `zip-flat-entries` or explicit `zip-tree-entries`. Bind every introduced
 version that a push carries, including historical blobs removed from the tip.
 The policy has at most 128 bindings and 128 content rules. An altered blob at a
 bound path refuses until its new identity is explicitly reviewed and bound.
@@ -390,6 +390,9 @@ and rule snapshot are digest-bound to each returned coverage record.
 
 V2 counts repeated raw acquisition and expanded entry bytes, plus ordinary diff
 and binary bytes, across refs, introduced commits and merge-parent comparisons.
+All acquired Git stdout is charged before parsing/matching, including metadata,
+forced-text reads and retries. Each capture is capped by the remaining work
+budget; exhaustion stops later acquisitions and clears provisional coverage.
 An identity may be read again and each read still consumes work. Integrity
 deduplication does not waive processing cost. The deadline bounds each declared
 artifact scan, including Git acquisition and matching; commit-count and work
@@ -409,10 +412,24 @@ UTF-8 names, and an uncommented single-disk directory. It verifies local/central
 headers, complete compressed consumption, actual decoded sizes and CRC32. It
 refuses extras, comments, data descriptors, encryption, ZIP64, unsupported methods,
 links/special files, duplicate/case-ambiguous names, unsafe/ambiguous paths, trailing
-bytes and all declared size/count/expansion limits. It refuses recognized nested
+bytes and all declared size/count/expansion limits. The flat profile refuses recognized nested
 ZIP/gzip/bzip2/xz/7z/RAR/zstd/tar signatures and corresponding filename suffixes.
-It is **not** a recursive or universal container decoder: other payload encodings
+It is **not** a universal container decoder: other payload encodings
 are scanned only as immediate entry bytes, never claimed as semantic decoding.
+Tree ZIP coverage adds `maxDepth` to limits, required for that profile and bounded
+to 1 through 4. The root ZIP is depth0. Each nested ZIP consumes a level; every
+level receives the same strict validation, CRC/path checks and refusal behavior.
+One shared entry count, total expanded-byte/work budget and child deadline cover
+the complete tree, including siblings. Nested container bytes and decoded
+descendants both count as work. Other recognized container formats still refuse;
+unknown encodings are immediate bytes only. Reports include `depthReached` and
+total entry/expanded counts. Flat coverage continues to refuse nested ZIPs.
+
+Declared artifacts using `.md` or `.kg.json` outer names do not escape semantic
+review: detected assignments remain blocking with their values redacted. A
+review marker inside the container cannot approve those changes. The diagnostic
+requires source-owner review rather than echoing stored member contents.
+
 Use a separately supported profile before requesting other coverage. Raw-only
 coverage never attests ZIP entries or satisfies a decoded-entry requirement.
 

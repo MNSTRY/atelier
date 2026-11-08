@@ -493,18 +493,34 @@ export function gitOutputResult(repoRoot, args, {
   return { ok: true, stdout, bytes }
 }
 
+export function artifactGitOutput(repoRoot, args, options = {}) {
+  const context = options.artifactContext
+  if (!context) return gitOutputResult(repoRoot, args, options)
+  const remaining = context.profile.limits.maxWorkBytes - context.workBytes
+  if (context.failed || remaining <= 0) {
+    context.failed = true; context.coverage.length = 0
+    return { ok: false, code: 'artifact-work-limit', stdout: null, bytes: 0 }
+  }
+  const result = gitOutputResult(repoRoot, args, { ...options, maxBuffer: Math.min(options.maxBuffer ?? DIFF_RESULT_MAX_BYTES, remaining) })
+  if (!result.ok || !artifactWork(context, result.bytes)) {
+    context.failed = true; context.coverage.length = 0
+    return { ok: false, code: result.code ?? 'artifact-work-limit', stdout: null, bytes: 0 }
+  }
+  return result
+}
+
 /** The empty tree in this repository's object format (SHA-1 or SHA-256). */
-export function emptyTreeFor(repoRoot, { runner = spawnSync } = {}) {
-  const result = gitOutputResult(repoRoot, ['rev-parse', '--show-object-format'], { maxBuffer: 1024, runner })
+export function emptyTreeFor(repoRoot, { runner = spawnSync, artifactContext = null } = {}) {
+  const result = artifactGitOutput(repoRoot, ['rev-parse', '--show-object-format'], { maxBuffer: 1024, runner, artifactContext })
   return (result.ok && EMPTY_TREES[result.stdout.trim()]) || EMPTY_TREE
 }
 
-export function pushRangeBase(repoRoot, remoteSha, { runner = spawnSync } = {}) {
+export function pushRangeBase(repoRoot, remoteSha, { runner = spawnSync, artifactContext = null } = {}) {
   // A new branch has no remote counterpart, so everything it carries is new:
   // diff against the empty tree rather than silently scanning nothing.
-  if (!remoteSha || ZERO_SHA_RE.test(remoteSha)) return emptyTreeFor(repoRoot, { runner })
-  const result = gitOutputResult(repoRoot, ['rev-parse', '--verify', '--quiet', `${remoteSha}^{commit}`], { maxBuffer: 1024 * 1024, runner })
-  return result.ok ? remoteSha : emptyTreeFor(repoRoot, { runner })
+  if (!remoteSha || ZERO_SHA_RE.test(remoteSha)) return emptyTreeFor(repoRoot, { runner, artifactContext })
+  const result = artifactGitOutput(repoRoot, ['rev-parse', '--verify', '--quiet', `${remoteSha}^{commit}`], { maxBuffer: 1024 * 1024, runner, artifactContext })
+  return result.ok ? remoteSha : emptyTreeFor(repoRoot, { runner, artifactContext })
 }
 
 export const canonicalDiffArgs = (revisions, extra = []) => ['-c', 'core.quotePath=true', 'diff', ...CANONICAL_DIFF_FLAGS, '--unified=0', ...extra, ...revisions]
@@ -520,7 +536,7 @@ export function diffForPushRange(repoRoot, { localSha, remoteSha }, options = {}
 }
 
 export function stagedDiff(repoRoot, options = {}) {
-  const result = gitOutputResult(repoRoot, contentDiffArgs(['--cached']), options)
+  const result = artifactGitOutput(repoRoot, contentDiffArgs(['--cached']), options)
   return result.ok ? { ...result, diff: result.stdout } : { ...result, diff: null }
 }
 
@@ -603,7 +619,7 @@ const DECLARED_TEXT_BATCH_BYTES = DIFF_RESULT_MAX_BYTES / 2
  * rewrite a decomposed name on the command line and match nothing. Returns, per
  * path, `{ addedLines }` or `{ cause }` naming why the text was not read.
  */
-function declaredBinaryTextLines({ repoRoot, revisions, entries, changedPaths = [], gitExecutable, gitRunner, indexFile = null }) {
+function declaredBinaryTextLines({ repoRoot, revisions, entries, changedPaths = [], gitExecutable, gitRunner, indexFile = null, artifactContext = null }) {
   const outcomes = new Map()
   const read = (group) => {
     const paths = [...new Set(group.flatMap(({ section }) => [section.path, section.oldPath].filter((value) => value && value !== '')))]
@@ -621,13 +637,13 @@ function declaredBinaryTextLines({ repoRoot, revisions, entries, changedPaths = 
       if (!paths.some((other) => other.startsWith(`${read}/`))) excluded.add(`${read}/`)
       else for (const value of under) if (!reading.has(value)) excluded.add(value)
     }
-    const result = gitOutputResult(repoRoot, [
+    const result = artifactGitOutput(repoRoot, [
       '-c', 'core.precomposeUnicode=false',
       ...contentDiffArgs(revisions, ['--text']),
       '--',
       ...paths.map((value) => `:(literal)${value}`),
       ...[...excluded].map((value) => `:(exclude,literal)${value}`),
-    ], { gitExecutable, indexFile, runner: gitRunner })
+    ], { gitExecutable, indexFile, runner: gitRunner, artifactContext })
     const parsed = result.ok ? parseDiffSections(result.stdout) : []
     for (const { section } of group) {
       const matches = parsed.filter((candidate) => candidate.path === section.path && !candidate.deleted)
@@ -685,11 +701,12 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
       continue
     }
     // Read by object id: a path can be misread (":0:name" names an index stage).
-    const result = gitOutputResult(repoRoot, ['cat-file', 'blob', section.newBlob], {
+    const result = artifactGitOutput(repoRoot, ['cat-file', 'blob', section.newBlob], {
       encoding: 'buffer',
       gitExecutable,
       maxBuffer: BINARY_FILE_MAX_BYTES + 1,
       runner: gitRunner,
+      artifactContext,
     })
     if (!result.ok) {
       diagnostics.push(incompleteDiagnostic({
@@ -728,7 +745,7 @@ function readBinaryChanges({ repoRoot, revisions, sections, rules, exceptions, r
   }
   if (declaredText.length > 0) {
     const changedPaths = [...new Set(sections.flatMap((section) => [section.path, section.oldPath]).filter((value) => value && value !== ''))]
-    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, changedPaths, gitExecutable, gitRunner, indexFile })
+    const outcomes = declaredBinaryTextLines({ repoRoot, revisions, entries: declaredText, changedPaths, gitExecutable, gitRunner, indexFile, artifactContext })
     const contentRules = rules.filter((rule) => (rule.kind ?? 'content') === 'content')
     for (const { section } of declaredText) {
       const { addedLines, cause } = outcomes.get(section.path)
@@ -759,7 +776,7 @@ export function scanStagedRepository({
   indexFile = null,
   artifactContext = null,
 } = {}) {
-  const acquired = stagedDiff(repoRoot, { gitExecutable, indexFile, runner: gitRunner })
+  const acquired = stagedDiff(repoRoot, { gitExecutable, indexFile, runner: gitRunner, artifactContext })
   if (!acquired.ok) {
     return {
       findings: [],
@@ -769,7 +786,6 @@ export function scanStagedRepository({
   }
   const sections = parseDiffSections(acquired.diff)
   const binary = readBinaryChanges({ repoRoot, revisions: ['--cached'], sections, rules, exceptions, repo, gitExecutable, gitRunner, indexFile, artifactContext })
-  if (artifactContext && !artifactWork(artifactContext, acquired.bytes + binary.bytes)) binary.diagnostics.push(incompleteDiagnostic({ repo, message: 'artifact scan shared work budget exhausted', details: { reason: 'artifact-work-limit' } }))
   return {
     findings: [...scanAddedContent({ files: contentFilesFor(sections, artifactContext, repo), rules, exceptions, repo }), ...binary.findings],
     diagnostics: [...unreadableSectionDiagnostics(sections, repo), ...binary.diagnostics],
@@ -778,11 +794,10 @@ export function scanStagedRepository({
 }
 
 function scanRevisionRange({ repoRoot, base, tip, rules, exceptions, repo, gitRunner, artifactContext = null }) {
-  const acquired = gitOutputResult(repoRoot, contentDiffArgs([base, tip]), { runner: gitRunner })
+  const acquired = artifactGitOutput(repoRoot, contentDiffArgs([base, tip]), { runner: gitRunner, artifactContext })
   if (!acquired.ok) return { acquired, keyed: [], diagnostics: [], bytes: 0, blobs: [] }
   const sections = parseDiffSections(acquired.stdout)
   const binary = readBinaryChanges({ repoRoot, revisions: [base, tip], sections, rules, exceptions, repo, gitRunner, artifactContext })
-  if (artifactContext && !artifactWork(artifactContext, acquired.bytes + binary.bytes)) binary.diagnostics.push(incompleteDiagnostic({ repo, message: 'artifact scan shared work budget exhausted', details: { reason: 'artifact-work-limit' } }))
   const findings = [...scanAddedContent({ files: contentFilesFor(sections, artifactContext, repo), rules, exceptions, repo }), ...binary.findings]
   return {
     acquired,
@@ -833,9 +848,9 @@ const PLAIN_REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
  * own commit. With no remote named (a hook installed before this), every
  * remote's tracking refs exclude, as before.
  */
-function remoteScope(repoRoot, remote, runner) {
+function remoteScope(repoRoot, remote, runner, artifactContext) {
   if (typeof remote !== 'string' || remote === '') return { args: ['--remotes'], label: 'no remote holds' }
-  const configured = gitOutputResult(repoRoot, ['config', '--get-regexp', '^remote\\..*\\.url$'], { maxBuffer: 1024 * 1024, runner })
+  const configured = artifactGitOutput(repoRoot, ['config', '--get-regexp', '^remote\\..*\\.url$'], { maxBuffer: 1024 * 1024, runner, artifactContext })
   const remotes = configured.ok
     ? configured.stdout.split('\n').filter(Boolean).map((line) => {
       const space = line.indexOf(' ')
@@ -864,7 +879,7 @@ export function scanPushUpdate({
   aggregateLimitBytes = maxBytes,
   artifactContext = null,
 } = {}) {
-  const base = pushRangeBase(repoRoot, update.remoteSha, { runner: gitRunner })
+  const base = pushRangeBase(repoRoot, update.remoteSha, { runner: gitRunner, artifactContext })
   const net = scanRevisionRange({ repoRoot, base, tip: update.localSha, rules, exceptions, repo, gitRunner, artifactContext })
   if (!net.acquired.ok) {
     return {
@@ -885,9 +900,9 @@ export function scanPushUpdate({
     return repeat
   }, 0)
   let bytes = evidence(net)
-  const scope = remoteScope(repoRoot, remote, gitRunner)
+  const scope = remoteScope(repoRoot, remote, gitRunner, artifactContext)
   // Parents before children, so a commit is judged before a merge that brings it in.
-  const listed = gitOutputResult(repoRoot, ['rev-list', '--topo-order', '--reverse', '--parents', `--max-count=${maxCommits + 1}`, update.localSha, '--not', ...(base === update.remoteSha ? [base] : []), ...scope.args], { runner: gitRunner })
+  const listed = artifactGitOutput(repoRoot, ['rev-list', '--topo-order', '--reverse', '--parents', `--max-count=${maxCommits + 1}`, update.localSha, '--not', ...(base === update.remoteSha ? [base] : []), ...scope.args], { runner: gitRunner, artifactContext })
   if (!listed.ok) {
     diagnostics.push(incompleteDiagnostic({ repo, message: 'the commits in this push could not be listed', details: { reason: listed.code } }))
     return { findings, diagnostics, bytes }
@@ -903,7 +918,7 @@ export function scanPushUpdate({
   }
   // One commit straight on the remote's tip is the endpoint change already judged.
   if (commits.length === 1 && commits[0].length === 2 && commits[0][1] === base) return { findings, diagnostics, bytes }
-  const empty = emptyTreeFor(repoRoot, { runner: gitRunner })
+  const empty = emptyTreeFor(repoRoot, { runner: gitRunner, artifactContext })
   for (const [commit, ...parents] of commits) {
     const step = scanCommit({ repoRoot, commit, parents, empty, rules, exceptions, repo, gitRunner, artifactContext })
     const short = commit.slice(0, 12)
@@ -1023,20 +1038,21 @@ export function validateArtifactScan(profile, rules = DEFAULT_CONTENT_RULES) {
   const errors = []
   if (!isObject(profile) || Object.keys(profile).some(key => !['artifacts', 'limits'].includes(key))) return ['artifactScan must contain only artifacts and limits']
   const limits = profile.limits
-  if (!isObject(limits) || Object.keys(limits).some(key => !limitKeys.includes(key)) || limitKeys.some((key, i) => !Number.isSafeInteger(limits[key]) || limits[key] < 1 || limits[key] > maxima[i])) errors.push('artifactScan limits must be explicit positive integers within supported maxima')
+  if (!isObject(limits) || Object.keys(limits).some(key => ![...limitKeys, 'maxDepth'].includes(key)) || limitKeys.some((key, i) => !Number.isSafeInteger(limits[key]) || limits[key] < 1 || limits[key] > maxima[i])) errors.push('artifactScan limits must be explicit positive integers within supported maxima')
   if (!Array.isArray(profile.artifacts) || !profile.artifacts.length || profile.artifacts.length > 128) errors.push('artifactScan requires 1 through 128 exact artifact bindings')
   const seen = new Set()
   for (const item of Array.isArray(profile.artifacts) ? profile.artifacts : []) {
     if (!isObject(item) || Object.keys(item).some(key => !artifactKeys.includes(key)) || artifactKeys.some(key => !Object.hasOwn(item, key)) ||
         typeof item.repo !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item.repo) || !portableArtifactPath(item.path) ||
         typeof item.blob !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(item.blob) || typeof item.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(item.sha256) ||
-        !Number.isSafeInteger(item.bytes) || item.bytes < 0 || item.bytes > (limits?.maxArtifactBytes ?? 0) || !['raw-bytes', 'zip-flat-entries'].includes(item.coverage)) {
+        !Number.isSafeInteger(item.bytes) || item.bytes < 0 || item.bytes > (limits?.maxArtifactBytes ?? 0) || !['raw-bytes', 'zip-flat-entries', 'zip-tree-entries'].includes(item.coverage)) {
       errors.push('artifactScan binding has invalid identity, coverage or byte count'); continue
     }
     const key = `${item.repo}\0${item.path}\0${item.blob}`
     if (seen.has(key)) errors.push('artifactScan bindings must be unique by repo/path/blob')
     seen.add(key)
   }
+  if ((limits?.maxDepth !== undefined || (Array.isArray(profile.artifacts) && profile.artifacts.some(item => item?.coverage === 'zip-tree-entries'))) && (!Number.isSafeInteger(limits?.maxDepth) || limits.maxDepth < 1 || limits.maxDepth > 4)) errors.push('ZIP tree coverage requires maxDepth from 1 through 4')
   if (rules.length > 128 || validateContentRules(rules).length) errors.push('artifactScan requires at most 128 valid content rules')
   return errors
 }
@@ -1051,7 +1067,7 @@ export function createArtifactScanContext(profile, rules = DEFAULT_CONTENT_RULES
 
 function artifactWork(context, bytes) {
   if (context.failed || !Number.isSafeInteger(bytes) || bytes < 0 || context.workBytes + bytes > context.profile.limits.maxWorkBytes) {
-    context.failed = true
+    context.failed = true; context.coverage.length = 0
     return false
   }
   context.workBytes += bytes
@@ -1070,12 +1086,13 @@ const crc32 = bytes => {
 
 // Deliberately narrow ZIP profile: contiguous local entries, no comments/extras,
 // descriptors, encryption, ZIP64, links or ambiguous filenames. Never extracts.
-function zipArtifactEntries(bytes, limits, remainingWork) {
+function zipArtifactEntries(bytes, limits, remainingWork, { tree = false, budget = { entries: 0, expanded: 0 } } = {}) {
   const fail = () => { throw new Error('unsupported-or-invalid-zip') }
   const end = bytes.length - 22
   if (end < 0 || bytes.readUInt32LE(end) !== 0x06054b50 || bytes.readUInt16LE(end + 20) !== 0 || bytes.readUInt16LE(end + 4) !== 0 || bytes.readUInt16LE(end + 6) !== 0) fail()
   const count = bytes.readUInt16LE(end + 10), size = bytes.readUInt32LE(end + 12), start = bytes.readUInt32LE(end + 16)
-  if (count !== bytes.readUInt16LE(end + 8) || !count || count === 0xffff || count > limits.maxEntries || start + size !== end) fail()
+  if (count !== bytes.readUInt16LE(end + 8) || !count || count === 0xffff || budget.entries + count > limits.maxEntries || start + size !== end) fail()
+  budget.entries += count
   const entries = [], names = new Map()
   let cursor = start, local = 0, expanded = 0
   for (let index = 0; index < count; index++) {
@@ -1093,7 +1110,7 @@ function zipArtifactEntries(bytes, limits, remainingWork) {
     names.set(identity.toLowerCase(), directory)
     if (local + 30 > start || bytes.readUInt32LE(local) !== 0x04034b50 || bytes.readUInt16LE(local + 4) !== bytes.readUInt16LE(cursor + 6) || bytes.readUInt32LE(local + 10) !== bytes.readUInt32LE(cursor + 12) || bytes.readUInt16LE(local + 6) !== flags || bytes.readUInt16LE(local + 8) !== method || bytes.readUInt32LE(local + 14) !== crc || bytes.readUInt32LE(local + 18) !== compressed || bytes.readUInt32LE(local + 22) !== length || bytes.readUInt16LE(local + 26) !== nameLength || bytes.readUInt16LE(local + 28) !== 0) fail()
     const dataStart = local + 30 + nameLength, dataEnd = dataStart + compressed
-    if (dataEnd > start || !bytes.subarray(local + 30, dataStart).equals(nameBytes) || length > limits.maxEntryBytes || expanded + length > limits.maxExpandedBytes || expanded + length > remainingWork || (directory && (length || compressed))) fail()
+    if (dataEnd > start || !bytes.subarray(local + 30, dataStart).equals(nameBytes) || length > limits.maxEntryBytes || budget.expanded + length > limits.maxExpandedBytes || budget.expanded + length > remainingWork || (directory && (length || compressed))) fail()
     const payload = bytes.subarray(dataStart, dataEnd)
     let decoded
     if (method === 0) decoded = payload
@@ -1106,9 +1123,10 @@ function zipArtifactEntries(bytes, limits, remainingWork) {
     // Nested content is not decoded by this flat profile. Recognized container
     // signatures/extensions refuse rather than silently claim recursive coverage.
     const hex = decoded.subarray(0, 8).toString('hex')
-    if (/\.(zip|gz|tgz|tar|bz2|xz|7z|rar|zst)$/i.test(identity) || /^(504b0304|504b0506|504b0708|1f8b|425a68|fd377a585a00|377abcaf271c|52617221|28b52ffd)/.test(hex) || decoded.subarray(257, 262).toString() === 'ustar') fail()
-    expanded += decoded.length
-    entries.push({ name: identity, bytes: decoded, directory })
+    const nestedZip = !directory && (/\.zip$/i.test(identity) || /^(504b0304|504b0506|504b0708)/.test(hex))
+    if ((nestedZip && !tree) || /\.(gz|tgz|tar|bz2|xz|7z|rar|zst)$/i.test(identity) || /^(1f8b|425a68|fd377a585a00|377abcaf271c|52617221|28b52ffd)/.test(hex) || decoded.subarray(257, 262).toString() === 'ustar') fail()
+    expanded += decoded.length; budget.expanded += decoded.length
+    entries.push({ name: identity, bytes: decoded, directory, nestedZip })
     cursor = centralEnd; local = dataEnd
   }
   if (cursor !== end || local !== start) fail()
@@ -1134,32 +1152,39 @@ export function executeArtifactScan(input, bytes) {
   }
   if (added) scan('outer-path', binding.path, binding.path)
   scan('raw-bytes', binding.path, bytes.toString('latin1'))
-  let expanded = 0, entries = 0
-  if (binding.coverage === 'zip-flat-entries') {
-    const decoded = zipArtifactEntries(bytes, limits, remainingWork)
-    expanded = decoded.expanded; entries = decoded.entries.length
-    for (const [index, entry] of decoded.entries.entries()) {
-      const virtual = `${binding.path}!/${entry.name}`
-      scan('entry-path', virtual, entry.name, index)
-      if (!entry.directory) scan('entry-bytes', virtual, entry.bytes.toString('latin1'), index)
+  const budget = { entries: 0, expanded: 0 }
+  let index = 0, depthReached = 0
+  const tree = binding.coverage === 'zip-tree-entries'
+  if (binding.coverage !== 'raw-bytes') {
+    const visit = (container, prefix, depth) => {
+      if (depth > (tree ? limits.maxDepth : 0)) throw new Error('ZIP depth limit')
+      depthReached = Math.max(depthReached, depth)
+      const decoded = zipArtifactEntries(container, limits, remainingWork, { tree, budget })
+      for (const entry of decoded.entries) {
+        const position = index++, virtual = `${prefix}!/${entry.name}`
+        scan('entry-path', virtual, entry.name, position)
+        if (!entry.directory) scan('entry-bytes', virtual, entry.bytes.toString('latin1'), position)
+        if (entry.nestedZip) visit(entry.bytes, virtual, depth + 1)
+      }
     }
+    visit(bytes, binding.path, 0)
   }
-  return { matches, expandedBytes: expanded, entries, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), profileDigest, coverage: binding.coverage }
+  return { matches, expandedBytes: budget.expanded, entries: budget.entries, depthReached, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), profileDigest, coverage: binding.coverage }
 }
 
 function readArtifact({ context, section, repoRoot, repo, gitExecutable, gitRunner, exceptions }) {
   const profile = context.profile, limits = profile.limits
   const binding = profile.artifacts.find(item => item.repo === repo && item.path === section.path && item.blob === section.newBlob)
   const refuse = reason => {
-    context.failed = true
+    context.failed = true; context.coverage.length = 0
     return { diagnostics: [incompleteDiagnostic({ repo, path: section.path, message: 'declared artifact scan did not complete', details: { reason } })], findings: [] }
   }
   if (!binding || context.failed) return refuse('artifact-binding-unavailable')
   const started = Date.now()
   const remaining = () => Math.max(1, limits.timeoutMs - (Date.now() - started))
-  const type = gitOutputResult(repoRoot, ['cat-file', '-t', binding.blob], { gitExecutable, runner: gitRunner, timeout: remaining(), maxBuffer: 1024 })
-  const size = gitOutputResult(repoRoot, ['cat-file', '-s', binding.blob], { gitExecutable, runner: gitRunner, timeout: remaining(), maxBuffer: 1024 })
-  if (!type.ok || type.stdout.trim() !== 'blob' || !size.ok || !/^\d+\n?$/.test(size.stdout) || Number(size.stdout.trim()) !== binding.bytes || !artifactWork(context, binding.bytes)) return refuse('artifact-type-size-or-work-limit')
+  const type = artifactGitOutput(repoRoot, ['cat-file', '-t', binding.blob], { gitExecutable, runner: gitRunner, timeout: remaining(), maxBuffer: 1024, artifactContext: context })
+  const size = artifactGitOutput(repoRoot, ['cat-file', '-s', binding.blob], { gitExecutable, runner: gitRunner, timeout: remaining(), maxBuffer: 1024, artifactContext: context })
+  if (!type.ok || typeof type.stdout !== 'string' || type.stdout.trim() !== 'blob' || !size.ok || typeof size.stdout !== 'string' || !/^\d+\n?$/.test(size.stdout) || Number(size.stdout.trim()) !== binding.bytes || !artifactWork(context, binding.bytes)) return refuse('artifact-type-size-or-work-limit')
   const result = gitOutputResult(repoRoot, ['cat-file', 'blob', binding.blob], { gitExecutable, runner: gitRunner, encoding: 'buffer', timeout: remaining(), maxBuffer: binding.bytes + 1 })
   if (!result.ok || !Buffer.isBuffer(result.stdout) || result.bytes !== binding.bytes) return refuse('artifact-read-incomplete')
   const bytes = result.stdout
@@ -1178,7 +1203,7 @@ function readArtifact({ context, section, repoRoot, repo, gitExecutable, gitRunn
   if (child.error || child.signal || child.status !== 0 || Date.now() - started >= limits.timeoutMs) return refuse('artifact-worker-incomplete')
   let output
   try { output = JSON.parse(child.stdout) } catch { return refuse('artifact-worker-output-invalid') }
-  if (output.sha256 !== sha256 || output.bytes !== bytes.length || output.profileDigest !== context.profileDigest || output.coverage !== binding.coverage || !Array.isArray(output.matches) || !Number.isSafeInteger(output.entries) || output.entries < 0 || !artifactWork(context, output.expandedBytes)) return refuse('artifact-worker-binding-invalid')
+  if (output.sha256 !== sha256 || output.bytes !== bytes.length || output.profileDigest !== context.profileDigest || output.coverage !== binding.coverage || !Array.isArray(output.matches) || !Number.isSafeInteger(output.entries) || output.entries < 0 || output.entries > limits.maxEntries || !Number.isSafeInteger(output.depthReached) || output.depthReached < 0 || output.depthReached > (binding.coverage === 'zip-tree-entries' ? limits.maxDepth : 0) || !artifactWork(context, output.expandedBytes)) return refuse('artifact-worker-binding-invalid')
   const findings = []
   for (const match of output.matches) {
     const rule = context.rules.find(rule => rule.id === match.rule)
@@ -1187,6 +1212,6 @@ function readArtifact({ context, section, repoRoot, repo, gitExecutable, gitRunn
     if (match.entry === null && findException({ exceptions, rule: rule.id, repo, path: section.path })) continue
     findings.push({ severity: rule.severity ?? 'error', code: 'content-rule-violation', rule: rule.id, repo, path: section.path, line: null, binary: true, message: `${repo ?? 'repository'}/${section.path}: artifact content rule matched`, details: { coverage: match.unit, entryIndex: match.entry } })
   }
-  context.coverage.push({ repo, path: section.path, blob: binding.blob, sha256, bytes: bytes.length, profileDigest: context.profileDigest, coverage: binding.coverage, entries: output.entries, expandedBytes: output.expandedBytes })
+  context.coverage.push({ repo, path: section.path, blob: binding.blob, sha256, bytes: bytes.length, profileDigest: context.profileDigest, coverage: binding.coverage, entries: output.entries, depthReached: output.depthReached, expandedBytes: output.expandedBytes })
   return { diagnostics: [], findings }
 }

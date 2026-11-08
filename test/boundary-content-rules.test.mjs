@@ -1848,3 +1848,144 @@ test('the supporting push dispatcher refuses unknown policy schemas rather than 
   assert.equal(report.ok, false)
   assert.ok(report.errors.some(f => f.code === 'boundary-policy-invalid'))
 })
+
+test('v2 budgets charge forced-text evidence and clear coverage before any later acquisition after exhaustion', t => {
+  const { site, policy } = makeWorkspace(t)
+  const bytes = Buffer.from([0])
+  fs.writeFileSync(path.join(site, 'a-binding.bin'), bytes)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg binary\n')
+  fs.writeFileSync(path.join(site, 'z.cfg'), 'Invented source line\n'.repeat(100))
+  git(site, ['add', '.'])
+  const v2 = artifactPolicy(site, policy, 'a-binding.bin', bytes)
+  const context = createArtifactScanContext(v2.artifactScan)
+  let acquired = 0, forcedReads = 0
+  const runner = (command, args, options) => {
+    const result = spawnSync(command, args, options)
+    if (result.status === 0) acquired += Buffer.byteLength(result.stdout)
+    if (args.includes('--text')) forcedReads++
+    return result
+  }
+  const report = scanStagedRepository({ repoRoot: site, repo: 'example-site', artifactContext: context, gitRunner: runner })
+  assert.deepEqual(report.diagnostics, [])
+  assert.ok(forcedReads > 0)
+  assert.equal(context.workBytes, acquired, 'all actual Git stdout, including metadata and forced-text evidence, is charged')
+  assert.equal(context.coverage.length, 1)
+  const tight = structuredClone(v2); tight.artifactScan.limits.maxWorkBytes = acquired - 1
+  const exhausted = createArtifactScanContext(tight.artifactScan)
+  const refused = scanStagedRepository({ repoRoot: site, repo: 'example-site', artifactContext: exhausted })
+  assert.ok(refused.diagnostics.length)
+  assert.equal(exhausted.failed, true)
+  assert.deepEqual(exhausted.coverage, [], 'an enclosing budget refusal cannot retain a complete coverage record')
+  let calls = 0
+  const noMoreReads = (...args) => { calls++; return spawnSync(...args) }
+  scanStagedRepository({ repoRoot: site, repo: 'example-site', artifactContext: exhausted, gitRunner: noMoreReads })
+  assert.equal(calls, 0)
+})
+
+test('v2 stops outer ref traversal after shared exhaustion', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const bytes = Buffer.from([0]);fs.writeFileSync(path.join(site, 'sample.bin'), bytes);git(site, ['add', '.'])
+  const v2 = artifactPolicy(site, policy, 'sample.bin', bytes)
+  git(site, ['commit', '--quiet', '-m', 'synthetic work budget'])
+  v2.artifactScan.limits.maxWorkBytes = 1
+  const updates = pushUpdate(site), trace = []
+  const runner = (...args) => { trace.push(args[1]); return spawnSync(...args) }
+  assert.equal(checkPushContent({ project, policy: v2, updates, cwd: site, gitRunner: runner }).ok, false)
+  const once = trace.length;trace.length = 0
+  assert.equal(checkPushContent({ project, policy: v2, updates: [...updates, ...updates], cwd: site, gitRunner: runner }).ok, false)
+  assert.equal(trace.length, once, 'the second ref must not acquire any evidence after refusal')
+})
+
+test('v2 redacts stored artifact semantic values under both document suffixes and keeps review blocking', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const inventedValue = 'invented-semantic-value'
+  for (const [file, marker] of [['sample.md', false], ['sample.kg.json', false], ['sample.md', true], ['sample.kg.json', true]]) {
+    const bytes = syntheticZip([['notes.txt', `\naudience: ${inventedValue}\n${marker ? '<!-- Atelier-Boundary-Review: approved -->' : ''}\n`, 0]])
+    fs.writeFileSync(path.join(site, file), bytes);git(site, ['add', file])
+    const v2 = artifactPolicy(site, policy, file, bytes, 'zip-flat-entries')
+    const report = checkBoundaryPolicy({ project, policy: v2, actor: 'author', staged: true, stagedOnly: true })
+    assert.equal(report.ok, false)
+    assert.ok(report.errors.some(f => f.code === 'semantic-field-change-needs-review' && f.path === file))
+    assert.equal(JSON.stringify(report).includes(inventedValue), false)
+    git(site, ['reset', '--quiet', file]);fs.unlinkSync(path.join(site, file))
+  }
+})
+
+test('v2 explicit ZIP tree coverage shares depth, entries, expansion and work across all nested levels', t => {
+  const { site, policy, project } = makeWorkspace(t)
+  const marker = 'invented-nested-marker'
+  const inner = syntheticZip([['notes.txt', marker.repeat(20)]])
+  const bytes = syntheticZip([['one.zip', inner], ['two.zip', inner]])
+  fs.writeFileSync(path.join(site, 'sample.zip'), bytes);git(site, ['add', 'sample.zip'])
+  const tree = artifactPolicy(site, policy, 'sample.zip', bytes, 'zip-tree-entries')
+  tree.artifactScan.limits.maxDepth = 2
+  tree.contentRules = [{ id: 'nested-marker', pattern: marker }]
+  const run = value => checkBoundaryPolicy({ project, policy: value, actor: 'author', staged: true, stagedOnly: true })
+  const report = run(tree)
+  assert.ok(report.errors.some(f => f.rule === 'nested-marker'))
+  assert.ok(!report.errors.some(f => f.code === 'content-scan-incomplete'))
+  assert.equal(report.artifactCoverage[0].entries, 4)
+  assert.equal(report.artifactCoverage[0].depthReached, 1)
+  const expanded = 2 * inner.length + 2 * Buffer.byteLength(marker.repeat(20))
+  assert.equal(report.artifactCoverage[0].expandedBytes, expanded)
+  assert.equal(JSON.stringify(report).includes(marker), false)
+  for (const change of [
+    value => { value.artifactScan.artifacts[0].coverage = 'zip-flat-entries' },
+    value => { value.artifactScan.limits.maxEntries = 3 },
+    value => { value.artifactScan.limits.maxExpandedBytes = expanded - 1 },
+    value => { value.artifactScan.limits.maxWorkBytes = bytes.length + expanded - 1 },
+    value => { value.artifactScan.limits.timeoutMs = 1 },
+  ]) {
+    const value = structuredClone(tree);change(value)
+    assert.ok(run(value).errors.length)
+    assert.deepEqual(run(value).artifactCoverage, [])
+  }
+  const deeper = syntheticZip([['deep.zip', bytes]])
+  fs.writeFileSync(path.join(site, 'sample.zip'), deeper);git(site, ['add', 'sample.zip'])
+  const depth = artifactPolicy(site, policy, 'sample.zip', deeper, 'zip-tree-entries');depth.artifactScan.limits.maxDepth = 1
+  assert.ok(run(depth).errors.some(f => f.code === 'content-scan-incomplete'))
+  depth.artifactScan.limits.maxDepth = 2
+  assert.ok(!run(depth).errors.some(f => f.code === 'content-scan-incomplete'))
+  const invalid = Buffer.from(inner);invalid.writeUInt32LE(0, 14)
+  const broken = syntheticZip([['bad.zip', invalid]])
+  fs.writeFileSync(path.join(site, 'sample.zip'), broken);git(site, ['add', 'sample.zip'])
+  const nestedBad = artifactPolicy(site, policy, 'sample.zip', broken, 'zip-tree-entries');nestedBad.artifactScan.limits.maxDepth = 2
+  assert.ok(run(nestedBad).errors.some(f => f.code === 'content-scan-incomplete'))
+})
+
+test('v2 accounts successful forced-text retries as separate evidence reads', t => {
+  const { site, policy } = makeWorkspace(t), bytes = Buffer.from([0])
+  fs.writeFileSync(path.join(site, 'a-binding.bin'), bytes)
+  fs.writeFileSync(path.join(site, '.gitattributes'), '*.cfg binary\n')
+  for (const name of ['one.cfg', 'two.cfg']) fs.writeFileSync(path.join(site, name), 'Invented text\n')
+  git(site, ['add', '.'])
+  const v2 = artifactPolicy(site, policy, 'a-binding.bin', bytes), context = createArtifactScanContext(v2.artifactScan)
+  let first = true, reads = 0, acquired = 0
+  const runner = (command, args, options) => {
+    let result = spawnSync(command, args, options)
+    if (args.includes('--text')) {
+      reads++
+      // A synthetically changed pairing forces the existing per-file retry seam.
+      if (first) { first = false; result = { ...result, stdout: result.stdout.replaceAll('one.cfg', 'other.cfg') } }
+    }
+    if (result.status === 0) acquired += Buffer.byteLength(result.stdout)
+    return result
+  }
+  const report = scanStagedRepository({ repoRoot: site, repo: 'example-site', artifactContext: context, gitRunner: runner })
+  assert.deepEqual(report.diagnostics, [])
+  assert.ok(reads >= 2)
+  assert.equal(context.workBytes, acquired)
+})
+
+test('v2 verifies the native blob hash in SHA-256 Git repositories too', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-artifact-sha256-'));t.after(() => removeTree(root))
+  const initialized = spawnSync('git', ['init', '--quiet', '--object-format=sha256', root], { encoding: 'utf8' })
+  if (initialized.status !== 0) { t.skip('installed Git lacks SHA-256 object format'); return }
+  const bytes = Buffer.from([0, 1, 2]);fs.writeFileSync(path.join(root, 'sample.bin'), bytes);git(root, ['add', 'sample.bin'])
+  const v2 = artifactPolicy(root, {}, 'sample.bin', bytes)
+  assert.equal(v2.artifactScan.artifacts[0].blob.length, 64)
+  const context = createArtifactScanContext(v2.artifactScan)
+  const result = scanStagedRepository({ repoRoot: root, repo: 'example-site', artifactContext: context })
+  assert.deepEqual(result.diagnostics, [])
+  assert.equal(context.coverage[0].blob, v2.artifactScan.artifacts[0].blob)
+})
