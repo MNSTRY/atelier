@@ -52,6 +52,12 @@ export const DEFAULT_CONTENT_RULES = Object.freeze(
   ].map(Object.freeze),
 )
 
+// Snapshot the existing definition for entry-authority validation. Exported
+// default aliases retain their legacy behavior and cannot redefine this test.
+const ENTRY_EXCEPTION_BROWSER_RULE = structuredClone(DEFAULT_CONTENT_RULES.find(rule => rule.id === 'browser-persistence'))
+Object.freeze(ENTRY_EXCEPTION_BROWSER_RULE.paths)
+Object.freeze(ENTRY_EXCEPTION_BROWSER_RULE)
+
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '')
 
@@ -126,7 +132,7 @@ export function validateContentRuleExceptions(exceptions, rules = DEFAULT_CONTEN
     }
     if (Object.hasOwn(exception, 'artifactEntry')) {
       const entry = exception.artifactEntry, parent = (Array.isArray(artifactScan?.artifacts) ? artifactScan.artifacts : []).find(item => item?.repo === exception.repo && item.path === exception.paths?.[0] && item.blob === entry?.blob)
-      const browser = DEFAULT_CONTENT_RULES.find(item => item.id === 'browser-persistence'), effective = rules.find(item => item.id === 'browser-persistence')
+      const browser = ENTRY_EXCEPTION_BROWSER_RULE, effective = rules.find(item => item.id === 'browser-persistence')
       const core = item => item && ({ kind: item.kind ?? 'content', severity: item.severity ?? 'error', pattern: item.pattern, paths: item.paths })
       const validMember = item => isObject(item) && Object.keys(item).every(key => ['path', 'sha256', 'bytes', 'ext'].includes(key)) && (!Object.hasOwn(item, 'ext') || isObject(item.ext)) && exactArtifactPath(item.path) && item.path.normalize('NFC') === item.path && typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/.test(item.sha256) && Number.isSafeInteger(item.bytes) && item.bytes >= 0 && item.bytes <= ARTIFACT_SCAN_LIMITS.entryBytes
       if (!allowArtifactEntries || exception.rule !== 'browser-persistence' || canonicalArtifactJson(core(browser)) !== canonicalArtifactJson(core(effective)) || !Array.isArray(exception.paths) || exception.paths.length !== 1 || !exactArtifactPath(exception.paths[0]) || typeof exception.reason !== 'string' || Array.from(exception.reason.trim()).length < MIN_REASON_LENGTH || Buffer.byteLength(exception.reason) > 2048 ||

@@ -1848,6 +1848,20 @@ test('v3 verified unmatched declarations remain observable and introduced histor
   assert.ok(pushed.artifactCoverage.some(item => item.entryExceptionDispositions[0].applied === false))
 })
 
+test('v3 exported default aliases cannot redefine entry exception authority', () => {
+  // Isolate an API caller's mutation from the rest of the regression process.
+  const url = new URL('../src/boundary/content-rules.mjs', import.meta.url).href
+  const script = `import { DEFAULT_CONTENT_RULES, validateContentRuleExceptions } from ${JSON.stringify(url)};
+    const rules = [...DEFAULT_CONTENT_RULES]; rules[1].paths.push('*.invented');
+    const artifact = {repo:'sample',path:'bundle.zip',blob:'a'.repeat(40),sha256:'b'.repeat(64),bytes:40,coverage:'zip-flat-entries'};
+    const exception = {rule:'browser-persistence',repo:'sample',paths:['bundle.zip'],reason:'Invented immutable default control.',artifactEntry:{purpose:'archival-source-reference',blob:artifact.blob,sha256:artifact.sha256,bytes:40,chain:[{path:'leaf.invented',sha256:'c'.repeat(64),bytes:10}]}};
+    const errors = validateContentRuleExceptions([exception],rules,{allowArtifactEntries:true,artifactScan:{artifacts:[artifact],limits:{}}});
+    process.stdout.write(JSON.stringify(errors));`
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10000 })
+  assert.equal(result.status, 0, result.stderr)
+  assert.ok(JSON.parse(result.stdout).length, 'a mutable exported alias cannot replace the canonical default definition')
+})
+
 // Complete finite-unit matching is preserved beyond any reader/chunk seam.
 test('v2 binds a large immutable staged blob and preserves full-unit regex semantics', t => {
   const { site, policy, project } = makeWorkspace(t)
