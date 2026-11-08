@@ -18,6 +18,7 @@ examples/knowledge-ontology-profile/** text eol=lf
 
 # Sealed capability bundles and imported ADRs retain their pinned source bytes.
 fixtures/capability-packages/** text eol=lf
+templates/impeccable-capability/** text eol=lf
 fixtures/inquiry-packages/** text eol=lf
 fixtures/harness-packages/** text eol=lf
 fixtures/atelier-judgment/native-decision.md text eol=lf
