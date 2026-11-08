@@ -265,3 +265,20 @@ pair therefore qualifies the documented border-width threshold; the separate
 static pair checks rounded versus square corners. Their outcomes do not establish
 source/static parity. The original failed observation remains qualification evidence
 for hosts evaluating that upstream limitation.
+
+The typography extension adds contrasting static cases for the existing
+`extreme-negative-tracking`, `wide-tracking` and `tight-leading` IDs. Invented
+reading and display specimens exercise the size-dependent tracking thresholds;
+a separate pair keeps the same short label text and spacing while changing it
+to legitimate typed capitals. Body-copy pairs compare excessive tracking with
+normal spacing and leading just below versus exactly at the documented floor.
+These target-rule contrasts preserve every unrelated raw finding. A capital
+label passing `wide-tracking` does not waive another rule or approve a design.
+
+Applicability comes from the pinned upstream static integration tests
+`negative_tracking.rs`, `wide_tracking.rs` and `tight_leading.rs`, with the
+size-threshold helper tests in `checks/text_rules.rs`. The fixtures are newly
+invented mechanisms, not copied pages. Static text heuristics do not measure
+actual line wrapping, line boxes, glyph shaping or loaded fonts; those browser
+and native obligations remain NOT_QUALIFIED. The existing source zero-radius
+limitation, scoped-marker refusal, and host process/custody budgets still apply.
