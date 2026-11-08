@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs'
+
 export function catalogDocument() {
+  // Project the existing package-owned identities; this catalog grants no host adoption.
+  const impeccable = JSON.parse(readFileSync(new URL('../../templates/impeccable-capability/capability-package.json', import.meta.url)))
+  const guidance = impeccable.capabilities.find(item => item.id === 'design-guidance')
+  const skill = impeccable.skills.find(item => item.id === 'governed-impeccable')
   return {
   "schema": "atelier-architecture-catalog@v1",
   "entries": [
@@ -264,6 +270,27 @@ export function catalogDocument() {
       ]
     },
     {
+      "id": guidance.id,
+      "kind": "capability",
+      "label": impeccable.title,
+      "aliases": ["Impeccable"],
+      "purpose": guidance.description,
+      "implementation": [
+        "templates/impeccable-capability/capability-package.json",
+        "src/impeccable/index.mjs"
+      ]
+    },
+    {
+      "id": skill.id,
+      "kind": "resource",
+      "label": "Impeccable guidance resource",
+      "aliases": [],
+      "purpose": impeccable.summary,
+      "implementation": [
+        `templates/impeccable-capability/${skill.path}/SKILL.md`
+      ]
+    },
+    {
       "id": "codex-repository",
       "kind": "host",
       "label": "Codex repository profile",
@@ -275,6 +302,21 @@ export function catalogDocument() {
     }
   ],
   "relations": [
+    {
+      "from": guidance.id,
+      "type": "supports",
+      "to": "creation-delivery"
+    },
+    {
+      "from": guidance.id,
+      "type": "supports",
+      "to": "capability-stewardship"
+    },
+    {
+      "from": skill.id,
+      "type": "realizes",
+      "to": guidance.id
+    },
     {
       "from": "discovery",
       "type": "composes",

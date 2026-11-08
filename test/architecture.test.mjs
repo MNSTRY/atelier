@@ -58,3 +58,23 @@ test('exact consumer profile, revision and behavior classification are required;
   binding.fields[0].classification = 'enforced'; binding.fields[0].consumer = null
   assert.match(validateArchitecture(binding, 'binding').join(), /enforcement/)
 })
+
+test('Impeccable discovery projects package identities without adding responsibilities or host adoption', () => {
+  const descriptor = JSON.parse(fs.readFileSync(new URL('../templates/impeccable-capability/capability-package.json', import.meta.url)))
+  const catalog = responsibilityCatalog()
+  const entry = architectureEntry('Impeccable')
+  assert.equal(entry.id, descriptor.capabilities[0].id)
+  assert.equal(entry.label, descriptor.title)
+  assert.equal(entry.purpose, descriptor.capabilities[0].description)
+  assert.equal(entry.kind, 'capability')
+  const resource = architectureEntry(descriptor.skills[0].id)
+  assert.equal(resource.kind, 'resource')
+  assert.ok(catalog.relations.some(item => item.from === resource.id && item.type === 'realizes' && item.to === entry.id))
+  for (const responsibility of ['creation-delivery', 'capability-stewardship']) {
+    assert.ok(catalog.relations.some(item => item.from === entry.id && item.type === 'supports' && item.to === responsibility))
+  }
+  assert.equal(catalog.relations.some(item => item.type === 'executes' && item.to === resource.id), false)
+  assert.equal(catalog.entries.filter(item => item.kind === 'responsibility').length, 8)
+  const actual = JSON.parse(execFileSync(process.execPath, ['bin/atelier.mjs', 'architecture', 'entry', 'Impeccable']))
+  assert.deepEqual(actual, entry)
+})

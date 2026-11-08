@@ -47,6 +47,14 @@ entry "Skill Steward"` resolves a name. Historical names remain aliases: Discove
 Engine resolves to Discovery Harness; Skills Harness resolves to Capability
 Harness. Existing persisted CLI/schema/API identifiers are retained.
 
+`architecture entry Impeccable` resolves the design-guidance capability using the
+existing package descriptor's capability ID, title and purpose. Its governed
+skill realizes that capability, which supports Creation and Delivery and
+Capability Stewardship. These are catalog projections of package-owned
+identities. They add no responsibility, source owner or host-execution claim;
+see [the resource adapter and adoption boundaries](impeccable.md).
+
+
 ## Authoring must name its consumers
 
 The additive `atelier-behavior-binding@v1` contract links exact authored
