@@ -371,6 +371,14 @@ capability has shipped as the `capability` command since 0.2.0-alpha.13.
 
 See [capability stewardship](docs/guides/capability-stewardship.md) for the operating guide.
 
+[Governed Impeccable design guidance](docs/reference/impeccable.md) is included as
+a sealed capability template in this source candidate and subsequent releases.
+It preserves 24 command routes and 62 rule identities for source-bound reports
+and proposals. Discover it with `atelier architecture entry Impeccable`; adopt an
+exact release through capability stewardship. Engine execution, source writes
+and actual host loading require their own bindings and evidence.
+
+
 ## Discovery and research
 
 <!-- atelier:block:inquiry-harnesses:start -->
