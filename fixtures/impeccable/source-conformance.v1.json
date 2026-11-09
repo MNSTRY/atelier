@@ -239,13 +239,96 @@
         "crates/detect/src/detect_text.rs",
         "crates/html/tests/side_accent_radius.rs"
       ]
+    },
+    {
+      "id": "tracking-reading-floor",
+      "engine": "static-html",
+      "file": "conformance/tracking-reading-floor.html",
+      "targets": [
+        "extreme-negative-tracking"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:16px; letter-spacing:-0.08em; }</style></head><body><p class=\"specimen\">Invented specimen text demonstrates the spacing chosen for this type sample.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:16px; letter-spacing:-0.06em; }</style></head><body><p class=\"specimen\">Invented specimen text demonstrates the spacing chosen for this type sample.</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/negative_tracking.rs",
+        "crates/core/src/checks/text_rules.rs"
+      ]
+    },
+    {
+      "id": "tracking-display-floor",
+      "engine": "static-html",
+      "file": "conformance/tracking-display-floor.html",
+      "targets": [
+        "extreme-negative-tracking"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:44px; letter-spacing:-0.10em; }</style></head><body><p class=\"specimen\">Invented specimen text demonstrates the spacing chosen for this type sample.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:44px; letter-spacing:-0.08em; }</style></head><body><p class=\"specimen\">Invented specimen text demonstrates the spacing chosen for this type sample.</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/negative_tracking.rs",
+        "crates/core/src/checks/text_rules.rs"
+      ]
+    },
+    {
+      "id": "tracking-size-context",
+      "engine": "static-html",
+      "file": "conformance/tracking-size-context.html",
+      "targets": [
+        "extreme-negative-tracking"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:39px; letter-spacing:-0.08em; }</style></head><body><p class=\"specimen\">Invented specimen text demonstrates the spacing chosen for this type sample.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:40px; letter-spacing:-0.08em; }</style></head><body><p class=\"specimen\">Invented specimen text demonstrates the spacing chosen for this type sample.</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/negative_tracking.rs",
+        "crates/core/src/checks/text_rules.rs"
+      ]
+    },
+    {
+      "id": "tracking-capital-label",
+      "engine": "static-html",
+      "file": "conformance/tracking-capital-label.html",
+      "targets": [
+        "wide-tracking"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:16px; line-height:26px; letter-spacing:0.18em; width:480px; }</style></head><body><span class=\"specimen\">Invented specimen notes</span></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:16px; line-height:26px; letter-spacing:0.18em; width:480px; }</style></head><body><span class=\"specimen\">INVENTED SPECIMEN NOTES</span></body></html>",
+      "referenceTests": [
+        "crates/html/tests/wide_tracking.rs"
+      ]
+    },
+    {
+      "id": "tracking-reading-copy",
+      "engine": "static-html",
+      "file": "conformance/tracking-reading-copy.html",
+      "targets": [
+        "wide-tracking"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:16px; line-height:26px; width:320px; letter-spacing:0.12em; }</style></head><body><p class=\"specimen\">The invented specimen contains enough ordinary reading copy to compare spacing and leading while keeping every word independent of any real product or tenant.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:16px; line-height:26px; width:320px; letter-spacing:normal; }</style></head><body><p class=\"specimen\">The invented specimen contains enough ordinary reading copy to compare spacing and leading while keeping every word independent of any real product or tenant.</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/wide_tracking.rs"
+      ]
+    },
+    {
+      "id": "leading-body-floor",
+      "engine": "static-html",
+      "file": "conformance/leading-body-floor.html",
+      "targets": [
+        "tight-leading"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:18px; line-height:23.2px; width:280px; }</style></head><body><p class=\"specimen\">The invented specimen contains enough ordinary reading copy to compare spacing and leading while keeping every word independent of any real product or tenant.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented type specimen</title><style>.specimen { font-size:18px; line-height:23.4px; width:280px; }</style></head><body><p class=\"specimen\">The invented specimen contains enough ordinary reading copy to compare spacing and leading while keeping every word independent of any real product or tenant.</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/tight_leading.rs"
+      ]
     }
   ],
   "limitations": [
     "Source/static HTML only; no rendered, browser, native-product or hosted acceptance.",
     "No script execution, resource fetching, design-system input or custom rule packs.",
     "Unattempted or unobserved registered rules remain NOT_QUALIFIED.",
-    "Pinned source top-accent heuristic can report a radius:0 declaration; the source width pair qualifies only its width threshold, not square-corner discrimination or static parity."
+    "Pinned source top-accent heuristic can report a radius:0 declaration; the source width pair qualifies only its width threshold, not square-corner discrimination or static parity.",
+    "Static text heuristics only; no measured wrap, line boxes, glyph shaping, font loading or browser parity.",
+    "Capital-label exemption targets wide-tracking alone; any other findings remain raw and are not waived."
   ],
   "refusals": [
     {
