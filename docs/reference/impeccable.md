@@ -282,3 +282,28 @@ invented mechanisms, not copied pages. Static text heuristics do not measure
 actual line wrapping, line boxes, glyph shaping or loaded fonts; those browser
 and native obligations remain NOT_QUALIFIED. The existing source zero-radius
 limitation, scoped-marker refusal, and host process/custody budgets still apply.
+
+Additional text and layout pairs target six existing static-rule IDs:
+`all-caps-body`, `clipped-overflow-container`, `gpt-thin-border-wide-shadow`,
+`justified-text`, `undersized-ui-text` and `italic-serif-display`. Invented
+contrasts preserve short uppercase labels, non-clipping overflow, isolated
+panels and short rows, tighter shadows, wide or auto-hyphenated text, supported
+functional/fine-print size tolerance and roman display text. A target-rule
+negative case does not waive any unrelated finding or approve the design.
+
+The resulting corpus has 31 pairs plus two marker-refusal cases, 64 inputs in
+total. Existing tests and the same pinned engine closure consume the added data;
+no runtime or loader is introduced. The source references are the upstream
+whole-static-engine tests `all_caps_body.rs`, `clipped_overflow.rs`,
+`gpt_border_shadow.rs`, `justified_text.rs`, `undersized_ui_text.rs` and
+`italic_heading.rs`. They establish applicability, while actual engine output
+must satisfy each contrasting assertion. Declared static clipping, geometry,
+column and style heuristics do not prove measured layout, live hyphenation,
+font shaping or browser/native parity. Unattempted engine/rule combinations
+remain explicitly NOT_QUALIFIED under the existing process/custody bounds.
+
+The first context probe did not report a menu with a positive pixel inset past
+a declared parent height. The pinned static check does not compare rendered
+rectangles; the contrasting pair uses a declared negative inset and changes
+only the parent overflow. The original observation remains unqualified for
+positive pixel geometry and is not a measured clipping verdict.

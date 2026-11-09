@@ -320,6 +320,138 @@
       "referenceTests": [
         "crates/html/tests/tight_leading.rs"
       ]
+    },
+    {
+      "id": "caps-reading-label",
+      "engine": "static-html",
+      "file": "conformance/caps-reading-label.html",
+      "targets": [
+        "all-caps-body"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { text-transform:uppercase; font-size:16px; line-height:26px; width:420px; }</style></head><body><p class=\"specimen\">A fabricated field guide describes how the sample pieces are arranged and explains the ordinary reading order so that a long passage can be compared with a concise caption.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { text-transform:uppercase; font-size:16px; line-height:26px; width:420px; }</style></head><body><p class=\"specimen\">Specimen notes</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/all_caps_body.rs"
+      ]
+    },
+    {
+      "id": "declared-layer-clipping",
+      "engine": "static-html",
+      "file": "conformance/declared-layer-clipping.html",
+      "targets": [
+        "clipped-overflow-container"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.shell { position:relative; width:260px; height:56px; overflow:hidden; } .layer { position:absolute; top:-22px; left:8px; width:200px; height:80px; background:#fff; box-shadow:0 5px 12px rgba(0,0,0,.2); }</style></head><body><div class=\"shell\"><div class=\"layer\" role=\"menu\">Invented specimen menu</div></div></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.shell { position:relative; width:260px; height:56px; overflow:visible; } .layer { position:absolute; top:-22px; left:8px; width:200px; height:80px; background:#fff; box-shadow:0 5px 12px rgba(0,0,0,.2); }</style></head><body><div class=\"shell\"><div class=\"layer\" role=\"menu\">Invented specimen menu</div></div></body></html>",
+      "referenceTests": [
+        "crates/html/tests/clipped_overflow.rs",
+        "crates/html/src/adapters.rs",
+        "crates/core/src/checks/measures.rs"
+      ]
+    },
+    {
+      "id": "repeated-panel-row",
+      "engine": "static-html",
+      "file": "conformance/repeated-panel-row.html",
+      "targets": [
+        "gpt-thin-border-wide-shadow"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen-row { display:flex; gap:24px; } .specimen-panel { width:200px; height:132px; border:1px solid #d5d5d5; box-shadow:0 8px 44px rgba(0,0,0,.18); }</style></head><body><section class=\"specimen-row\"><div class=\"specimen-panel\">Invented panel 1</div><div class=\"specimen-panel\">Invented panel 2</div><div class=\"specimen-panel\">Invented panel 3</div></section></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen-row { display:flex; gap:24px; } .specimen-panel { width:200px; height:132px; border:1px solid #d5d5d5; box-shadow:0 8px 44px rgba(0,0,0,.18); }</style></head><body><section class=\"specimen-row\"><div class=\"specimen-panel\">Invented panel 1</div><div class=\"specimen-panel\">Invented panel 2</div></section></body></html>",
+      "referenceTests": [
+        "crates/html/tests/gpt_border_shadow.rs"
+      ]
+    },
+    {
+      "id": "isolated-panel-context",
+      "engine": "static-html",
+      "file": "conformance/isolated-panel-context.html",
+      "targets": [
+        "gpt-thin-border-wide-shadow"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen-row { display:flex; gap:24px; } .specimen-panel { width:200px; height:132px; border:1px solid #d5d5d5; box-shadow:0 8px 44px rgba(0,0,0,.18); }</style></head><body><section class=\"specimen-row\"><div class=\"specimen-panel\">Invented panel 1</div><div class=\"specimen-panel\">Invented panel 2</div><div class=\"specimen-panel\">Invented panel 3</div></section></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen-row { display:flex; gap:24px; } .specimen-panel { width:200px; height:132px; border:1px solid #d5d5d5; box-shadow:0 8px 44px rgba(0,0,0,.18); }</style></head><body><section class=\"specimen-row\"><div class=\"specimen-panel\">Invented panel 1</div></section></body></html>",
+      "referenceTests": [
+        "crates/html/tests/gpt_border_shadow.rs"
+      ]
+    },
+    {
+      "id": "repeated-shadow-treatment",
+      "engine": "static-html",
+      "file": "conformance/repeated-shadow-treatment.html",
+      "targets": [
+        "gpt-thin-border-wide-shadow"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen-row { display:flex; gap:24px; } .specimen-panel { width:200px; height:132px; border:1px solid #d5d5d5; box-shadow:0 8px 44px rgba(0,0,0,.18); }</style></head><body><section class=\"specimen-row\"><div class=\"specimen-panel\">Invented panel 1</div><div class=\"specimen-panel\">Invented panel 2</div><div class=\"specimen-panel\">Invented panel 3</div></section></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen-row { display:flex; gap:24px; } .specimen-panel { width:200px; height:132px; border:1px solid #d5d5d5; box-shadow:0 8px 18px rgba(0,0,0,.18); }</style></head><body><section class=\"specimen-row\"><div class=\"specimen-panel\">Invented panel 1</div><div class=\"specimen-panel\">Invented panel 2</div><div class=\"specimen-panel\">Invented panel 3</div></section></body></html>",
+      "referenceTests": [
+        "crates/html/tests/gpt_border_shadow.rs"
+      ]
+    },
+    {
+      "id": "justified-column-measure",
+      "engine": "static-html",
+      "file": "conformance/justified-column-measure.html",
+      "targets": [
+        "justified-text"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { text-align:justify; font-size:16px; width:280px; }</style></head><body><p class=\"specimen\">A fabricated field guide describes how the sample pieces are arranged and explains the ordinary reading order so that a long passage can be compared with a concise caption.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { text-align:justify; font-size:16px; width:800px; }</style></head><body><p class=\"specimen\">A fabricated field guide describes how the sample pieces are arranged and explains the ordinary reading order so that a long passage can be compared with a concise caption.</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/justified_text.rs"
+      ]
+    },
+    {
+      "id": "justified-hyphen-context",
+      "engine": "static-html",
+      "file": "conformance/justified-hyphen-context.html",
+      "targets": [
+        "justified-text"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { text-align:justify; font-size:16px; width:280px; hyphens:manual; }</style></head><body><p class=\"specimen\">A fabricated field guide describes how the sample pieces are arranged and explains the ordinary reading order so that a long passage can be compared with a concise caption.</p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { text-align:justify; font-size:16px; width:280px; hyphens:auto; }</style></head><body><p class=\"specimen\">A fabricated field guide describes how the sample pieces are arranged and explains the ordinary reading order so that a long passage can be compared with a concise caption.</p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/justified_text.rs"
+      ]
+    },
+    {
+      "id": "functional-size-tolerance",
+      "engine": "static-html",
+      "file": "conformance/functional-size-tolerance.html",
+      "targets": [
+        "undersized-ui-text"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { font-size:10.9px; }</style></head><body><a class=\"specimen\" href=\"/specimen\">Read specimen</a></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { font-size:10.95px; }</style></head><body><a class=\"specimen\" href=\"/specimen\">Read specimen</a></body></html>",
+      "referenceTests": [
+        "crates/html/tests/undersized_ui_text.rs"
+      ]
+    },
+    {
+      "id": "fine-print-size-tolerance",
+      "engine": "static-html",
+      "file": "conformance/fine-print-size-tolerance.html",
+      "targets": [
+        "undersized-ui-text"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { font-size:9.9px; }</style></head><body><p><small class=\"specimen\">Sample terms apply.</small></p></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { font-size:9.95px; }</style></head><body><p><small class=\"specimen\">Sample terms apply.</small></p></body></html>",
+      "referenceTests": [
+        "crates/html/tests/undersized_ui_text.rs"
+      ]
+    },
+    {
+      "id": "display-emphasis-context",
+      "engine": "static-html",
+      "file": "conformance/display-emphasis-context.html",
+      "targets": [
+        "italic-serif-display"
+      ],
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { font-family:Georgia,serif; font-size:68px; font-style:normal; } .specimen em { font-style:italic; }</style></head><body><h1 class=\"specimen\">A specimen in <em>motion</em></h1></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.specimen { font-family:Georgia,serif; font-size:68px; font-style:normal; } .specimen em { font-style:normal; }</style></head><body><h1 class=\"specimen\">A specimen in <em>motion</em></h1></body></html>",
+      "referenceTests": [
+        "crates/html/tests/italic_heading.rs"
+      ]
     }
   ],
   "limitations": [
@@ -328,7 +460,10 @@
     "Unattempted or unobserved registered rules remain NOT_QUALIFIED.",
     "Pinned source top-accent heuristic can report a radius:0 declaration; the source width pair qualifies only its width threshold, not square-corner discrimination or static parity.",
     "Static text heuristics only; no measured wrap, line boxes, glyph shaping, font loading or browser parity.",
-    "Capital-label exemption targets wide-tracking alone; any other findings remain raw and are not waived."
+    "Capital-label exemption targets wide-tracking alone; any other findings remain raw and are not waived.",
+    "Only declared static source heuristics; no measured clipping, sibling geometry, glyph shaping, line wrapping, hyphenation execution or browser/native equivalence.",
+    "A negative target-rule control does not waive unrelated findings or confer approval.",
+    "A positive pixel inset beyond the declared parent height did not report and remains NOT_QUALIFIED. The negative-inset pair checks the documented declared escape heuristic, not measured clipping."
   ],
   "refusals": [
     {
