@@ -341,10 +341,12 @@
       "targets": [
         "clipped-overflow-container"
       ],
-      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.shell { position:relative; width:260px; height:56px; overflow:hidden; } .layer { position:absolute; top:64px; left:8px; width:200px; height:80px; background:#fff; box-shadow:0 5px 12px rgba(0,0,0,.2); }</style></head><body><div class=\"shell\"><div class=\"layer\" role=\"menu\">Invented specimen menu</div></div></body></html>",
-      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.shell { position:relative; width:260px; height:56px; overflow:visible; } .layer { position:absolute; top:64px; left:8px; width:200px; height:80px; background:#fff; box-shadow:0 5px 12px rgba(0,0,0,.2); }</style></head><body><div class=\"shell\"><div class=\"layer\" role=\"menu\">Invented specimen menu</div></div></body></html>",
+      "positive": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.shell { position:relative; width:260px; height:56px; overflow:hidden; } .layer { position:absolute; top:-22px; left:8px; width:200px; height:80px; background:#fff; box-shadow:0 5px 12px rgba(0,0,0,.2); }</style></head><body><div class=\"shell\"><div class=\"layer\" role=\"menu\">Invented specimen menu</div></div></body></html>",
+      "negative": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invented context specimen</title><style>.shell { position:relative; width:260px; height:56px; overflow:visible; } .layer { position:absolute; top:-22px; left:8px; width:200px; height:80px; background:#fff; box-shadow:0 5px 12px rgba(0,0,0,.2); }</style></head><body><div class=\"shell\"><div class=\"layer\" role=\"menu\">Invented specimen menu</div></div></body></html>",
       "referenceTests": [
-        "crates/html/tests/clipped_overflow.rs"
+        "crates/html/tests/clipped_overflow.rs",
+        "crates/html/src/adapters.rs",
+        "crates/core/src/checks/measures.rs"
       ]
     },
     {
@@ -460,7 +462,8 @@
     "Static text heuristics only; no measured wrap, line boxes, glyph shaping, font loading or browser parity.",
     "Capital-label exemption targets wide-tracking alone; any other findings remain raw and are not waived.",
     "Only declared static source heuristics; no measured clipping, sibling geometry, glyph shaping, line wrapping, hyphenation execution or browser/native equivalence.",
-    "A negative target-rule control does not waive unrelated findings or confer approval."
+    "A negative target-rule control does not waive unrelated findings or confer approval.",
+    "A positive pixel inset beyond the declared parent height did not report and remains NOT_QUALIFIED. The negative-inset pair checks the documented declared escape heuristic, not measured clipping."
   ],
   "refusals": [
     {

@@ -301,3 +301,9 @@ must satisfy each contrasting assertion. Declared static clipping, geometry,
 column and style heuristics do not prove measured layout, live hyphenation,
 font shaping or browser/native parity. Unattempted engine/rule combinations
 remain explicitly NOT_QUALIFIED under the existing process/custody bounds.
+
+The first context probe did not report a menu with a positive pixel inset past
+a declared parent height. The pinned static check does not compare rendered
+rectangles; the contrasting pair uses a declared negative inset and changes
+only the parent overflow. The original observation remains unqualified for
+positive pixel geometry and is not a measured clipping verdict.
