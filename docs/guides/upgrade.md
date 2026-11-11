@@ -9,6 +9,14 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.24
+
+No existing export changes. The new `@mnstry/atelier/impeccable` and
+`@mnstry/atelier/impeccable/wasm` subpaths are Node-only and additive. Adopting
+the governed Impeccable capability package is a separate, explicit step through
+capability stewardship; nothing is installed or adopted by upgrading. Boundary
+policy v1 files continue to validate.
+
 ## Upgrading to 0.2.0-alpha.23
 
 Element scrollbars now contain local stacking layers within their viewport and

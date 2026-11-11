@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0-alpha.24
+
+- Add governed Impeccable design guidance. `@mnstry/atelier/impeccable` exposes a pinned resource inventory (Impeccable skill 4.8.1, engine 0.1.19, 24 commands, 62 built-in rule IDs), a context projection that binds host-authored product and design documents to a source reference and digest, rule-policy compilation and composition, and interpretation of recorded detector output. The adapters make no network requests, run no process and write no files; a report grants no edit or release authority.
+- Add `@mnstry/atelier/impeccable/wasm`, a Node-only binding for an already admitted synchronous WASM detector module. Inline ignore directives stay disabled and scoped ignore markers are refused before execution.
+- Ship `templates/impeccable-capability/`, a sealed resource-only capability package for the existing capability stewardship workflow, and list it in `atelier architecture`.
+- Add contrasting source conformance fixtures for the source and static adapters. Rules without a qualified pair are reported as not qualified.
+- Boundary policy v2 gains explicit bounded artifact scans, and archival-reference exceptions bind to exact decoded leaf identities.
+- See [Impeccable resource adapters](docs/reference/impeccable.md) for responsibilities and limits.
+
 ## 0.2.0-alpha.23
 
 Keep element scrollbar thumbs above local content layers and contain each
