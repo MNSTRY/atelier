@@ -38,6 +38,10 @@ Use the relevant bundled operating skill and document unsupported host bindings.
   method or information architecture.
 - Private disclosure patterns belong only in the maintainer-held CI secret or
   an ignored local denylist. Never commit the patterns or matched content.
+- Architecture decision records, initiative plans, roadmaps, review packets
+  and status notes are maintainer planning, not public documentation. Keep
+  them in the maintainers' private planning record, never in this
+  repository. Public docs describe what users and contributors can rely on.
 
 Read `CONTRIBUTING.md` and `docs/maintainers/release-engineering.md` before changing a
 public surface. Changes to disclosure, egress, boundary, or release guards need
