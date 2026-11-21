@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.25
 
 - Personal workspace composition honours each enrolled repository's own tracked `atelier.project.json`: when it declares one knowledge folder (`repos[0].path`), only that folder enters the composed graph, and node evidence is relative to it. Before, the whole repository was read, so tooling, tests and drafts outside the declared folder made composition refuse `source-graph-invalid`. Several declared folders, a folder outside the root, a missing or linked folder, or an invalid document refuse `project-config-unsupported`. A repository without a tracked configuration composes as before, with the same generation id. The Obsidian service also watches the configuration.
 
@@ -363,7 +363,7 @@ Shared, themeable overlay scrollbars for web documents and panels. Carousels sha
   `captured` details are included whenever the runner attached them. No package export
   or schema changes.
 
-## Unreleased
+## 0.2.0-alpha.25
 
 - Document how a host locks page scrolling around the presentation's modal confirmation without shifting the layout (pay the hidden scrollbar back as body end padding, count locks), and test that the browser binding itself never changes the host page's overflow, padding or scroll position.
 - Patch the fast-uri dependency and override from 3.1.7 to 3.1.8, the patched
