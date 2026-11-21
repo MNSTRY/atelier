@@ -536,3 +536,136 @@ test('review S3: asset evidence read failures return a typed refusal without pri
     refuses(f.materialize, 'source-read-failed')
   } finally { fs.openSync = open; fs.unlinkSync(asset); fs.unlinkSync(sidecar) }
 })
+
+// A repository's own tracked project configuration names its knowledge folder.
+function declareFolder(f, index, { repos = [{ name: 'notes', path: 'domain', readBoundary: 'private' }], track = true } = {}) {
+  const root = f.sources[index]
+  fs.mkdirSync(path.join(root, 'domain'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'domain', 'inside.md'), `---\ntitle: Inside\nkg:\n  id: ${path.basename(root)}:inside\n  type: document\n  status: active\n  audience: private\n---\n\nInside.\n`)
+  fs.writeFileSync(path.join(root, 'atelier.project.json'), JSON.stringify({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '.' }, repos }))
+  if (track) assert.equal(spawnSync(realGit, ['-C', root, 'add', 'atelier.project.json']).status, 0)
+  return root
+}
+function undeclare(f, index) {
+  const root = f.sources[index]
+  spawnSync(realGit, ['-C', root, 'rm', '-q', '--cached', '--ignore-unmatch', 'atelier.project.json'])
+  fs.rmSync(path.join(root, 'atelier.project.json'), { force: true }); fs.rmSync(path.join(root, 'domain'), { recursive: true, force: true })
+  f.sourceBefore[index] = treeHash(root)
+}
+
+test('declared knowledge folder: only that folder enters the graph, with folder-relative evidence', (t) => {
+  const f = fixture(t)
+  f.overlay.annotations[0].target = { repoId: 'source-a', nodeId: 'source-a:inside' }
+  f.overlay.connections[0].from = { repoId: 'source-a', nodeId: 'source-a:inside' }
+  f.save()
+  declareFolder(f, 0)
+  try {
+    const before = f.plan().generationId
+    f.materialize()
+    const result = f.compose()
+    assert.equal(result.graph.ok, true)
+    const sourceA = result.graph.nodes.filter((n) => n.repo === 'source-a')
+    assert.deepEqual(sourceA.map((n) => [n.id, n.path]), [['source-a:inside', 'inside.md']])
+    assert.ok(result.graph.edges.some((e) => e.source === 'personal-reading:annotation-note' && e.target === 'source-a:inside'))
+    const inputs = JSON.parse(fs.readFileSync(path.join(f.personalHome, 'generations', before, 'inputs.json'), 'utf8'))
+    assert.deepEqual(inputs.knowledgePaths, { 'source-a': 'domain' })
+    assert.equal(result.generation.sourceRevisions.length, 2)
+  } finally { undeclare(f, 0) }
+})
+
+test('declared knowledge folder: absent or untracked configuration keeps the whole repository and the earlier generation id', (t) => {
+  const f = fixture(t)
+  const whole = f.plan().generationId
+  declareFolder(f, 0, { track: false })
+  try {
+    assert.equal(f.plan().generationId, whole)
+    f.materialize()
+    const inputs = JSON.parse(fs.readFileSync(path.join(f.personalHome, 'generations', whole, 'inputs.json'), 'utf8'))
+    assert.equal('knowledgePaths' in inputs, false)
+    assert.ok(f.compose().graph.nodes.some((n) => n.id === 'source-a:overview'))
+  } finally { undeclare(f, 0) }
+})
+
+test('declared knowledge folder: several folders, an escaping path, a missing or linked folder and an invalid document refuse before writes', (t) => {
+  const f = fixture(t)
+  const cases = [
+    { repos: [{ name: 'one', path: 'domain' }, { name: 'two', path: 'other' }] },
+    { repos: [{ name: 'out', path: '../source-b' }] },
+    { repos: [{ name: 'gone', path: 'missing' }] },
+    { repos: [{ name: 'nopath' }] },
+  ]
+  try {
+    for (const c of cases) {
+      declareFolder(f, 0, c)
+      refuses(f.resolve, 'project-config-unsupported')
+      assert.equal(fs.existsSync(path.join(f.personalHome, 'generations')), false)
+    }
+    declareFolder(f, 0, { repos: [{ name: 'linked', path: 'linked' }] })
+    fs.symlinkSync(path.join(f.sources[0], 'domain'), path.join(f.sources[0], 'linked'))
+    refuses(f.resolve, 'project-config-unsupported')
+    fs.unlinkSync(path.join(f.sources[0], 'linked'))
+    fs.writeFileSync(path.join(f.sources[0], 'atelier.project.json'), '{ not json')
+    refuses(f.resolve, 'project-config-unsupported')
+    assert.equal(fs.existsSync(path.join(f.personalHome, 'generations')), false)
+  } finally { undeclare(f, 0) }
+})
+
+test('declared knowledge folder: changing the declared folder invalidates an existing generation', (t) => {
+  const f = fixture(t)
+  f.overlay.annotations[0].target = { repoId: 'source-b', nodeId: 'source-b:overview' }
+  f.overlay.connections[0].from = { repoId: 'source-b', nodeId: 'source-b:overview' }
+  f.save()
+  declareFolder(f, 0)
+  try {
+    const first = f.plan().generationId
+    f.materialize()
+    fs.mkdirSync(path.join(f.sources[0], 'other'))
+    fs.writeFileSync(path.join(f.sources[0], 'other', 'elsewhere.md'), '---\ntitle: Elsewhere\nkg:\n  id: source-a:elsewhere\n  type: document\n  status: active\n  audience: private\n---\n\nElsewhere.\n')
+    fs.writeFileSync(path.join(f.sources[0], 'atelier.project.json'), JSON.stringify({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '.' }, repos: [{ name: 'notes', path: 'other' }] }))
+    refuses(() => composePersonalWorkspace({ personalHome: f.personalHome, generationId: first }), 'stale-generation')
+    assert.notEqual(f.plan().generationId, first)
+    assert.ok(fs.existsSync(path.join(f.personalHome, 'generations', first)))
+  } finally { fs.rmSync(path.join(f.sources[0], 'other'), { recursive: true, force: true }); undeclare(f, 0) }
+})
+
+test('declared knowledge folder: review r1, a repository id that names an Object.prototype member composes with an absent or root declaration', (t) => {
+  const f = fixture(t)
+  const rename = (ref) => (ref.repoId === 'source-b' ? { ...ref, repoId: 'constructor' } : ref)
+  f.manifest.repos[1].repoId = 'constructor'
+  f.overlay.connections = f.overlay.connections.map((c) => ({ ...c, from: rename(c.from), to: rename(c.to) }))
+  f.overlay.collections = f.overlay.collections.map((c) => ({ ...c, members: c.members.map(rename) }))
+  f.save()
+  f.materialize()
+  assert.ok(f.compose().graph.nodes.some((n) => n.repo === 'constructor' && n.id === 'source-b:overview'))
+  declareFolder(f, 1, { repos: [{ name: 'whole', path: '.' }] })
+  try {
+    f.materialize()
+    assert.ok(f.compose().graph.nodes.some((n) => n.repo === 'constructor' && n.id === 'source-b:overview'))
+  } finally { undeclare(f, 1) }
+})
+
+test('declared knowledge folder: review r1, only the exact index entry makes a configuration tracked', (t) => {
+  const f = fixture(t)
+  const root = f.sources[0]
+  try {
+    // A tracked descendant under the name, replaced in the working tree by an untracked regular file.
+    fs.mkdirSync(path.join(root, 'atelier.project.json'))
+    fs.writeFileSync(path.join(root, 'atelier.project.json', 'example.json'), '{}')
+    assert.equal(spawnSync(realGit, ['-C', root, 'add', 'atelier.project.json/example.json']).status, 0)
+    fs.rmSync(path.join(root, 'atelier.project.json'), { recursive: true })
+    declareFolder(f, 0, { track: false })
+    refuses(f.resolve, 'project-config-unsupported')
+    spawnSync(realGit, ['-C', root, 'rm', '-q', '--cached', 'atelier.project.json/example.json'])
+    // A case alias: refused when the file system folds case, never read as the configuration.
+    const probe = path.join(root, 'CASE-PROBE'); fs.writeFileSync(probe, '')
+    const folds = fs.existsSync(path.join(root, 'case-probe')); fs.unlinkSync(probe)
+    fs.rmSync(path.join(root, 'atelier.project.json'))
+    declareFolder(f, 0, { track: false })
+    fs.renameSync(path.join(root, 'atelier.project.json'), path.join(root, 'Atelier.Project.json'))
+    assert.equal(spawnSync(realGit, ['-C', root, 'add', 'Atelier.Project.json']).status, 0)
+    if (folds) refuses(f.resolve, 'project-config-unsupported')
+    else assert.equal(f.resolve().status, 'resolved')
+    spawnSync(realGit, ['-C', root, 'rm', '-q', '--cached', 'Atelier.Project.json'])
+    fs.rmSync(path.join(root, 'Atelier.Project.json'))
+  } finally { undeclare(f, 0) }
+})

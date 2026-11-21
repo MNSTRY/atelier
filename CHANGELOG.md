@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Personal workspace composition honours each enrolled repository's own tracked `atelier.project.json`: when it declares one knowledge folder (`repos[0].path`), only that folder enters the composed graph, and node evidence is relative to it. Before, the whole repository was read, so tooling, tests and drafts outside the declared folder made composition refuse `source-graph-invalid`. Several declared folders, a folder outside the root, a missing or linked folder, or an invalid document refuse `project-config-unsupported`. A repository without a tracked configuration composes as before, with the same generation id. The Obsidian service also watches the configuration.
+
 ## 0.2.0-alpha.24
 
 - Add governed Impeccable design guidance. `@mnstry/atelier/impeccable` exposes a pinned resource inventory (Impeccable skill 4.8.1, engine 0.1.19, 24 commands, 62 built-in rule IDs), a context projection that binds host-authored product and design documents to a source reference and digest, rule-policy compilation and composition, and interpretation of recorded detector output. The adapters make no network requests, run no process and write no files; a report grants no edit or release authority.

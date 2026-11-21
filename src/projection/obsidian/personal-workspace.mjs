@@ -136,6 +136,64 @@ function repositoryConfigDigests(repoRoot) {
   return [gitDir, configDigest(path.join(gitDir, 'config')), commonDir, commonDir === null || commonDir === 'not-regular' ? null : configDigest(path.join(commonDir, 'config'))]
 }
 
+// What a repository's own project configuration contributes to the answer: its bytes, whether Git tracks it, and the
+// folder it names. Tracking is observed through the index files Git reads (the link and its target where the index is
+// a link), for every present configuration, regular or not, since staging unchanged bytes (or an unchanged link or
+// directory) changes what composition decides. The folder is observed only when the declaration names a path that
+// stays lexically inside the root, and a link is recorded as a link without being resolved. This observes; the
+// composition decides.
+function declaredKnowledgeObservation(repoRoot, stat) {
+  const file = path.join(repoRoot, 'atelier.project.json')
+  let present
+  try { present = fs.lstatSync(file) } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return ['missing']; return [`unreadable:${error.code ?? 'error'}`] }
+  const indexFiles = repositoryIndexFiles(repoRoot).map(indexObservation)
+  if (!present.isFile()) return [`not-regular:${present.mode}:${present.ino}`, indexFiles]
+  let bytes
+  try { bytes = regularFileBytes(file, AUTHORED_LIMIT, 'malformed-input') } catch { return ['not-regular', indexFiles] }
+  if (bytes === null) return ['missing', indexFiles]
+  let folder = null
+  try {
+    const declared = JSON.parse(bytes.toString('utf8'))?.repos?.[0]?.path
+    if (typeof declared === 'string') {
+      const absolute = path.resolve(repoRoot, declared)
+      if (absolute !== repoRoot && !absolute.startsWith(`${repoRoot}${path.sep}`)) folder = 'outside-root'
+      else {
+        let kind
+        try { kind = fs.lstatSync(absolute) } catch (error) { kind = null; folder = [absolute, `missing:${error.code ?? 'error'}`] }
+        if (kind && kind.isSymbolicLink()) folder = [absolute, stat(absolute), 'link']
+        else if (kind && !kind.isDirectory()) folder = [absolute, stat(absolute), 'not-directory']
+        else if (kind) {
+          let canonical
+          try { canonical = fs.realpathSync(absolute) } catch (error) { canonical = `unresolved:${error.code ?? 'error'}` }
+          folder = [absolute, stat(absolute), canonical]
+        }
+      }
+    }
+  } catch { folder = 'unparsed' }
+  return [sha256(bytes), indexFiles, folder]
+}
+// One index file as Git reads it: the entry itself and, when it is a link, its target's identity and metadata.
+function indexObservation(index) {
+  const facts = (s) => [s.mode, s.ino, s.dev, s.size, s.mtimeMs, s.ctimeMs]
+  let entry
+  try { entry = fs.lstatSync(index) } catch (error) { return [index, `missing:${error.code ?? 'error'}`] }
+  if (!entry.isSymbolicLink()) return [index, facts(entry)]
+  let target
+  try { target = facts(fs.statSync(index)) } catch (error) { target = `unresolved:${error.code ?? 'error'}` }
+  return [index, facts(entry), target]
+}
+// The index files Git reads for a repository: `.git/index`, or the index of the Git directory a `.git` file names.
+function repositoryIndexFiles(repoRoot) {
+  const dotGit = path.join(repoRoot, '.git')
+  try {
+    const kind = fs.lstatSync(dotGit)
+    if (kind.isDirectory() || (kind.isSymbolicLink() && fs.statSync(dotGit).isDirectory())) return [path.join(dotGit, 'index')]
+    const pointer = regularFileBytes(dotGit, AUTHORED_LIMIT, 'malformed-input', { follow: true })
+    const named = /^gitdir:\s*(.+?)\s*$/m.exec(pointer?.toString('utf8') ?? '')
+    return named === null ? [] : [path.join(path.resolve(repoRoot, named[1]), 'index')]
+  } catch { return [] }
+}
+
 // Everything outside the graph that a composition's answer depends on and a stat or a bounded read can see: the authored
 // inputs (regular files only), every file of the generation (an extra, missing or irregular one too), the private home's
 // own state and any `.git` above it, each enrolled root's link status and Git configuration (its remote and its helpers),
@@ -171,7 +229,7 @@ function inputsDigest({ personalHome, generationId }) {
   const enrolled = repos.map((repoRoot) => {
     let real
     try { real = fs.realpathSync(repoRoot) === repoRoot } catch { real = false }
-    return [repoRoot, stat(repoRoot), real, repositoryConfigDigests(repoRoot)]
+    return [repoRoot, stat(repoRoot), real, repositoryConfigDigests(repoRoot), declaredKnowledgeObservation(repoRoot, stat)]
   })
   const home = process.env.HOME
   const userGit = typeof home === 'string' && path.isAbsolute(home)

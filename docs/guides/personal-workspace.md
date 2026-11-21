@@ -24,6 +24,12 @@ from the environment or the current directory. The caller owns these files:
 Both contracts live in `contracts/`. Paths in the private manifest are absolute
 canonical paths. Bindings must not overlap; enrolled roots must not nest.
 Each repo has a `repoId`, `root`, recorded `remote` (or `null`), and `enrolled`.
+An enrolled repository with a tracked `atelier.project.json` that declares one
+knowledge folder (`repos[0].path`, relative to the repository root) contributes
+only that folder; node paths are relative to it. Several declared folders, a
+folder outside the root, a missing or linked folder, or an invalid document
+refuse `project-config-unsupported`. Without a tracked configuration, the whole
+repository is read. The declared folder is an input to the generation id.
 Overlay references are closed `{ repoId, nodeId }` pairs. Repository IDs are
 stable local enrollment keys; matching a recorded remote is an offline change
 check, not proof of upstream membership or provider identity.
