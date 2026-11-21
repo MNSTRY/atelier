@@ -9,6 +9,16 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.25
+
+No export changes. A personal workspace whose enrolled repositories have no
+tracked `atelier.project.json` composes exactly as before, with the same
+generation id. Where a repository tracks one that declares a single knowledge
+folder, only that folder enters the composed graph, so the next composition
+produces a new generation. A configuration declaring several folders, a folder
+outside the repository, or a missing or linked folder now refuses
+`project-config-unsupported`.
+
 ## Upgrading to 0.2.0-alpha.24
 
 No existing export changes. The new `@mnstry/atelier/impeccable` and
