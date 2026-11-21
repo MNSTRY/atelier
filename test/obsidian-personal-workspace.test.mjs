@@ -1194,6 +1194,14 @@ test('the validity key sees a linked user Git configuration, a .git file, and a 
     await bothRefuse('git-helper-configured', 'a helper behind a linked configuration')
   } finally { fs.rmSync(path.join(process.env.HOME, '.gitconfig')); fs.rmSync(target) }
   build()
+  // An enrolled repository starts declaring its own knowledge folder in a tracked project configuration.
+  fs.mkdirSync(path.join(world.b, 'declared'))
+  fs.writeFileSync(path.join(world.b, 'atelier.project.json'), JSON.stringify({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '.' }, repos: [{ name: 'b', path: 'declared' }] }))
+  git(world.b, ['add', 'atelier.project.json'])
+  await bothRefuse('stale-generation', 'a declared knowledge folder')
+  git(world.b, ['rm', '-q', '--cached', 'atelier.project.json'])
+  fs.rmSync(path.join(world.b, 'atelier.project.json')); fs.rmSync(path.join(world.b, 'declared'), { recursive: true })
+  build()
   // An enrolled repository whose .git is a file naming a separate Git directory; then a remote is added.
   const gitDir = path.join(world.base, 'b-git-directory')
   fs.renameSync(path.join(world.b, '.git'), gitDir)

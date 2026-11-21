@@ -171,7 +171,10 @@ function inputsDigest({ personalHome, generationId }) {
   const enrolled = repos.map((repoRoot) => {
     let real
     try { real = fs.realpathSync(repoRoot) === repoRoot } catch { real = false }
-    return [repoRoot, stat(repoRoot), real, repositoryConfigDigests(repoRoot)]
+    // The repository's own project configuration can declare its knowledge folder.
+    let projectConfig
+    try { projectConfig = regularFileDigest(path.join(repoRoot, 'atelier.project.json'), AUTHORED_LIMIT, 'malformed-input') } catch { projectConfig = 'not-regular' }
+    return [repoRoot, stat(repoRoot), real, repositoryConfigDigests(repoRoot), projectConfig]
   })
   const home = process.env.HOME
   const userGit = typeof home === 'string' && path.isAbsolute(home)

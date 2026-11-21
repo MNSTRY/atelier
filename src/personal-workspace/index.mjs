@@ -11,6 +11,7 @@ export const MANIFEST_SCHEMA = 'atelier-personal-workspace-manifest@v1'
 export const OVERLAY_SCHEMA = 'atelier-personal-workspace-overlay@v1'
 const GENERATION_SCHEMA = 'atelier-personal-workspace-generation@v1'
 const MANIFEST_FILE = 'atelier.personal.json'
+const PROJECT_FILE = 'atelier.project.json'
 const OVERLAY_FILE = 'atelier.overlay.json'
 const MAX_INPUT = 1024 * 1024
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
@@ -115,6 +116,34 @@ function checkRepo(repo) {
   const remote = observed ? sanitizeRemoteUrl(observed) : null
   if (remote !== repo.remote) refuse('repo-identity-replaced')
 }
+// The one knowledge folder an enrolled repository declares in its own tracked
+// project configuration, relative to its root ('' for the root itself). Without
+// a tracked configuration the whole repository is the knowledge folder. A
+// declared folder must stay inside the root, be a real directory, and be the
+// only one: several folders would split one enrollment into several graph repos.
+function declaredKnowledgePath(repo) {
+  const file = path.join(repo.root, PROJECT_FILE)
+  let stat
+  try { stat = fs.lstatSync(file) } catch (error) { if (error.code === 'ENOENT') return ''; refuse('project-config-unsupported') }
+  if (git(repo.root, ['ls-files', '-z', '--', PROJECT_FILE]).split('\0').filter(Boolean).length !== 1) return ''
+  if (!stat.isFile()) refuse('project-config-unsupported')
+  const doc = safe(() => JSON.parse(readBounded(file)), 'project-config-unsupported')
+  if (validateProjectConfigDoc(doc).length || !Array.isArray(doc.repos) || doc.repos.length !== 1 || typeof doc.repos[0]?.path !== 'string') refuse('project-config-unsupported')
+  const knowledge = path.resolve(repo.root, doc.repos[0].path)
+  if (!inside(repo.root, knowledge)) refuse('project-config-unsupported')
+  try { rootCheck(knowledge) } catch { refuse('project-config-unsupported') }
+  return path.relative(repo.root, knowledge).split(path.sep).join('/')
+}
+function readBounded(file) {
+  // Never wait on a FIFO or device swapped in after the lstat.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0))
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile() || stat.size > MAX_INPUT) refuse('project-config-unsupported')
+    return fs.readFileSync(fd)
+  } finally { fs.closeSync(fd) }
+}
+const knowledgeRoot = (repo, knowledgePaths) => knowledgePaths[repo.repoId] ? path.join(repo.root, ...knowledgePaths[repo.repoId].split('/')) : repo.root
 function refs(overlay) {
   return [...overlay.annotations.map((a) => a.target), ...overlay.connections.flatMap((a) => [a.from, a.to]), ...overlay.collections.flatMap((a) => a.members)]
 }
@@ -136,7 +165,8 @@ function inputCheck(manifest, overlay, personalHome) {
     checkRepo(repo)
   }
   for (let i = 0; i < enrolled.length; i++) for (const r of enrolled.slice(i + 1)) if (overlap(enrolled[i].root, r.root)) refuse('nested-enrolled-roots')
-  return { enrolled, overlayRepoId }
+  const knowledgePaths = Object.fromEntries(enrolled.map((repo) => [repo.repoId, declaredKnowledgePath(repo)]).filter(([, rel]) => rel !== ''))
+  return { enrolled, overlayRepoId, knowledgePaths }
 }
 function readInputs(personalHome) {
   checkEnvironment()
@@ -170,20 +200,23 @@ function markdown(id, title, body, targets = [], tags = []) {
 }
 export function planPersonalGeneration(resolved) {
   if (!resolvedInputs.has(resolved) || resolved.status !== 'resolved') refuse('malformed-input')
-  const { manifest, overlay, personalHome, enrolled, overlayRepoId } = resolved
+  const { manifest, overlay, personalHome, enrolled, overlayRepoId, knowledgePaths } = resolved
   const referenceMap = Object.fromEntries(refs(overlay).map((r) => [refKey(r), r.nodeId]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-  const inputsDigest = hash(canonical({ manifest, overlay, referenceMap }))
+  // Declared knowledge folders are inputs. Enrollments without one keep the
+  // earlier inputs shape, so their generation ids do not change.
+  const inputs = { manifest, overlay, referenceMap, ...(Object.keys(knowledgePaths).length ? { knowledgePaths } : {}) }
+  const inputsDigest = hash(canonical(inputs))
   // Relative project paths depend on this location. Moving the private home
   // produces a fresh generation without modifying or overwriting its history.
   const generationId = hash(canonical({ inputsDigest, personalHome }))
   const final = path.join(personalHome, 'generations', generationId)
   const files = {
-    'inputs.json': canonical({ manifest, overlay, referenceMap }),
+    'inputs.json': canonical(inputs),
     'atelier.project.json': canonical({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '.' },
-      repos: [...enrolled.map((r) => ({ name: r.repoId, path: path.relative(final, r.root), readBoundary: 'private' })),
+      repos: [...enrolled.map((r) => ({ name: r.repoId, path: path.relative(final, knowledgeRoot(r, knowledgePaths)), readBoundary: 'private' })),
         { name: overlayRepoId, path: 'overlay', readBoundary: 'private' }] }),
     'shared/atelier.project.json': canonical({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '..' },
-      repos: enrolled.map((r) => ({ name: r.repoId, path: path.relative(path.join(final, 'shared'), r.root), readBoundary: 'private' })) }),
+      repos: enrolled.map((r) => ({ name: r.repoId, path: path.relative(path.join(final, 'shared'), knowledgeRoot(r, knowledgePaths)), readBoundary: 'private' })) }),
   }
   const overlayNodes = []
   function addOverlay(rel, id, title, body, targets = [], tags = []) {
@@ -348,8 +381,10 @@ function composeAt(plan, final) {
     if (validateProjectConfigDoc(project.config).length) refuse('generation-corrupt')
     if (project.localOverlay.paths.length || project.repos.some((r) => r.pathSource !== 'tracked-config')) refuse('ambient-overlay-present')
     const graph = buildCanonicalGraph(project, { isLinkTargetEligible: (node) => node.repo !== input.overlayRepoId })
+    // Graph paths are relative to the knowledge folder; the ignored census is relative to the repository root.
+    const prefixOf = (repoId) => input.knowledgePaths[repoId] ? `${input.knowledgePaths[repoId]}/` : ''
     for (const n of [...graph.nodes, ...graph.assets]) {
-      if ((ignored.get(n.repo) || []).some((p) => [n.path, n.sidecar].filter(Boolean).map(ignorePath).some((rel) => rel === p || rel.startsWith(`${p}/`)))) refuse('ignored-source-in-census')
+      if ((ignored.get(n.repo) || []).some((p) => [n.path, n.sidecar].filter(Boolean).map((rel) => ignorePath(prefixOf(n.repo) + rel)).some((rel) => rel === p || rel.startsWith(`${p}/`)))) refuse('ignored-source-in-census')
     }
     for (const ref of refs(input.overlay)) {
       const node = graph.nodes.find((n) => n.id === ref.nodeId && n.repo === ref.repoId)
@@ -384,7 +419,7 @@ function composeAt(plan, final) {
     if (canonical(expectedOverlay) !== canonical(actualOverlay)) refuse('overlay-census-mismatch')
     // Report current source evidence, never claim that an immutable private generation freezes live source bytes.
     const sourceRevisions = input.enrolled.map((repo) => ({ repoId: repo.repoId, remote: repo.remote,
-      observedCensusDigest: hash(canonical(graph.nodes.filter((n) => n.repo === repo.repoId).map((n) => ({ id: n.id, path: n.path, sha256: sourceHash(path.join(repo.root, n.path)) })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)))) }))
+      observedCensusDigest: hash(canonical(graph.nodes.filter((n) => n.repo === repo.repoId).map((n) => ({ id: n.id, path: n.path, sha256: sourceHash(path.join(knowledgeRoot(repo, input.knowledgePaths), n.path)) })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)))) }))
     if (currentPlan(personalHome).generationId !== plan.generationId) refuse('stale-generation')
     verifyFiles(plan, final)
   return { graph, sourceRevisions, input }
