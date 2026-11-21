@@ -1194,13 +1194,25 @@ test('the validity key sees a linked user Git configuration, a .git file, and a 
     await bothRefuse('git-helper-configured', 'a helper behind a linked configuration')
   } finally { fs.rmSync(path.join(process.env.HOME, '.gitconfig')); fs.rmSync(target) }
   build()
-  // An enrolled repository starts declaring its own knowledge folder in a tracked project configuration.
-  fs.mkdirSync(path.join(world.b, 'declared'))
-  fs.writeFileSync(path.join(world.b, 'atelier.project.json'), JSON.stringify({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '.' }, repos: [{ name: 'b', path: 'declared' }] }))
+  // An enrolled repository's untracked project configuration declares its knowledge folder: nothing changes until
+  // Git tracks it, and staging the unchanged bytes is noticed.
+  fs.writeFileSync(path.join(world.b, 'atelier.project.json'), JSON.stringify({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '.' }, repos: [{ name: 'b', path: 'notes' }] }))
+  build()
   git(world.b, ['add', 'atelier.project.json'])
-  await bothRefuse('stale-generation', 'a declared knowledge folder')
+  await bothRefuse('stale-generation', 'staging an unchanged declaration')
+  ari.materialize(); ari.bind()
+  build()
+  // The declared folder swapped for a link to identical content.
+  fs.renameSync(path.join(world.b, 'notes'), path.join(world.b, 'notes-real'))
+  fs.symlinkSync(path.join(world.b, 'notes-real'), path.join(world.b, 'notes'))
+  await bothRefuse('project-config-unsupported', 'a declared folder replaced by a link')
+  fs.unlinkSync(path.join(world.b, 'notes'))
+  fs.renameSync(path.join(world.b, 'notes-real'), path.join(world.b, 'notes'))
+  build()
   git(world.b, ['rm', '-q', '--cached', 'atelier.project.json'])
-  fs.rmSync(path.join(world.b, 'atelier.project.json')); fs.rmSync(path.join(world.b, 'declared'), { recursive: true })
+  fs.rmSync(path.join(world.b, 'atelier.project.json'))
+  await bothRefuse('stale-generation', 'withdrawing the declaration')
+  ari.materialize(); ari.bind()
   build()
   // An enrolled repository whose .git is a file naming a separate Git directory; then a remote is added.
   const gitDir = path.join(world.base, 'b-git-directory')

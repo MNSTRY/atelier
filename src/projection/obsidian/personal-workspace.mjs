@@ -136,6 +136,40 @@ function repositoryConfigDigests(repoRoot) {
   return [gitDir, configDigest(path.join(gitDir, 'config')), commonDir, commonDir === null || commonDir === 'not-regular' ? null : configDigest(path.join(commonDir, 'config'))]
 }
 
+// What a repository's own project configuration contributes to the answer: its bytes, whether Git tracks it (the
+// index file's identity and size, since staging unchanged bytes changes the declaration), and the folder it names
+// (link status, inode and canonical location, so a folder swapped for a link to identical content is noticed). This
+// observes; the composition decides.
+function declaredKnowledgeObservation(repoRoot, stat) {
+  const file = path.join(repoRoot, 'atelier.project.json')
+  let bytes
+  try { bytes = regularFileBytes(file, AUTHORED_LIMIT, 'malformed-input') } catch { return ['not-regular'] }
+  if (bytes === null) return ['missing']
+  const indexFiles = repositoryIndexFiles(repoRoot).map((index) => { try { const s = fs.lstatSync(index); return [index, s.ino, s.size, s.mtimeMs, s.ctimeMs] } catch (error) { return [index, `missing:${error.code ?? 'error'}`] } })
+  let folder = null
+  try {
+    const declared = JSON.parse(bytes.toString('utf8'))?.repos?.[0]?.path
+    if (typeof declared === 'string') {
+      const absolute = path.resolve(repoRoot, declared)
+      let canonical
+      try { canonical = fs.realpathSync(absolute) } catch (error) { canonical = `unresolved:${error.code ?? 'error'}` }
+      folder = [absolute, stat(absolute), canonical]
+    }
+  } catch { folder = 'unparsed' }
+  return [sha256(bytes), indexFiles, folder]
+}
+// The index files Git reads for a repository: `.git/index`, or the index of the Git directory a `.git` file names.
+function repositoryIndexFiles(repoRoot) {
+  const dotGit = path.join(repoRoot, '.git')
+  try {
+    const kind = fs.lstatSync(dotGit)
+    if (kind.isDirectory() || (kind.isSymbolicLink() && fs.statSync(dotGit).isDirectory())) return [path.join(dotGit, 'index')]
+    const pointer = regularFileBytes(dotGit, AUTHORED_LIMIT, 'malformed-input', { follow: true })
+    const named = /^gitdir:\s*(.+?)\s*$/m.exec(pointer?.toString('utf8') ?? '')
+    return named === null ? [] : [path.join(path.resolve(repoRoot, named[1]), 'index')]
+  } catch { return [] }
+}
+
 // Everything outside the graph that a composition's answer depends on and a stat or a bounded read can see: the authored
 // inputs (regular files only), every file of the generation (an extra, missing or irregular one too), the private home's
 // own state and any `.git` above it, each enrolled root's link status and Git configuration (its remote and its helpers),
@@ -171,10 +205,7 @@ function inputsDigest({ personalHome, generationId }) {
   const enrolled = repos.map((repoRoot) => {
     let real
     try { real = fs.realpathSync(repoRoot) === repoRoot } catch { real = false }
-    // The repository's own project configuration can declare its knowledge folder.
-    let projectConfig
-    try { projectConfig = regularFileDigest(path.join(repoRoot, 'atelier.project.json'), AUTHORED_LIMIT, 'malformed-input') } catch { projectConfig = 'not-regular' }
-    return [repoRoot, stat(repoRoot), real, repositoryConfigDigests(repoRoot), projectConfig]
+    return [repoRoot, stat(repoRoot), real, repositoryConfigDigests(repoRoot), declaredKnowledgeObservation(repoRoot, stat)]
   })
   const home = process.env.HOME
   const userGit = typeof home === 'string' && path.isAbsolute(home)

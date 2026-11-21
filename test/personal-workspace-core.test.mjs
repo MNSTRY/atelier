@@ -627,3 +627,45 @@ test('declared knowledge folder: changing the declared folder invalidates an exi
     assert.ok(fs.existsSync(path.join(f.personalHome, 'generations', first)))
   } finally { fs.rmSync(path.join(f.sources[0], 'other'), { recursive: true, force: true }); undeclare(f, 0) }
 })
+
+test('declared knowledge folder: review r1, a repository id that names an Object.prototype member composes with an absent or root declaration', (t) => {
+  const f = fixture(t)
+  const rename = (ref) => (ref.repoId === 'source-b' ? { ...ref, repoId: 'constructor' } : ref)
+  f.manifest.repos[1].repoId = 'constructor'
+  f.overlay.connections = f.overlay.connections.map((c) => ({ ...c, from: rename(c.from), to: rename(c.to) }))
+  f.overlay.collections = f.overlay.collections.map((c) => ({ ...c, members: c.members.map(rename) }))
+  f.save()
+  f.materialize()
+  assert.ok(f.compose().graph.nodes.some((n) => n.repo === 'constructor' && n.id === 'source-b:overview'))
+  declareFolder(f, 1, { repos: [{ name: 'whole', path: '.' }] })
+  try {
+    f.materialize()
+    assert.ok(f.compose().graph.nodes.some((n) => n.repo === 'constructor' && n.id === 'source-b:overview'))
+  } finally { undeclare(f, 1) }
+})
+
+test('declared knowledge folder: review r1, only the exact index entry makes a configuration tracked', (t) => {
+  const f = fixture(t)
+  const root = f.sources[0]
+  try {
+    // A tracked descendant under the name, replaced in the working tree by an untracked regular file.
+    fs.mkdirSync(path.join(root, 'atelier.project.json'))
+    fs.writeFileSync(path.join(root, 'atelier.project.json', 'example.json'), '{}')
+    assert.equal(spawnSync(realGit, ['-C', root, 'add', 'atelier.project.json/example.json']).status, 0)
+    fs.rmSync(path.join(root, 'atelier.project.json'), { recursive: true })
+    declareFolder(f, 0, { track: false })
+    refuses(f.resolve, 'project-config-unsupported')
+    spawnSync(realGit, ['-C', root, 'rm', '-q', '--cached', 'atelier.project.json/example.json'])
+    // A case alias: refused when the file system folds case, never read as the configuration.
+    const probe = path.join(root, 'CASE-PROBE'); fs.writeFileSync(probe, '')
+    const folds = fs.existsSync(path.join(root, 'case-probe')); fs.unlinkSync(probe)
+    fs.rmSync(path.join(root, 'atelier.project.json'))
+    declareFolder(f, 0, { track: false })
+    fs.renameSync(path.join(root, 'atelier.project.json'), path.join(root, 'Atelier.Project.json'))
+    assert.equal(spawnSync(realGit, ['-C', root, 'add', 'Atelier.Project.json']).status, 0)
+    if (folds) refuses(f.resolve, 'project-config-unsupported')
+    else assert.equal(f.resolve().status, 'resolved')
+    spawnSync(realGit, ['-C', root, 'rm', '-q', '--cached', 'Atelier.Project.json'])
+    fs.rmSync(path.join(root, 'Atelier.Project.json'))
+  } finally { undeclare(f, 0) }
+})

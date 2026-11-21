@@ -125,8 +125,15 @@ function declaredKnowledgePath(repo) {
   const file = path.join(repo.root, PROJECT_FILE)
   let stat
   try { stat = fs.lstatSync(file) } catch (error) { if (error.code === 'ENOENT') return ''; refuse('project-config-unsupported') }
-  if (git(repo.root, ['ls-files', '-z', '--', PROJECT_FILE]).split('\0').filter(Boolean).length !== 1) return ''
-  if (!stat.isFile()) refuse('project-config-unsupported')
+  // Only the exact index entry counts. Any other entry that matches the name
+  // (a tracked descendant, or a case alias on a case-insensitive file system)
+  // makes the declaration ambiguous rather than absent.
+  const listed = (spec) => git(repo.root, ['ls-files', '-z', '--full-name', '--', spec]).split('\0').filter(Boolean)
+  const exact = listed(`:(literal)${PROJECT_FILE}`)
+  const folded = listed(`:(icase)${PROJECT_FILE}`)
+  if (folded.some((entry) => entry !== PROJECT_FILE)) refuse('project-config-unsupported')
+  if (exact.length === 0) return ''
+  if (exact.length !== 1 || exact[0] !== PROJECT_FILE || !stat.isFile()) refuse('project-config-unsupported')
   const doc = safe(() => JSON.parse(readBounded(file)), 'project-config-unsupported')
   if (validateProjectConfigDoc(doc).length || !Array.isArray(doc.repos) || doc.repos.length !== 1 || typeof doc.repos[0]?.path !== 'string') refuse('project-config-unsupported')
   const knowledge = path.resolve(repo.root, doc.repos[0].path)
@@ -143,7 +150,9 @@ function readBounded(file) {
     return fs.readFileSync(fd)
   } finally { fs.closeSync(fd) }
 }
-const knowledgeRoot = (repo, knowledgePaths) => knowledgePaths[repo.repoId] ? path.join(repo.root, ...knowledgePaths[repo.repoId].split('/')) : repo.root
+// Own properties only: a repository id such as `constructor` must never resolve through the prototype.
+const knowledgePathOf = (knowledgePaths, repoId) => Object.hasOwn(knowledgePaths, repoId) ? knowledgePaths[repoId] : ''
+const knowledgeRoot = (repo, knowledgePaths) => knowledgePathOf(knowledgePaths, repo.repoId) ? path.join(repo.root, ...knowledgePathOf(knowledgePaths, repo.repoId).split('/')) : repo.root
 function refs(overlay) {
   return [...overlay.annotations.map((a) => a.target), ...overlay.connections.flatMap((a) => [a.from, a.to]), ...overlay.collections.flatMap((a) => a.members)]
 }
@@ -382,7 +391,7 @@ function composeAt(plan, final) {
     if (project.localOverlay.paths.length || project.repos.some((r) => r.pathSource !== 'tracked-config')) refuse('ambient-overlay-present')
     const graph = buildCanonicalGraph(project, { isLinkTargetEligible: (node) => node.repo !== input.overlayRepoId })
     // Graph paths are relative to the knowledge folder; the ignored census is relative to the repository root.
-    const prefixOf = (repoId) => input.knowledgePaths[repoId] ? `${input.knowledgePaths[repoId]}/` : ''
+    const prefixOf = (repoId) => knowledgePathOf(input.knowledgePaths, repoId) ? `${knowledgePathOf(input.knowledgePaths, repoId)}/` : ''
     for (const n of [...graph.nodes, ...graph.assets]) {
       if ((ignored.get(n.repo) || []).some((p) => [n.path, n.sidecar].filter(Boolean).map((rel) => ignorePath(prefixOf(n.repo) + rel)).some((rel) => rel === p || rel.startsWith(`${p}/`)))) refuse('ignored-source-in-census')
     }
