@@ -87,8 +87,8 @@ mark record, not an index entry.
 9. **Commit, build, check and read back.** Run the repository's boundary
    check on the staged record (`atelier boundary check --staged`, or the
    installed hook) and commit it: the check verifies the committed record and
-   refuses an uncommitted edit, to the record or to the files behind the nodes
-   it depends on (the marked node, what it `evidences`, the marks index).
+   refuses an uncommitted edit to the record; it verifies what is committed,
+   so commit the material and the nodes the mark depends on first.
    Then run `atelier graph`,
    `atelier graph --check` and `atelier graphmark check --expect <the mark's id>`,
    and find the mark's id and edges in the built graph. Report what was marked
@@ -194,22 +194,19 @@ longer resolves. `test/graphmark.test.mjs` pins these behaviours.
 
 ## Limits
 
-- The graph reads every file Git does not ignore, so a mark record can be
-  built into the graph before it is committed. `atelier graphmark check`
-  verifies the record committed at `HEAD` and refuses an untracked, only
-  staged or edited record; commit the record, rebuild, and confirm its id is
-  in the built graph. A record in a Git-ignored path is not read at all. Use
-  `--expect <id>` so a mark that went missing fails the check instead of
-  disappearing from the count.
-- The graph itself is built from the working tree. The check refuses a mark
-  whose marked node, `evidences` nodes or marks index (with their sidecars)
-  are untracked or differ from `HEAD`, so run it on a tree where those files
-  are committed. A mark with any error is reported as `refused`.
+- `atelier graphmark check` verifies the committed tree at `HEAD`, not the
+  working tree: it builds the graph from a private snapshot of the committed
+  files, config and read boundaries, so an uncommitted edit can neither pass
+  nor fail a mark. It refuses an untracked, only staged or edited mark record,
+  and warns about uncommitted changes to what a mark depends on. A record in a
+  Git-ignored path is not read at all. Use `--expect <id>` so a mark that went
+  missing fails the check instead of disappearing from the count. A mark with
+  any error is reported as `refused`.
 - `atelier graphmark check` compares a mark's audience with the audience the
-  marked edition declared at its commit, the marked file's current node or,
-  for a file that is not a graph node, the repository's read boundary and what
-  the file declares now, and the nodes it `evidences`. Custody (step 5) remains
-  the agent's and reviewer's responsibility.
+  marked edition declared at its commit, the marked file's committed node or,
+  for a file that is not a graph node, the committed read boundary and what
+  the file declares at `HEAD`, and the nodes it `evidences`. Custody (step 5)
+  remains the agent's and reviewer's responsibility.
 - A changed edition is a warning, not an error: the mark still names the bytes
   that were marked, and Git returns them with the printed command, which reads
   Git as the check does (`--no-replace-objects`). An edition the named commit

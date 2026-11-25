@@ -772,7 +772,9 @@ test('an uncommitted edit to the marked node cannot turn a refused mark green', 
   fs.writeFileSync(note, team)
   const widened = checkProject(dir)
   assert.equal(widened.ok, false)
-  assert.ok(has(widened.errors, WHEEL, 'the marked node repair-workshop:notes:wheel-checks: content/notes/wheel-checks.md differs from the one committed at HEAD'), widened.errors.join('\n'))
+  // The committed note is still private; the working-tree edit only warns.
+  assert.ok(has(widened.errors, WHEEL, 'wider than "private" of repair-workshop:notes:wheel-checks'), widened.errors.join('\n'))
+  assert.ok(has(widened.warnings, WHEEL, 'the marked file content/notes/wheel-checks.md has uncommitted changes (modified)'), widened.warnings.join('\n'))
   assert.equal(markOf(widened, 'order-of-wheel-checks').edition, 'refused')
 })
 
@@ -787,7 +789,9 @@ test('an untracked sidecar cannot supply the node a mark evidences', () => {
   git(dir, ['commit', '-qm', 'mark it', '--', markPath(dir, DRAWING)])
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(has(report.errors, DRAWING, 'repair-workshop:drawings:plan: content/drawings/plan.html.kg.json is not committed at HEAD'), report.errors.join('\n'))
+  // The committed graph has no such node: the build fails, and the mark is refused.
+  assert.ok(has(report.errors, DRAWING, 'declared evidences target "repair-workshop:drawings:plan" was not found'), report.errors.join('\n'))
+  assert.equal(markOf(report, 'spoke-tension-drawing').edition, 'refused')
 })
 
 test('an untracked marks index cannot hold a mark', () => {
@@ -796,7 +800,9 @@ test('an untracked marks index cannot hold a mark', () => {
   git(dir, ['commit', '-qm', 'the index leaves Git but stays on disk'])
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.equal(report.errors.filter((error) => error.includes('the marks index repair-workshop:marks: content/marks/README.md is not committed at HEAD')).length, 3, report.errors.join('\n'))
+  assert.ok(has(report.errors, 'content/marks/README.md: the marks index is not committed at HEAD'), report.errors.join('\n'))
+  assert.equal(report.errors.filter((error) => error.includes('declared belongs_to target "repair-workshop:marks" was not found')).length, 3, report.errors.join('\n'))
+  assert.deepEqual(report.marks.map((mark) => mark.edition), ['refused', 'refused', 'refused'])
 })
 
 test('graphmark check takes --project-config and --repo-path through the shared resolver', () => {
@@ -828,4 +834,166 @@ test('a mark with any error is refused in the report, not counted intact', () =>
   const cli = spawnSync(process.execPath, [binary, 'graphmark', 'check'], { cwd: dir, encoding: 'utf8' })
   assert.equal(cli.status, 1)
   assert.match(cli.stdout, /graphmark: 3 marks · 2 intact · 0 changed · 0 removed · 1 refused · \d+ errors/)
+})
+
+// Findings from the re-check of 0c048cf: the check verifies the committed tree.
+
+function sidecarFor(asset, id, audience = 'team') {
+  return `${JSON.stringify({ schema: 'mnstry.source-sidecar@v1', asset, title: asset, summary: `The ${asset} file.`, tags: ['repair'], kg: { id, type: 'artifact', domain: 'repair', lifecycle: 'active', status: 'active', audience, relations: {} } }, null, 2)}\n`
+}
+
+test('a clean checkout with line-ending conversion or a checkout filter verifies', () => {
+  const { dir } = pinnedProject()
+  // A filter that prefixes each line on checkout and strips it on commit.
+  fs.writeFileSync(path.join(dir, '.gitattributes'), 'content/drawings/*.html filter=prefix\n')
+  commitAll(dir, 'a checkout filter')
+  const crlf = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-crlf-'))
+  git(crlf, ['-c', 'core.autocrlf=true', 'clone', '-q', '-c', 'core.autocrlf=true', dir, '.'])
+  assert.ok(fs.readFileSync(markPath(crlf, WHEEL), 'utf8').includes('\r\n'), 'the checkout converted line endings')
+  assert.equal(git(crlf, ['status', '--porcelain']), '')
+  const converted = checkProject(crlf)
+  assert.equal(converted.ok, true, converted.errors.join('\n'))
+  assert.deepEqual(converted.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+  assert.deepEqual(converted.warnings, [])
+
+  const filtered = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-filter-'))
+  git(filtered, ['clone', '-q', '-c', "filter.prefix.smudge=sed 's/^/~/'", '-c', "filter.prefix.clean=sed 's/^~//'", dir, '.'])
+  assert.ok(fs.readFileSync(path.join(filtered, 'content', 'drawings', 'spoke-tension.html'), 'utf8').startsWith('~'), 'the checkout ran the filter')
+  assert.equal(git(filtered, ['status', '--porcelain']), '')
+  const report = checkProject(filtered)
+  assert.equal(report.ok, true, report.errors.join('\n'))
+  assert.deepEqual(report.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+})
+
+test('a sidecar that is a symbolic link is never trusted, committed or not', () => {
+  const { dir } = pinnedProject()
+  fs.writeFileSync(path.join(dir, 'content', 'drawings', 'plan.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n')
+  fs.writeFileSync(path.join(dir, 'elsewhere.json'), sidecarFor('plan.svg', 'repair-workshop:drawings:plan'))
+  git(dir, ['add', '--', 'content/drawings/plan.svg', 'elsewhere.json'])
+  git(dir, ['commit', '-qm', 'a drawing that only a link would enrol'])
+  fs.symlinkSync('../../elsewhere.json', path.join(dir, 'content', 'drawings', 'plan.svg.kg.json'))
+  retarget(dir, DRAWING, 'content/drawings/plan.svg', (text) => text.replace('"repair-workshop:drawings:spoke-tension"', '"repair-workshop:drawings:plan"'))
+  git(dir, ['commit', '-qm', 'mark it', '--', markPath(dir, DRAWING)])
+  const linked = checkProject(dir)
+  assert.equal(linked.ok, false)
+  assert.ok(has(linked.errors, DRAWING, 'declared evidences target "repair-workshop:drawings:plan" was not found'), linked.errors.join('\n'))
+  assert.equal(markOf(linked, 'spoke-tension-drawing').edition, 'refused')
+
+  commitAll(dir, 'commit the link too')
+  const committed = checkProject(dir)
+  assert.equal(committed.ok, false)
+  assert.ok(has(committed.errors, DRAWING, 'declared evidences target "repair-workshop:drawings:plan" was not found'), committed.errors.join('\n'))
+  assert.ok(has(committed.warnings, 'content/drawings/plan.svg.kg.json: is a symbolic link at HEAD'), committed.warnings.join('\n'))
+})
+
+test('uncommitted repository policy has no effect on the verdict', () => {
+  const { dir } = pinnedProject()
+  const setBoundary = (boundary) => {
+    const config = JSON.parse(fs.readFileSync(path.join(dir, 'atelier.project.json'), 'utf8'))
+    config.repos[0].readBoundary = boundary
+    fs.writeFileSync(path.join(dir, 'atelier.project.json'), `${JSON.stringify(config, null, 2)}\n`)
+    const access = JSON.parse(fs.readFileSync(path.join(dir, 'repo-access.v1.json'), 'utf8'))
+    access.repos.content.readBoundary = boundary
+    fs.writeFileSync(path.join(dir, 'repo-access.v1.json'), `${JSON.stringify(access, null, 2)}\n`)
+  }
+  setBoundary('private')
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'parts.txt'), 'spokes, nipples, rim tape\n')
+  commitAll(dir, 'a private repository and a plain file')
+  retarget(dir, DRAWING, 'content/notes/parts.txt')
+  commitAll(dir, 'a team mark of a file only private readers may see')
+  const committed = checkProject(dir)
+  assert.equal(committed.ok, false)
+  assert.ok(has(committed.errors, DRAWING, 'wider than "private" of content/notes/parts.txt (the repository\'s read boundary)'), committed.errors.join('\n'))
+
+  setBoundary('team')
+  const widened = checkProject(dir)
+  assert.equal(widened.ok, false)
+  assert.ok(has(widened.errors, DRAWING, 'wider than "private" of content/notes/parts.txt (the repository\'s read boundary)'), widened.errors.join('\n'))
+  assert.ok(has(widened.warnings, 'atelier.project.json: has uncommitted changes'), widened.warnings.join('\n'))
+  assert.ok(has(widened.warnings, 'repo-access.v1.json: has uncommitted changes'), widened.warnings.join('\n'))
+})
+
+test('an audience name inherited from a JavaScript object is unknown', () => {
+  const { dir } = pinnedProject()
+  const sidecar = path.join(dir, 'content', 'drawings', 'spoke-tension.html.kg.json')
+  const note = path.join(dir, 'content', 'notes', 'wheel-checks.md')
+  const [sidecarText, noteText] = [fs.readFileSync(sidecar, 'utf8'), fs.readFileSync(note, 'utf8')]
+  fs.writeFileSync(sidecar, sidecarText.replace('"audience": "team"', '"audience": "constructor"'))
+  fs.writeFileSync(note, noteText.replace('  audience: "team"', '  audience: "__proto__"'))
+  commitAll(dir, 'inherited names')
+  retarget(dir, DRAWING, 'content/drawings/spoke-tension.html')
+  retarget(dir, WHEEL, 'content/notes/wheel-checks.md')
+  fs.writeFileSync(sidecar, sidecarText)
+  fs.writeFileSync(note, noteText)
+  commitAll(dir, 'restore known audiences')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, DRAWING, 'has the unknown audience "constructor"'), report.errors.join('\n'))
+  assert.ok(has(report.errors, WHEEL, 'has the unknown audience "__proto__"'), report.errors.join('\n'))
+})
+
+test('a current file too large to read is refused, not reported removed', () => {
+  const { dir } = pinnedProject()
+  const parts = path.join(dir, 'content', 'notes', 'parts.txt')
+  fs.writeFileSync(parts, 'spokes, nipples, rim tape\n')
+  commitAll(dir, 'a plain file')
+  retarget(dir, DRAWING, 'content/notes/parts.txt')
+  commitAll(dir, 'mark it')
+  fs.writeFileSync(parts, Buffer.alloc(65 * 1024 * 1024, 0x61))
+  commitAll(dir, 'it grows past what the check reads')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.equal(markOf(report, 'spoke-tension-drawing').edition, 'refused')
+  assert.ok(has(report.errors, DRAWING, 'more than this check reads', 'cannot be checked'), report.errors.join('\n'))
+  assert.equal(has(report.warnings, DRAWING, 'no longer held at HEAD'), false)
+})
+
+test('an edition a partial clone lacks is unavailable, and nothing is fetched', () => {
+  const { dir, head } = pinnedProject()
+  fs.appendFileSync(path.join(dir, 'content', 'notes', 'wheel-checks.md'), '\nA later line.\n')
+  commitAll(dir, 'a later edition')
+  git(dir, ['config', 'uploadpack.allowFilter', 'true'])
+  const partial = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-partial-'))
+  git(partial, ['clone', '-q', '--filter=blob:none', `file://${dir}`, '.'])
+  const missing = () => git(partial, ['rev-list', '--objects', '--missing=print', '--no-walk', head]).split('\n').filter((line) => line.startsWith('?')).sort()
+  const edition = git(dir, ['rev-parse', `${head}:content/notes/wheel-checks.md`])
+  const before = missing()
+  assert.ok(before.includes(`?${edition}`), 'the pinned edition of the note is not in the clone')
+  const report = checkProject(partial)
+  assert.equal(report.ok, false)
+  assert.equal(markOf(report, 'order-of-wheel-checks').edition, 'refused')
+  assert.ok(has(report.errors, WHEEL, 'not available in this clone'), report.errors.join('\n'))
+  assert.equal(markOf(report, 'spoke-tension-drawing').edition, 'intact')
+  assert.deepEqual(missing(), before, 'the check fetched nothing')
+})
+
+test('each value-taking flag takes its own adjacent value', () => {
+  const { dir } = pinnedProject()
+  const config = path.join(dir, 'atelier.project.json')
+  const run = (args) => spawnSync(process.execPath, [binary, 'graphmark', 'check', ...args], { cwd: dir, encoding: 'utf8' })
+  const split = run(['--expect', '--project', config, 'repair-workshop:mark:2026-01-12-order-of-wheel-checks'])
+  assert.equal(split.status, 2, split.stdout)
+  assert.match(split.stderr, /unknown option: --expect/)
+  assert.equal(run(['--project', config, '--expect', 'repair-workshop:mark:2026-01-12-order-of-wheel-checks']).status, 0)
+})
+
+test('the standalone validator refuses a lines range that ends before it starts', () => {
+  const record = readMarkRecord(fs.readFileSync(path.join(fixtureContent, 'marks', WHEEL), 'utf8'))
+  record.target.selector.value = '5-3'
+  const result = validateMarkRecord(record)
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((error) => error.startsWith('/target/selector/value') && error.includes('ends before it starts')), result.errors.join('\n'))
+  const { dir } = pinnedProject()
+  editMark(dir, WHEEL, (text) => text.replace('value: "16-21"', 'value: "21-16"'))
+  commitAll(dir, 'a reversed range')
+  const report = checkProject(dir)
+  assert.ok(has(report.errors, WHEEL, 'selector lines "21-16" ends before it starts'), report.errors.join('\n'))
+})
+
+test('the committed snapshot is removed after the check', () => {
+  const { dir } = pinnedProject()
+  const snapshots = () => fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('atelier-graphmark-snapshot-')).sort()
+  const before = snapshots()
+  assert.equal(checkProject(dir).ok, true)
+  assert.deepEqual(snapshots(), before)
 })

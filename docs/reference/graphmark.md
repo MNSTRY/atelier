@@ -90,8 +90,8 @@ sense.
    edges. Ids follow the repository's namespace and never change. A
    non-Markdown object is reached through its sidecar.
 9. **Verification.** The record MUST be committed. Readers receive the
-   committed record, so the committed record is what is verified, and a
-   working-tree record that differs from it is refused. The mark is reported
+   committed tree, so the committed tree is what is verified, and a
+   working-tree record that differs from the committed one is refused. The mark is reported
    only at the furthest state actually verified.
 
 ## The target
@@ -158,22 +158,27 @@ A passing check proves structure, not meaning.
 ## The check
 
 `atelier graphmark check [--json] [--expect ID]... [--project PATH]` (and the
-other [project options](project-options.md)) builds the
-knowledge graph and then, for every Markdown node tagged `graphmark` other
-than a marks index (`kg.type: index`) without a `target`:
+other [project options](project-options.md)) verifies what readers receive:
+the committed tree. It writes the raw bytes of every regular file committed
+at `HEAD`, in the project config's repository and in each managed
+repository, into a private snapshot (no checkout, so no line-ending
+conversion or checkout filter applies; symbolic links and submodules are
+recorded and not written). It resolves the committed project config and read
+boundaries there, builds the knowledge graph there, checks every mark against
+it and deletes the snapshot. Each repository keeps the location this
+invocation gives it (`--repo-path`, a local overlay, sibling discovery); its
+policy comes from the committed config. Then, for every Markdown node tagged
+`graphmark` other than a marks index (`kg.type: index`) without a `target`, it:
 
 - refuses a record that is not committed at `HEAD` (an untracked or only
-  staged record included), or whose working-tree copy differs from the
-  committed one; the record's fields are read from the committed copy;
-- refuses a mark when a file behind a node it depends on is untracked,
-  missing or differs from `HEAD`: the marked file's node, every node it
-  `evidences` and every marks index it `belongs_to`, each with its sidecar.
-  The graph is built from the working tree, so this is what keeps graph facts
-  (audiences, identities, the index) the committed ones;
+  staged record included, found through `git status`), or whose working-tree
+  copy differs from the committed one by `git status`, which allows for line
+  endings and filters; the record's fields are read from the committed copy;
 - refuses a record that does not satisfy `atelier-graphmark@v1` (a record
   tagged `graphmark` that carries a `target` is checked even when typed as an
   index), whose body has no prose saying why, whose `evidences` does not name
-  the marked file's node, or whose `belongs_to` is not a marks index;
+  the marked file's node, or whose `belongs_to` is not a marks index; the
+  standalone validator refuses the same forms, a reversed line range included;
 - refuses a node that belongs to a marks index but is not tagged `graphmark`,
   since it would never be checked, and, with `--expect ID` (repeatable), fails
   when the mark with that kg id is missing or is not a GraphMark record;
@@ -185,10 +190,8 @@ than a marks index (`kg.type: index`) without a `target`:
   holds bytes with `contentDigest` at exactly `objectId`. When it is not, the
   check names what it found as a repair hint (a warning): a name or an
   abbreviation that resolves to a commit holding the bytes, `HEAD` holding
-  them, a path from the repository entry's folder holding them, or bytes that
-  exist only in the working tree. A hint never makes a mark verified. An
-  object larger than 64 MiB, or missing from a partial clone, is reported as
-  unverifiable, not as absent;
+  them, a path from the repository entry's folder holding them, or
+  uncommitted changes to the file. A hint never makes a mark verified;
 - refuses a selector that does not name exactly one part of the edition: lines
   outside it, a quote that does not occur or occurs more than once, and a
   `lines` or `text-quote` selector on an edition that is not UTF-8 text;
@@ -196,30 +199,38 @@ than a marks index (`kg.type: index`) without a `target`:
   that recovers the marked edition,
   `git -C <repository> --no-replace-objects cat-file blob <commit>:<path>`
   (also given as an argument list in `--json`), and warns when a marked quote
-  has left the current file;
+  has left the current file. Absent, a symbolic link, larger than 64 MiB and
+  not available in this clone are distinct outcomes: only absence at `HEAD` is
+  `removed`; the other three refuse the mark, since its currency and current
+  audience cannot be checked;
 - refuses a mark whose audience is wider than any of: the audience its marked
   edition declares at the pinned commit (Markdown front matter, where
   undeclared Markdown counts as `private` as the graph treats it, or the
-  sidecar committed at that commit); the marked file's current node; or, for
-  a file that is not a graph node, the repository's read boundary and the
-  audience the file declares at `HEAD`; and any node it `evidences`. The
-  narrowest wins. An unknown audience value, a sidecar that cannot be read,
-  and an `evidences` target that is not a node in the graph are errors, since
-  the comparison would otherwise be skipped.
+  sidecar committed at that commit); the marked file's node in the committed
+  graph; or, for a file that is not a graph node, the committed repository
+  read boundary and the audience the file declares at `HEAD`; and any node it
+  `evidences`. The narrowest wins. An audience outside the six names above
+  (a name a programming language happens to know included), a sidecar that
+  cannot be read, and an `evidences` target that is not a node in the graph
+  are errors, since the comparison would otherwise be skipped;
+- warns when the working tree has uncommitted changes to a file a mark
+  depends on (the marked file and its sidecar, the files behind its
+  `evidences` nodes and its marks index) or to the project config or the
+  repository access file: the verdict is about the committed versions.
 
-A mark with any error is reported with the state `refused`, in the summary
-and in the `--json` `marks` list, whatever its bytes are.
+Every mark record the committed graph holds appears in the summary and in the
+`--json` `marks` list; one with any error has the state `refused`, whatever
+its bytes are. When the committed graph does not build, no mark can be
+verified: each record the graph could read is listed as `refused` beside the
+graph's errors. When the committed tree cannot be read at all (the project
+config is not committed, a repository is not under Git, `HEAD` names files a
+partial clone lacks), the check lists no marks and reports why.
 
-It is offline: it builds the graph from the working tree, refuses the marks
-whose record or graph dependencies differ from `HEAD`, reads editions and
-declared audiences from committed Git objects, uses the working tree
-otherwise only to give repair hints, runs Git without ambient
-`GIT_*` variables, asks Git not to fetch a partial clone's missing objects
-(`GIT_NO_LAZY_FETCH`, which Git 2.44 and later honor), never follows a
-symbolic link, ignores local replace refs, and writes nothing, local state
-included.
-The graph itself already refuses a mark whose relations name nodes that do
-not exist.
+It is offline: it never fetches a missing object (in a partial clone it asks
+`git rev-list --missing=print` what is absent before reading), runs Git
+without ambient `GIT_*` variables, ignores local replace refs, never follows
+a symbolic link, and writes nothing outside its snapshot. The graph itself
+already refuses a mark whose relations name nodes that do not exist.
 
 Not checked mechanically: that the reason is the marker's, that custody was
 settled before anything was written, that the boundary check ran on each
