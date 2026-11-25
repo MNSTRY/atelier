@@ -5,9 +5,10 @@ description: Mark a specific piece of material as worth keeping and join it to t
 
 # Graphmark
 
-Someone has singled out one thing. Keep that thing, and keep why. The full
-workflow and record shape are in `docs/guides/graphmark.md`; this skill is the
-working order.
+Someone has singled out one thing. Keep that thing, and keep why. The
+normative definition is the MNSTRY GraphMark standard,
+`docs/reference/graphmark.md`; the record contract is `atelier-graphmark@v1`;
+the how-to is `docs/guides/graphmark.md`. This skill is the working order.
 
 ## Centre the reason
 
@@ -50,9 +51,11 @@ sidecar. Follow the repository's own namespace, include scope and boundary
 policy; do not widen them yourself. Never edit a generated graph.
 
 Stage or commit the record first: the graph reads tracked files only, and a
-record in a Git-ignored path is skipped without an error. Run `atelier graph`
-and `atelier graph --check`, then find the mark's id and edges in the built
-graph. If the tool is unavailable, prepare the record and
+record in a Git-ignored path is skipped without an error. Run `atelier graph`,
+`atelier graph --check` and `atelier graphmark check`, then find the mark's id
+and edges in the built graph. The check refuses a record that breaks
+`atelier-graphmark@v1`, a missing marked file and a mark wider than what it
+marks, and reports an edition that has changed since marking. If the tool is unavailable, prepare the record and
 say plainly that the graph was not built.
 
 ## Report

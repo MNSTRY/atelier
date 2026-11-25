@@ -31,6 +31,7 @@ Core commands:
   adopt                           Add Atelier to an existing repo/workspace.
   setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
+  graphmark check [--json]        Verify GraphMark records: contract, edition and audience.
   knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
   knowledge dashboard|session     Inspect guided work and retain private drafts.
   knowledge semantic OPERATION    Record a host-run semantic extraction for review.
@@ -128,7 +129,8 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('ingest'), ['src/commands/ingest.mjs'])
   assert.deepEqual(commandMap.get('enroll'), ['src/commands/enroll.mjs'])
   assert.deepEqual(commandMap.get('knowledge'), ['src/commands/knowledge.mjs'])
-  assert.equal(commandMap.size, 72)
+  assert.deepEqual(commandMap.get('graphmark'), ['src/commands/graphmark.mjs'])
+  assert.equal(commandMap.size, 73)
   assert.deepEqual(commandMap.get('extension'), ['src/commands/extension.mjs'])
   assert.deepEqual(commandMap.get('extension:init'), ['src/commands/extension.mjs', 'init'])
   assert.deepEqual(commandMap.get('extension:bundle'), ['src/commands/extension.mjs', 'bundle'])

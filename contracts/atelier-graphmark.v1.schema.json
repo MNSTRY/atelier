@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-graphmark.v1.schema.json",
+  "$comment": "contract revision 1.0.0 (MNSTRY GraphMark standard, revision 1)",
+  "title": "atelier-graphmark@v1",
+  "description": "Front matter of one GraphMark record: a Markdown file that preserves a specific edition of something someone singled out as worth keeping, records who made it, who marked it, when and why, and joins it to the knowledge graph as evidence. The kg block is governed by the knowledge graph contract; this contract pins only what makes it a mark. A mark preserves and connects; it never adopts, publishes or releases anything.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "summary",
+    "tags",
+    "markedBy",
+    "markedOn",
+    "madeBy",
+    "markedPath",
+    "markedSha256",
+    "markState",
+    "kg"
+  ],
+  "properties": {
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "contains": {
+        "const": "graphmark"
+      }
+    },
+    "markedBy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Who singled the thing out."
+    },
+    "markedOn": {
+      "type": "string",
+      "format": "date",
+      "description": "The day it was marked."
+    },
+    "madeBy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Who made the marked thing, including the work it builds on."
+    },
+    "markedPath": {
+      "type": "string",
+      "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(^|[/\\\\])\\.\\.([/\\\\]|$)).+$",
+      "description": "Path of the marked file at the moment of marking, relative to the Git repository root (or to the Atelier repository entry's folder)."
+    },
+    "markedSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the marked file's bytes at the moment of marking: the preserved edition."
+    },
+    "markState": {
+      "enum": [
+        "marked",
+        "preserved",
+        "recorded",
+        "graph-checked",
+        "shared",
+        "accepted"
+      ],
+      "description": "The furthest state verified."
+    },
+    "kg": {
+      "type": "object",
+      "description": "Knowledge graph block (atelier-graph@v0.1). Open: other kg keys are governed by the knowledge graph contract.",
+      "required": [
+        "id",
+        "type",
+        "audience",
+        "relations"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "evidence"
+        },
+        "audience": {
+          "enum": [
+            "public",
+            "team",
+            "operator",
+            "staff",
+            "private",
+            "sensitive"
+          ]
+        },
+        "relations": {
+          "type": "object",
+          "required": [
+            "evidences",
+            "belongs_to"
+          ],
+          "properties": {
+            "evidences": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "belongs_to": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "ext": {
+      "type": "object"
+    }
+  }
+}

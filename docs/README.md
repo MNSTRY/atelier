@@ -51,6 +51,7 @@ The [responsibility architecture](reference/architecture.md) and versioned contr
 - [Pack compatibility for evidence-bound review](reference/extension-pack-lifecycle.md)
 - [Immutable intake and guide integration](reference/intake-and-guides.md)
 - [Interaction and Reflection](reference/interaction-and-reflection.md)
+- [The MNSTRY GraphMark standard](reference/graphmark.md)
 - [MNSTRY Atelier Knowledge Graph](reference/knowledge-graph.md)
 - [Managed local services](reference/local-services.md)
 - [Durable local state](reference/local-state.md)

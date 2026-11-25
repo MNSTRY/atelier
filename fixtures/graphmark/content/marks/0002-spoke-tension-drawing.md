@@ -5,8 +5,8 @@ tags: [graphmark]
 markedBy: "A volunteer lead (invented)"
 markedOn: "2026-01-12"
 madeBy: "A volunteer (invented)"
-markedPath: "drawings/spoke-tension.svg"
-markedSha256: "590435d2a23ec5c20380b43c3a169f27ec12b259d388fd244fb3097b27c85a27"
+markedPath: "drawings/spoke-tension.html"
+markedSha256: "e77fe4071772c006b87937530767b5e4c7c1ab66c780299a39f77e9c479e168b"
 markState: "graph-checked"
 kg:
   id: "repair-workshop:mark:0002-spoke-tension-drawing"
@@ -23,7 +23,7 @@ kg:
 ---
 # Mark 0002: the spoke tension drawing
 
-**What was marked.** The drawing `drawings/spoke-tension.svg`. It is not
+**What was marked.** The drawing `drawings/spoke-tension.html`. It is not
 Markdown, so its sidecar gives it an identity in the graph; this mark points
 at that identity.
 

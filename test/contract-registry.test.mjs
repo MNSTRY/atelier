@@ -15,6 +15,12 @@ const INVALID_EXPECTATIONS = new Map([
   ...['campaign', 'hypothesis', 'request', 'source', 'bundle', 'assessment', 'decision', 'withdrawal', 'feedback', 'legacy-assessment', 'ledger', 'handoff'].map(shape => [`atelier-inquiry-${shape}`, new Map([['document.json', /must NOT have additional properties/]])]),
   ['atelier-boundary-delegations', new Map([['push-operation.v1.json', /operations.*must be equal to one of the allowed values/], ['unsigned.v1.json', /signature.*must be object/], ['authority-key.v1.json', /must NOT have additional properties/]])],
   ['atelier-boundary-owner-keys', new Map([['wrong-curve.v1.json', /crv.*must be equal to constant/], ['wrong-algorithm.v1.json', /algorithm.*must be equal to constant/]])],
+  ['atelier-graphmark', new Map([
+    ['not-evidence.v1.json', /\/kg\/type must be equal to constant/],
+    ['bad-digest.v1.json', /\/markedSha256 must match pattern/],
+    ['missing-graphmark-tag.v1.json', /\/tags must contain at least 1 valid item/],
+    ['unknown-top-level-field.v1.json', /must NOT have additional properties/],
+  ])],
   ['atelier-ingestion', new Map([['authority.json', /must NOT have additional properties/]])],
   ['atelier-learning', new Map([['authority.json', /must NOT have additional properties/]])],
   ['atelier-vault-publication', new Map([['publication.json', /expectedRevision.*must be >= 0/]])],

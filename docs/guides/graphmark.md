@@ -12,10 +12,13 @@ The reason for the mark is the centre of the record. A table marked for the
 way its parts depend on each other is recorded for that dependence, not
 summarised along with the project it came from.
 
-Graphmark needs nothing beyond the existing [knowledge graph](../reference/knowledge-graph.md)
-contract. A mark is a Markdown source with a `kg` block whose relations point
-at the marked node. It adds no schema, store, command or runtime authority.
-The bundled `atelier-graphmark` skill carries the workflow for agents.
+This guide is the how-to. The normative definition is [the MNSTRY GraphMark
+standard](../reference/graphmark.md): its requirements, the
+`atelier-graphmark@v1` record contract and `atelier graphmark check`. A mark is
+a Markdown source on the existing [knowledge graph](../reference/knowledge-graph.md)
+contract, with a `kg` block whose relations point at the marked node. It adds
+no store and no runtime authority. The bundled `atelier-graphmark` skill
+carries the workflow for agents.
 
 ## What a mark is not
 
@@ -58,9 +61,9 @@ The bundled `atelier-graphmark` skill carries the workflow for agents.
    `supports`, `contradicts` or `related` only for relationships the evidence
    shows. An open interpretation stays in the record's text, labelled as a
    candidate, and does not become an edge. Never edit a generated graph.
-8. **Build, check and read back.** Run `atelier graph` and
-   `atelier graph --check`, then find the mark's id and edges in the built
-   graph. Report what was marked and why, where the record lives, its audience,
+8. **Build, check and read back.** Run `atelier graph`,
+   `atelier graph --check` and `atelier graphmark check`, then find the mark's
+   id and edges in the built graph. Report what was marked and why, where the record lives, its audience,
    and the furthest state actually reached.
 
 ## The record
@@ -98,8 +101,8 @@ the mark does not do, and any open interpretation labelled as a candidate.
 
 The graph reads `title`, `summary`, `tags` and the `kg` block. The other front
 matter fields (`markedBy`, `markedOn`, `madeBy`, `markedPath`, `markedSha256`,
-`markState`) are for people and tools that read the record; the graph does not
-interpret them. Git authorship remains the primary attribution signal, as the
+`markState`) are pinned by the `atelier-graphmark@v1` contract and verified by
+`atelier graphmark check`; the graph does not interpret them. Git authorship remains the primary attribution signal, as the
 knowledge graph's collaboration rules state.
 
 ## States
@@ -111,7 +114,7 @@ A mark moves through separate states. Report the furthest one you verified.
 | `marked` | Someone has said "graphmark this" about a specific thing |
 | `preserved` | The edition's path and digest are recorded and the original is unchanged |
 | `recorded` | The mark record is written in the owner's repository |
-| `graph-checked` | `atelier graph --check` passes and the mark's id and edges are in the built graph |
+| `graph-checked` | `atelier graph --check` and `atelier graphmark check` pass, and the mark's id and edges are in the built graph |
 | `shared` | The record is in a repository its intended readers can read |
 | `accepted` | The material's owner has accepted the reading the mark records |
 
@@ -127,9 +130,13 @@ one drawing and two marks. From a copy of that folder:
 ```sh
 atelier graph --project ./atelier.project.json
 atelier graph --check --project ./atelier.project.json
+atelier graphmark check --project ./atelier.project.json
 ```
 
-The graph builds with five nodes, five edges and no diagnostics. Point a mark's
+The graph builds with five nodes, five edges and no diagnostics, and the check
+reports two marks with both editions intact. Change a line in the note and the
+check reports mark 0001's edition as changed; widen mark 0001's audience to
+`public` and the check refuses it. Point a mark's
 `evidences` at an id that does not exist and the build is refused (`declared
 evidences target ... was not found`). Delete the drawing and the build is
 refused twice: the sidecar becomes an orphan and mark 0002 no longer resolves.
@@ -141,17 +148,16 @@ refused twice: the sidecar becomes an orphan and mark 0002 no longer resolves.
   skipped by the census without an error, so a mark can seem written and still
   be absent. Commit or stage the record, rebuild, and confirm its id is in the
   built graph.
-- The graph does not compare a mark's audience with the marked material's
-  audience. Step 5 is the agent's and reviewer's responsibility.
-- The graph does not verify `markedSha256`. A repository that wants that check
-  can run its own, as the fixture test does.
+- `atelier graphmark check` compares audiences only with nodes the graph
+  knows: the marked file's node and the nodes the mark `evidences`. Consent and
+  custody (step 5) remain the agent's and reviewer's responsibility.
+- A changed edition is a warning, not an error: the mark still names the bytes
+  that were marked, which stay in history.
 - A mark is local, Git-backed source material. It grants no export, runtime
   visibility or publication. Export audience rules apply unchanged.
 
 ## Origin
 
-Graphmark was introduced by Tiyana Ti of Brand Temple on 8 November 2026, as a
-way to mark material from any conversation into a knowledge graph with its
-reason and provenance. It is built on the Atelier knowledge graph, its source
-rules and its ontology and phronesis foundations, developed by Erik Desrosiers
-for MNSTRY.
+See [the standard's origin](../reference/graphmark.md#origin): the MNSTRY
+GraphMark standard was created in collaboration with Brand Temple; Tiyana Ti
+of Brand Temple introduced graphmark on 8 November 2026.
