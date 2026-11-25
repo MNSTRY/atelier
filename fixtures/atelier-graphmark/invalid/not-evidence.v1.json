@@ -1,5 +1,5 @@
 {
-  "title": "Mark 0001: the order of wheel checks",
+  "title": "Mark: the order of wheel checks",
   "summary": "Marked for the order of the checks and the reason each one comes where it does, not as a summary of the note.",
   "tags": [
     "graphmark"
@@ -7,11 +7,20 @@
   "markedBy": "A volunteer lead (invented)",
   "markedOn": "2026-01-12",
   "madeBy": "The workshop's volunteers (invented)",
-  "markedPath": "notes/wheel-checks.md",
-  "markedSha256": "832bff3fb9182f2ce85b2b09592b770b5bfb62721771a263ceb0972806cfa3b6",
+  "target": {
+    "owner": "content",
+    "objectId": "notes/wheel-checks.md",
+    "revision": "example",
+    "selector": {
+      "type": "lines",
+      "version": "1",
+      "value": "16-21"
+    },
+    "contentDigest": "sha256:832bff3fb9182f2ce85b2b09592b770b5bfb62721771a263ceb0972806cfa3b6"
+  },
   "markState": "graph-checked",
   "kg": {
-    "id": "repair-workshop:mark:0001-the-order-of-wheel-checks",
+    "id": "repair-workshop:mark:2026-01-12-order-of-wheel-checks",
     "type": "document",
     "status": "active",
     "audience": "team",

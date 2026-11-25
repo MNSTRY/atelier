@@ -3,7 +3,7 @@
   "$id": "https://mnstry.ai/schemas/atelier/atelier-graphmark.v1.schema.json",
   "$comment": "contract revision 1.0.0 (MNSTRY GraphMark standard, revision 1)",
   "title": "atelier-graphmark@v1",
-  "description": "Front matter of one GraphMark record: a Markdown file that preserves a specific edition of something someone singled out as worth keeping, records who made it, who marked it, when and why, and joins it to the knowledge graph as evidence. The kg block is governed by the knowledge graph contract; this contract pins only what makes it a mark. A mark preserves and connects; it never adopts, publishes or releases anything.",
+  "description": "Front matter of one GraphMark record: a Markdown file that points at a specific part of a specific, recoverable edition of something someone singled out as worth keeping, records who made it, who marked it, when and why, and joins it to the knowledge graph as evidence. The target is an evidence-navigation exact source reference (evidenceRef). The kg block is governed by the knowledge graph contract; this contract pins only what makes it a mark. A mark preserves and connects; it never adopts, publishes or releases anything.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,8 +13,7 @@
     "markedBy",
     "markedOn",
     "madeBy",
-    "markedPath",
-    "markedSha256",
+    "target",
     "markState",
     "kg"
   ],
@@ -29,7 +28,8 @@
     },
     "summary": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Why it was marked, in one or two sentences: the reason is the centre of the record."
     },
     "tags": {
       "type": "array",
@@ -55,17 +55,17 @@
     "madeBy": {
       "type": "string",
       "minLength": 1,
-      "description": "Who made the marked thing, including the work it builds on."
+      "description": "Who made the marked thing, and the work it builds on."
     },
-    "markedPath": {
-      "type": "string",
-      "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(^|[/\\\\])\\.\\.([/\\\\]|$)).+$",
-      "description": "Path of the marked file at the moment of marking, relative to the Git repository root (or to the Atelier repository entry's folder)."
+    "target": {
+      "$ref": "#/$defs/evidenceRef",
+      "description": "What was marked, as an exact source reference: owner is the Atelier repository name, objectId the path from the Git repository root, revision the commit that holds the edition, selector the marked part, contentDigest the SHA-256 of the whole object at that revision."
     },
-    "markedSha256": {
+    "capturedFrom": {
       "type": "string",
-      "pattern": "^[0-9a-f]{64}$",
-      "description": "SHA-256 of the marked file's bytes at the moment of marking: the preserved edition."
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "Where captured material came from (a conversation, a call, a file outside any repository) before it was committed as the target."
     },
     "markState": {
       "enum": [
@@ -134,6 +134,77 @@
     },
     "ext": {
       "type": "object"
+    }
+  },
+  "$defs": {
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "value"
+      ]
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "objectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "owner",
+        "objectId",
+        "revision",
+        "selector",
+        "contentDigest"
+      ]
     }
   }
 }

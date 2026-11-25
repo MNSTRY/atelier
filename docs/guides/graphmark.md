@@ -32,8 +32,12 @@ carries the workflow for agents.
 ## The steps
 
 1. **Find exactly what was marked.** Resolve the selection, passage, file or
-   reference, and read it through its own tool. If the target is unclear,
-   recover what is available and ask only for the missing piece.
+   reference, and read it through its own tool. Note the part that was meant:
+   a few lines, an exact sentence, or the whole object. If the target is
+   unclear, recover what is available and ask only for the missing piece.
+   If the material is not yet in the owning repository (a passage from a
+   conversation, a call, a file elsewhere), capture it there first as a
+   source file, commit it, and note where it came from for `capturedFrom`.
 2. **Say why it was marked.** Write the marker's reason plainly, in their
    meaning. If it was not given and cannot be recovered, ask one question.
 3. **Establish provenance.** Who made it, who marked it, when, which source
@@ -49,9 +53,12 @@ carries the workflow for agents.
    wider than the marked material's. Titles, paths and relations can reveal as
    much as content does. When unsure, keep the mark private and name the
    decision that is needed.
-6. **Preserve the edition.** Record the marked file's repository path and the
-   SHA-256 of its bytes at the moment of marking. Leave the original
-   unchanged. If it changes later, the mark still names what was marked.
+6. **Preserve the edition.** Make sure the marked material is committed, then
+   record the target: the repository, the object's path from the repository
+   root, the commit that holds it, the selector for the marked part, and the
+   SHA-256 of the whole object's bytes at that commit. Leave the original
+   unchanged. If it changes later, the mark still names what was marked, and
+   Git can return it.
 7. **Write the record and join it to the graph.** Use the record shape below.
    A non-Markdown object is reached through its `<file>.kg.json` sidecar. If
    it has none, its owner adds one; for `.html`, `.pdf` and `.docx` files,
@@ -68,23 +75,31 @@ carries the workflow for agents.
 
 ## The record
 
-One Markdown file per mark in the repository's marks folder, numbered in
-order, beside an index file. Ids never change.
+One Markdown file per mark in the repository's marks folder, beside an index
+file, named by the day it was marked and a short name so that two people
+marking at once never collide. Ids never change.
 
 ```
-marks/0001-the-order-of-wheel-checks.md
+marks/2026-01-12-order-of-wheel-checks.md
 ---
-title: "Mark 0001: the order of wheel checks"
+title: "Mark: the order of wheel checks"
 summary: "Marked for the order of the checks and the reason each one comes where it does."
 tags: [graphmark]
 markedBy: "A volunteer lead"
 markedOn: "2026-01-12"
 madeBy: "The workshop's volunteers"
-markedPath: "notes/wheel-checks.md"
-markedSha256: "832bff3f…"
+target:
+  owner: "content"
+  objectId: "notes/wheel-checks.md"
+  revision: "<the commit that holds the edition>"
+  selector:
+    type: "lines"
+    version: "1"
+    value: "16-21"
+  contentDigest: "sha256:832bff3f…"
 markState: "graph-checked"
 kg:
-  id: "repair-workshop:mark:0001-the-order-of-wheel-checks"
+  id: "repair-workshop:mark:2026-01-12-order-of-wheel-checks"
   type: "evidence"
   status: "active"
   audience: "team"
@@ -96,11 +111,15 @@ kg:
 ---
 ```
 
+`target` is the shared exact source reference from evidence navigation. The
+selector is `whole` (value `*`), `lines` (`N` or `N-M`) or `text-quote` (the
+exact sentence). Captured material adds `capturedFrom`.
+
 The body says, in plain sentences: what was marked, why, its provenance, what
 the mark does not do, and any open interpretation labelled as a candidate.
 
 The graph reads `title`, `summary`, `tags` and the `kg` block. The other front
-matter fields (`markedBy`, `markedOn`, `madeBy`, `markedPath`, `markedSha256`,
+matter fields (`markedBy`, `markedOn`, `madeBy`, `target`, `capturedFrom`,
 `markState`) are pinned by the `atelier-graphmark@v1` contract and verified by
 `atelier graphmark check`; the graph does not interpret them. Git authorship remains the primary attribution signal, as the
 knowledge graph's collaboration rules state.
@@ -112,7 +131,7 @@ A mark moves through separate states. Report the furthest one you verified.
 | State | What has happened |
 | --- | --- |
 | `marked` | Someone has said "graphmark this" about a specific thing |
-| `preserved` | The edition's path and digest are recorded and the original is unchanged |
+| `preserved` | The material is committed, and the target names its revision, part and digest |
 | `recorded` | The mark record is written in the owner's repository |
 | `graph-checked` | `atelier graph --check` and `atelier graphmark check` pass, and the mark's id and edges are in the built graph |
 | `shared` | The record is in a repository its intended readers can read |
@@ -125,7 +144,9 @@ adopted.
 ## Try it
 
 `fixtures/graphmark/` is an invented community repair workshop with one note,
-one drawing and two marks. From a copy of that folder:
+one drawing, one captured phone call and three marks: a table by its lines,
+the whole drawing, and one sentence of the call by quote. Copy the folder,
+commit it (`git init`, `git add -A`, `git commit`), then:
 
 ```sh
 atelier graph --project ./atelier.project.json
@@ -133,13 +154,16 @@ atelier graph --check --project ./atelier.project.json
 atelier graphmark check --project ./atelier.project.json
 ```
 
-The graph builds with five nodes, five edges and no diagnostics, and the check
-reports two marks with both editions intact. Change a line in the note and the
-check reports mark 0001's edition as changed; widen mark 0001's audience to
-`public` and the check refuses it. Point a mark's
-`evidences` at an id that does not exist and the build is refused (`declared
-evidences target ... was not found`). Delete the drawing and the build is
-refused twice: the sidecar becomes an orphan and mark 0002 no longer resolves.
+The graph builds with no diagnostics, and the check reports three marks, all
+intact. Their `revision` is the placeholder `example`, so the check also says
+each edition is held at `HEAD`; set each `revision` to your commit and the
+warnings go. Commit a change to the note and the check reports the wheel
+checks mark as changed, with the command that returns the marked edition.
+Widen that mark's audience to `public` and the check refuses it. Point a
+mark's `evidences` at an id that does not exist and the build is refused
+(`declared evidences target ... was not found`). Delete the drawing and the
+build is refused twice: the sidecar becomes an orphan and the drawing's mark no
+longer resolves.
 `test/graphmark.test.mjs` pins these behaviours.
 
 ## Limits
@@ -152,7 +176,11 @@ refused twice: the sidecar becomes an orphan and mark 0002 no longer resolves.
   knows: the marked file's node and the nodes the mark `evidences`. Consent and
   custody (step 5) remain the agent's and reviewer's responsibility.
 - A changed edition is a warning, not an error: the mark still names the bytes
-  that were marked, which stay in history.
+  that were marked, and Git returns them. An edition no commit holds is an
+  error.
+- A history rewrite that drops the marked commit (a squash or a force push)
+  leaves the edition recoverable only if a later commit still holds the same
+  bytes. Mark committed material on a branch that is kept.
 - A mark is local, Git-backed source material. It grants no export, runtime
   visibility or publication. Export audience rules apply unchanged.
 

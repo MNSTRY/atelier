@@ -17,7 +17,8 @@ const INVALID_EXPECTATIONS = new Map([
   ['atelier-boundary-owner-keys', new Map([['wrong-curve.v1.json', /crv.*must be equal to constant/], ['wrong-algorithm.v1.json', /algorithm.*must be equal to constant/]])],
   ['atelier-graphmark', new Map([
     ['not-evidence.v1.json', /\/kg\/type must be equal to constant/],
-    ['bad-digest.v1.json', /\/markedSha256 must match pattern/],
+    ['bad-digest.v1.json', /\/target\/contentDigest must match pattern/],
+    ['missing-selector.v1.json', /\/target must have required property 'selector'/],
     ['missing-graphmark-tag.v1.json', /\/tags must contain at least 1 valid item/],
     ['unknown-top-level-field.v1.json', /must NOT have additional properties/],
   ])],
