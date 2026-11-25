@@ -9,7 +9,8 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
 import { REPO_ACCESS_SCHEMA, buildKnowledgeGraph } from '../src/graph/knowledge-graph.mjs'
-import { SNAPSHOT_OWNER_FILE, SNAPSHOT_PREFIX, checkGraphmarks, isPromisorRepository, readMarkRecord, reclaimAbandonedSnapshots, validateMarkRecord, withPrivateSnapshot } from '../src/graphmark/graphmark.mjs'
+import { buildCommittedGraph, checkGraphmarks, committedReader, isPromisorRepository, readMarkRecord, validateMarkRecord, withCommittedReader } from '../src/graphmark/graphmark.mjs'
+import { buildGraph } from '../src/graph/graph.mjs'
 import { commandProject } from '../src/project/config.mjs'
 
 // The MNSTRY GraphMark standard (docs/reference/graphmark.md). A mark is a
@@ -1013,14 +1014,6 @@ test('the standalone validator refuses a lines range that ends before it starts'
   assert.ok(has(report.errors, WHEEL, 'selector lines "21-16" ends before it starts'), report.errors.join('\n'))
 })
 
-test('the committed snapshot is removed after the check', () => {
-  const { dir } = pinnedProject()
-  const snapshots = () => fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('atelier-graphmark-snapshot-')).sort()
-  const before = snapshots()
-  assert.equal(checkProject(dir).ok, true)
-  assert.deepEqual(snapshots(), before)
-})
-
 // Findings from the re-check of 5c3162a.
 
 const moduleUrl = new URL('../src/graphmark/graphmark.mjs', import.meta.url).href
@@ -1135,58 +1128,6 @@ test('the committed config is read from HEAD: a sparse checkout or an unfinished
   assert.ok(has(unfinished.warnings, 'atelier.project.json: has uncommitted changes'), unfinished.warnings.join('\n'))
 })
 
-test('the snapshot is removed when its work throws', () => {
-  let seen = null
-  assert.throws(() => withPrivateSnapshot((base) => {
-    seen = base
-    fs.writeFileSync(path.join(base, 'partial'), 'x')
-    throw new Error('construction failed')
-  }), /construction failed/)
-  assert.equal(fs.existsSync(seen), false)
-})
-
-test('the snapshot is removed when the process is signalled, and the signal still ends it', { skip: process.platform === 'win32' && 'Windows has no catchable SIGTERM; abandoned snapshots are reclaimed instead' }, async () => {
-  const child = spawn(process.execPath, ['--input-type=module', '-e', `import { withPrivateSnapshot } from ${JSON.stringify(moduleUrl)}
-withPrivateSnapshot((base) => { console.log(base); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000) })`], { stdio: ['ignore', 'pipe', 'inherit'] })
-  const base = await new Promise((resolve) => child.stdout.once('data', (data) => resolve(data.toString().trim())))
-  assert.equal(fs.existsSync(base), true)
-  child.kill('SIGTERM')
-  const [, signal] = await once(child, 'exit')
-  assert.equal(signal, 'SIGTERM')
-  assert.equal(fs.existsSync(base), false, 'the snapshot was removed before the signal ended the process')
-})
-
-test('abandoned snapshots are reclaimed only when their owner file names a process that is gone', () => {
-  const dead = spawnSync(process.execPath, ['-e', '']).pid
-  const sleeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'])
-  const owner = (pid) => `${JSON.stringify({ pid, nonce: 'f'.repeat(32), created: '2026-01-01T00:00:00.000Z' })}\n`
-  try {
-    // With user ids (POSIX) and without them (as on Windows).
-    for (const uid of [typeof process.getuid === 'function' ? process.getuid() : null, null]) {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-reclaim-'))
-      const make = (name, contents) => {
-        fs.mkdirSync(path.join(tmp, name))
-        if (contents !== undefined) fs.writeFileSync(path.join(tmp, name, SNAPSHOT_OWNER_FILE), contents)
-      }
-      make(`${SNAPSHOT_PREFIX}${dead}-AbC123`, owner(dead))
-      make(`${SNAPSHOT_PREFIX}${sleeper.pid}-AbC123`, owner(sleeper.pid))
-      make(`${SNAPSHOT_PREFIX}${dead}-NoOwnr`)
-      make(`${SNAPSHOT_PREFIX}${dead}-Mismch`, owner(sleeper.pid))
-      make(`other-${dead}-AbC123`, owner(dead))
-      reclaimAbandonedSnapshots(tmp, { uid })
-      assert.deepEqual(fs.readdirSync(tmp).sort(), [`${SNAPSHOT_PREFIX}${dead}-Mismch`, `${SNAPSHOT_PREFIX}${dead}-NoOwnr`, `${SNAPSHOT_PREFIX}${sleeper.pid}-AbC123`, `other-${dead}-AbC123`].sort(), `uid ${uid}`)
-    }
-  } finally {
-    sleeper.kill()
-  }
-  // A real snapshot carries its owner file.
-  withPrivateSnapshot((base) => {
-    const recorded = JSON.parse(fs.readFileSync(path.join(base, SNAPSHOT_OWNER_FILE), 'utf8'))
-    assert.equal(recorded.pid, process.pid)
-    assert.match(recorded.nonce, /^[0-9a-f]{32}$/)
-  })
-})
-
 test('promisor settings are read with Git\'s boolean parser', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-promisor-'))
   git(dir, ['init', '-q'])
@@ -1221,13 +1162,13 @@ test('a promisor remote spelled with another true value still keeps the check fr
   assert.deepEqual(missing(), before, 'the check fetched nothing')
 })
 
-test('paths a checkout could not hold faithfully are refused before anything is written', () => {
+test('a committed name that is not valid UTF-8 is refused, since no exact name can be read', () => {
   // Bytes no checkout can hold as given are refused on every volume.
   const { dir } = pinnedProject()
   commitObjects(dir, [{ path: Buffer.concat([Buffer.from('content/notes/caf'), Buffer.from([0xe9]), Buffer.from('.txt')]), content: 'latin-1 name\n' }], 'a name that is not UTF-8')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(has(report.errors, 'cannot be written faithfully', 'a path that is not valid UTF-8'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'cannot be read exactly', 'a path that is not valid UTF-8'), report.errors.join('\n'))
 })
 
 test('a marked file that became a directory or a submodule at HEAD is refused, not removed', () => {
@@ -1255,7 +1196,7 @@ test('a marked file that became a directory or a submodule at HEAD is refused, n
   }
 })
 
-test('the snapshot streams large files with bounded memory', () => {
+test('the committed graph reads Git objects on demand, with bounded memory', () => {
   const { dir } = pinnedProject()
   const size = 160 * 1024 * 1024
   fs.writeFileSync(path.join(dir, 'content', 'notes', 'big.bin'), Buffer.alloc(size))
@@ -1270,7 +1211,7 @@ console.log(JSON.stringify({ ok: report.ok, errors: report.errors, rss: process.
   assert.ok(result.rss < size, `peak memory ${result.rss} bytes is below the ${size}-byte file`)
 })
 
-test('the committed graph build does not look for repositories past its snapshot', () => {
+test('the committed graph does not depend on where the temporary folder is', () => {
   const { dir } = pinnedProject()
   const enclosing = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-enclosing-'))
   git(enclosing, ['init', '-q'])
@@ -1410,20 +1351,6 @@ test('a tagged index the check cannot read is inspected and refused, not skipped
   assert.ok(has(report.errors, 'content/marks/README.md: the committed mark record holds', 'more than this check reads'), report.errors.join('\n'))
 })
 
-test('the snapshot is complete even when the filesystem takes short writes', () => {
-  const { dir } = pinnedProject()
-  const original = fs.writeSync
-  fs.writeSync = (fd, buffer, offset, length, position) => original(fd, buffer, offset, Math.min(length ?? buffer.length, 7), position)
-  let report
-  try {
-    report = checkProject(dir)
-  } finally {
-    fs.writeSync = original
-  }
-  assert.equal(report.ok, true, report.errors.join('\n'))
-  assert.deepEqual(report.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
-})
-
 test('external repositories are never probed while the committed project is resolved', { skip: process.platform === 'win32' && 'uses a POSIX shell wrapper to trace Git' }, () => {
   const { dir } = pinnedProject()
   editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.repos.push({ name: 'vendor', kind: 'external', remote: 'https://example.invalid/vendor.git' }) })
@@ -1445,109 +1372,128 @@ test('external repositories are never probed while the committed project is reso
 // Findings from the confirmation reviews of 69613bd and cc43715: whether two
 // names are one file is asked of the volume, never modelled.
 
-// Emulate a volume that folds names, as NTFS does by upper-casing (so ς, σ
-// and Σ are one letter) and as normalising volumes do: every call on a path
-// inside a GraphMark snapshot resolves each component to the stored entry
-// with the same folded name. The check itself folds nothing; it asks this.
-function onFoldingVolume(run, fold = (name) => name.normalize('NFC').toUpperCase()) {
-  const methods = ['existsSync', 'statSync', 'lstatSync', 'readFileSync', 'openSync', 'mkdirSync', 'readdirSync', 'writeFileSync', 'accessSync', 'realpathSync']
-  const real = Object.fromEntries(methods.map((method) => [method, fs[method]]))
-  const resolve = (target) => {
-    if (typeof target !== 'string' || !target.includes(SNAPSHOT_PREFIX)) return target
-    // Fold only inside the snapshot: its own folder is named exactly.
-    const parts = path.resolve(target).split(path.sep)
-    const at = parts.findIndex((part) => part.startsWith(SNAPSHOT_PREFIX))
-    let current = parts.slice(0, at + 1).join(path.sep) || path.sep
-    for (const part of parts.slice(at + 1)) {
-      let names = null
-      try {
-        names = real.readdirSync(current)
-      } catch {
-        names = null
-      }
-      const stored = names?.includes(part) ? part : names?.find((name) => fold(name) === fold(part))
-      current = path.join(current, stored ?? part)
-    }
-    return current
-  }
-  for (const method of methods) {
-    const original = real[method]
-    const folded = function (target, ...rest) {
-      return original.call(this, resolve(target), ...rest)
-    }
-    if (method === 'realpathSync') folded.native = (target, ...rest) => original.native(resolve(target), ...rest)
-    fs[method] = folded
-  }
-  try {
-    return run()
-  } finally {
-    Object.assign(fs, real)
-  }
-}
-
-test('two committed names one volume holds as one file are refused, Greek sigma included', () => {
-  for (const [label, names] of [
-    ['case', ['content/notes/Parts.txt', 'content/notes/parts.txt']],
-    ['normalisation', ['content/notes/caf\u00e9.txt', 'content/notes/cafe\u0301.txt']],
-    ['Greek sigma, which lower-casing tells apart', ['content/notes/\u039f\u03a3-1.txt', 'content/notes/\u03bf\u03c3-1.txt']],
-  ]) {
-    const { dir } = pinnedProject()
-    commitObjects(dir, names.map((name) => ({ path: name, content: `# ${label}\n` })), label)
-    assert.equal(checkProject(dir).ok, true, `${label}: a volume that keeps them apart holds both`)
-    const folded = onFoldingVolume(() => checkProject(dir))
-    assert.equal(folded.ok, false, label)
-    assert.ok(has(folded.errors, names[0], names[1], 'are one file on this filesystem'), `${label}: ${folded.errors.join('\n')}`)
-  }
-})
-
-test('a name the graph derives is refused when the volume opens another committed file for it', () => {
-  const cases = [
-    ['a sidecar spelled otherwise', [{ path: 'content/drawings/plan.svg', content: '<svg xmlns="http://www.w3.org/2000/svg"/>\n' }, { path: 'content/drawings/PLAN.svg.kg.json', content: sidecarFor('plan.svg', 'repair-workshop:drawings:plan', 'public') }]],
-    ['a .KG.JSON file whose own sidecar name aliases a committed one', [{ path: 'content/drawings/sample.KG.JSON', content: '{}\n' }, { path: 'content/drawings/sample.kg.json.kg.json', content: sidecarFor('sample.kg.json', 'repair-workshop:drawings:sample', 'public') }]],
-    ['a Greek-sigma spelling of a sidecar', [{ path: 'content/drawings/\u03bf\u03c3.svg', content: '<svg xmlns="http://www.w3.org/2000/svg"/>\n' }, { path: 'content/drawings/\u039f\u03a3.svg.kg.json', content: sidecarFor('\u039f\u03a3.svg', 'repair-workshop:drawings:os', 'public') }]],
-  ]
-  for (const [label, entries] of cases) {
-    const { dir } = pinnedProject()
-    commitObjects(dir, entries, label)
-    const report = onFoldingVolume(() => checkProject(dir))
-    assert.equal(report.ok, false, label)
-    assert.ok(has(report.errors, 'the knowledge graph opened', 'this filesystem gave it'), `${label}: ${report.errors.join('\n')}`)
-  }
-})
-
-test('an absent policy is refused when the volume would read another committed file as it, and only then', () => {
-  const wide = `${JSON.stringify({ schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'public', repos: { content: { readBoundary: 'public' } } })}\n`
-  // Inside a managed folder, under a Greek-sigma spelling.
-  const { dir } = pinnedProject()
-  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'content/policy/\u039f\u03a3.json' })
-  commitAll(dir, 'a policy name nothing holds exactly')
-  commitObjects(dir, [{ path: 'content/policy/\u03bf\u03c3.json', content: wide }], 'another spelling of it')
-  assert.equal(checkProject(dir).ok, true, 'a volume that keeps them apart reads no policy, so the defaults apply')
-  const folded = onFoldingVolume(() => checkProject(dir))
-  assert.equal(folded.ok, false)
-  assert.ok(has(folded.errors, 'content/policy/\u03bf\u03c3.json would be read as the absent repository access file content/policy/\u039f\u03a3.json'), folded.errors.join('\n'))
-
-  // Outside every managed folder, at the repository root.
-  const { dir: rooted } = pinnedProject()
-  git(rooted, ['rm', '-q', 'repo-access.v1.json'])
-  git(rooted, ['commit', '-qm', 'the policy file is gone'])
-  commitObjects(rooted, [{ path: 'REPO-ACCESS.V1.JSON', content: wide }], 'a policy under another spelling at the root')
-  const root = onFoldingVolume(() => checkProject(rooted))
-  assert.equal(root.ok, false)
-  assert.ok(has(root.errors, 'REPO-ACCESS.V1.JSON would be read as the absent repository access file repo-access.v1.json'), root.errors.join('\n'))
-
-  // A folder that resolves to another spelling, with no file under it, is just absent.
-  const { dir: leaf } = pinnedProject()
-  editJson(path.join(leaf, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'CONTENT/absent-folder/repo-access.json' })
-  commitAll(leaf, 'a policy whose folder exists under another spelling but whose file does not')
-  const absent = onFoldingVolume(() => checkProject(leaf))
-  assert.equal(absent.ok, true, absent.errors.join('\n'))
-})
-
 test('a pending Markdown file whose name is not UTF-8 makes the result indeterminate', { skip: process.platform !== 'linux' && 'needs a filesystem that accepts names that are not UTF-8' }, () => {
   const { dir } = pinnedProject()
   fs.writeFileSync(Buffer.concat([Buffer.from(path.join(dir, 'content', 'notes', 'draft-')), Buffer.from([0xff]), Buffer.from('.md')]), '---\ntitle: "Draft"\ntags: [graphmark]\n---\n# Draft\n')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
   assert.ok(has(report.errors, 'a pending Markdown file whose name is not UTF-8', 'indeterminate'), report.errors.join('\n'))
+})
+
+// The check verifies from Git objects alone (the confirmation review of
+// 48912c0): no copy of the tree on any filesystem, so name folding, links,
+// host path rules and timing on a volume cannot change what it reads.
+
+function recordFs(run) {
+  const reads = ['readFileSync', 'openSync', 'readdirSync', 'createReadStream', 'opendirSync']
+  const writes = ['writeFileSync', 'appendFileSync', 'mkdirSync', 'mkdtempSync', 'rmSync', 'rmdirSync', 'unlinkSync', 'renameSync', 'copyFileSync', 'cpSync', 'symlinkSync', 'linkSync', 'truncateSync', 'createWriteStream']
+  const real = Object.fromEntries([...reads, ...writes].map((name) => [name, fs[name]]))
+  const calls = { reads: [], writes: [] }
+  for (const name of reads) fs[name] = function (target, ...rest) { calls.reads.push(String(target)); return real[name].call(this, target, ...rest) }
+  for (const name of writes) fs[name] = function (target, ...rest) { calls.writes.push(`${name} ${String(target)}`); return real[name].call(this, target, ...rest) }
+  try {
+    return { result: run(), calls }
+  } finally {
+    Object.assign(fs, real)
+  }
+}
+
+test('the check reads the committed tree from Git objects alone: nothing in the repository is read from disk, nothing is written', () => {
+  const { dir } = pinnedProject()
+  const project = commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false })
+  const { result, calls } = recordFs(() => checkGraphmarks(project))
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.deepEqual(result.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+  assert.deepEqual(calls.reads.filter((name) => name.startsWith(dir)), [], 'no file under the repository was opened')
+  assert.deepEqual(calls.writes, [], 'nothing was written anywhere')
+})
+
+test('a filesystem call the committed reader does not serve is refused, never passed to the disk', async () => {
+  const base = path.join(os.tmpdir(), `.atelier-graphmark-reader-test-${process.pid}`)
+  const reader = committedReader(base)
+  reader.add(path.join(base, 'tree', 'note.md'), 'file', { bytes: Buffer.from('# Note\n') })
+  reader.add(path.join(base, 'tree', 'link.md'), 'link', {})
+  const note = path.join(base, 'tree', 'note.md')
+  withCommittedReader(reader, () => {
+    assert.equal(fs.readFileSync(note, 'utf8'), '# Note\n')
+    assert.equal(fs.existsSync(path.join(base, 'tree', 'link.md')), false, 'a committed link is listed, never followed')
+    assert.equal(fs.lstatSync(path.join(base, 'tree', 'link.md')).isSymbolicLink(), true)
+    assert.deepEqual(fs.readdirSync(path.join(base, 'tree')), ['link.md', 'note.md'])
+    assert.throws(() => fs.readFileSync(path.join(base, 'tree', 'NOTE.md')), { code: 'ENOENT' }, 'names are exact, never folded')
+    assert.throws(() => fs.createReadStream(note), { code: 'EPERM' })
+    assert.throws(() => fs.writeFileSync(note, 'x'), { code: 'EPERM' })
+  })
+  assert.equal(reader.violations.length, 2, reader.violations.join('\n'))
+  assert.equal(fs.existsSync(base), false, 'the virtual root never exists on disk')
+})
+
+test('a policy reached only through another spelling or a link on disk changes nothing: the committed path decides', () => {
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'Policy/repo-access.json' })
+  commitAll(dir, 'a policy path nothing commits')
+  // A committed link under another spelling of the folder, and a wide policy on disk where a folding host would look.
+  commitObjects(dir, [{ path: 'policy', mode: '120000', content: 'elsewhere' }], 'a link spelled otherwise')
+  fs.mkdirSync(path.join(dir, 'Policy'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'Policy', 'repo-access.json'), `${JSON.stringify({ schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'public', repos: { content: { readBoundary: 'public' } } })}\n`)
+  editMark(dir, WHEEL, (text) => text.replace('  audience: "team"', '  audience: "public"'))
+  git(dir, ['commit', '-qm', 'a public mark', '--', markPath(dir, WHEEL)])
+  const report = checkProject(dir)
+  // Exact Git lookup: the policy is absent, so the repository's team boundary stands and the public mark is refused.
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, WHEEL, 'wider than "team"'), report.errors.join('\n'))
+  assert.ok(has(report.warnings, 'Policy/repo-access.json: has uncommitted changes (untracked)'), report.warnings.join('\n'))
+})
+
+test('nothing the check does can enter the graph: a sidecar whose source is a committed link stays an orphan', () => {
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'content/drawings/absent-policy.json' })
+  commitAll(dir, 'an absent policy inside a managed folder')
+  commitObjects(dir, [
+    { path: 'content/drawings/ghost.svg', mode: '120000', content: 'spoke-tension.html' },
+    { path: 'content/drawings/ghost.svg.kg.json', content: sidecarFor('ghost.svg', 'repair-workshop:drawings:ghost') },
+  ], 'a sidecar for a link')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, 'content/drawings/ghost.svg.kg.json'), report.errors.join('\n'))
+})
+
+test('a committed name this host would not keep as one literal path is refused', () => {
+  const { dir } = pinnedProject()
+  commitObjects(dir, [{ path: 'content/notes/a\\b.txt', content: 'a backslash in one name\n' }], 'a backslash in a name')
+  const report = checkProject(dir)
+  if (process.platform === 'win32') {
+    assert.equal(report.ok, false)
+    assert.ok(has(report.errors, 'content/notes/a\\b.txt is not one literal path on this host'), report.errors.join('\n'))
+  } else {
+    assert.equal(report.ok, true, report.errors.join('\n'))
+  }
+})
+
+test('the committed graph equals the graph built from a clean checkout', () => {
+  const facts = (graph) => ({
+    nodes: graph.nodes.map(({ id, repo, path: where, type, audience, status, tags, relations, title, summary }) => ({ id, repo, path: where, type, audience, status, tags, relations, title, summary })),
+    edges: graph.edges,
+    errors: graph.errors,
+  })
+  const sources = ['fixtures/graphmark', 'fixtures/projects/source-formats-workspace', 'fixtures/projects/sample-workspace', 'templates/knowledge-workspace', 'examples/loomworks-studio']
+  for (const source of sources) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-parity-'))
+    fs.cpSync(path.join(root, source), dir, { recursive: true })
+    git(dir, ['init', '-q'])
+    commitAll(dir, source)
+    const project = commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false })
+    const committed = buildCommittedGraph({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {} })
+    assert.ok(committed.graph, `${source}: ${committed.errors.join('\n')}`)
+    assert.deepEqual(facts(committed.graph), facts(buildGraph(project)), source)
+  }
+  // Failures too: an orphan sidecar and a broken relation give the same errors.
+  const { dir } = pinnedProject()
+  fs.writeFileSync(path.join(dir, 'content', 'drawings', 'ghost.svg.kg.json'), sidecarFor('ghost.svg', 'repair-workshop:drawings:ghost'))
+  editMark(dir, WHEEL, (text) => text.replace('"repair-workshop:notes:wheel-checks"', '"repair-workshop:notes:never-written"'))
+  commitAll(dir, 'broken')
+  const project = commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false })
+  const real = buildGraph(project)
+  assert.ok(real.errors.length >= 2)
+  const committed = buildCommittedGraph({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {} })
+  assert.deepEqual(facts(committed.graph), facts(real))
 })

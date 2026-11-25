@@ -19,26 +19,23 @@ import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 // path from the Git repository root, the digest of the whole object at that
 // commit and a selector that names exactly one part of it.
 //
-// What is verified is what readers receive: the committed tree. The check
-// reads the project config from its repository's HEAD blob, resolves its read
-// policy from committed blobs of the repositories the project names, and
-// streams the committed files of each managed repository folder into a private
-// snapshot (raw blob bytes, no checkout filters; symbolic links and submodules
-// are recorded, never written). It builds the knowledge graph there, without
-// repository discovery or remote probes, and checks every mark against it.
-// The working tree is read only through `git status` and the front matter of
-// changed Markdown: an uncommitted, staged or edited mark record is refused,
-// and uncommitted changes a mark depends on are reported. A repair hint (HEAD
-// holds the bytes, another path form names them) is a diagnostic, never a
-// verified mark. It never fetches a missing object, and it removes its
-// snapshot, also on SIGINT or SIGTERM, and reclaims snapshots a killed run
-// left behind.
+// What is verified is what readers receive: the committed tree, read from Git
+// objects alone. The check reads the project config from its repository's
+// HEAD blob, resolves its read policy from committed blobs by exact path,
+// lists the committed files of each managed repository folder, and builds the
+// knowledge graph from those objects, with the graph's own unchanged code
+// reading them through an in-memory reader: no copy on any filesystem, no
+// writes, no name folding. It checks every mark against that graph. The
+// working tree is read only through `git status` and the front matter of the
+// Markdown it reports as changed: an uncommitted, staged or edited mark record
+// is refused, and uncommitted changes a mark depends on are reported. A repair
+// hint (HEAD holds the bytes, another path form names them) is a diagnostic,
+// never a verified mark. It never fetches a missing object.
 
 export const GRAPHMARK_CONTRACT = 'atelier-graphmark@v1'
 export const GRAPHMARK_TAG = 'graphmark'
 export const MARK_STATES = ['marked', 'preserved', 'recorded', 'graph-checked', 'shared', 'accepted']
 export const SELECTOR_TYPES = ['whole', 'lines', 'text-quote']
-export const SNAPSHOT_PREFIX = 'atelier-graphmark-snapshot-'
 
 // Read rank, as the knowledge graph ranks audiences for read boundaries. A Map,
 // so only these names have a rank (an inherited name such as "constructor"
@@ -48,9 +45,8 @@ const AUDIENCE_READ_RANK = new Map([['public', 0], ['team', 1], ['operator', 2],
 export const FULL_COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const LINES_VALUE = /^([1-9][0-9]*)(?:-([1-9][0-9]*))?$/
 // An edition or a record larger than this is reported as too large to verify,
-// never as absent. Snapshot files are streamed, whatever their size.
+// never as absent.
 const MAX_OBJECT_BYTES = 64 * 1024 * 1024
-const COPY_CHUNK_BYTES = 1024 * 1024
 // Changed Markdown is classified from its front matter, read up to this much.
 const FRONT_MATTER_LIMIT = 256 * 1024
 const NULL_OID = /^0+$/
@@ -396,108 +392,19 @@ function classifyMarkdown(head) {
   return record.kg?.type === 'index' && record.target === undefined ? 'index' : 'mark'
 }
 
-// --- The committed snapshot --------------------------------------------------
+// --- The committed tree, from Git objects alone -------------------------------
+//
+// The knowledge graph is built from the committed tree without copying it onto
+// any filesystem. The graph's own code, unchanged, reads through `fs`; while it
+// builds, every path-based `fs` call on a path under a virtual root (a path
+// that never exists on disk) is answered from Git objects by exact committed
+// path, at the moment of the read, and any other call on such a path is
+// refused. Nothing is written, nothing is probed, and no name is folded: a
+// committed name is the bytes Git holds for it.
 
-// Run `body` with a private snapshot directory that is removed afterwards,
-// whether `body` returns, throws or the process receives SIGINT or SIGTERM
-// meanwhile (the signal is re-raised once the directory is gone). Directories
-// a killed run left behind are reclaimed first: only this prefix, only
-// directories this user owns, only when the process that made one is gone.
-const activeSnapshots = new Set()
-let signalsHeld = false
-function onSnapshotSignal(signal) {
-  for (const dir of activeSnapshots) fs.rmSync(dir, { recursive: true, force: true })
-  activeSnapshots.clear()
-  releaseSignals()
-  if (process.listenerCount(signal) === 0) process.kill(process.pid, signal)
-}
-function holdSignals() {
-  if (signalsHeld) return
-  signalsHeld = true
-  process.on('SIGINT', onSnapshotSignal)
-  process.on('SIGTERM', onSnapshotSignal)
-}
-function releaseSignals() {
-  if (!signalsHeld) return
-  signalsHeld = false
-  process.off('SIGINT', onSnapshotSignal)
-  process.off('SIGTERM', onSnapshotSignal)
-}
-
-// Abandoned snapshots are swept once per process: they come from runs that
-// have already ended, and a large temporary folder is slow to list.
-let swept = false
-
-export function withPrivateSnapshot(body) {
-  if (!swept) {
-    swept = true
-    reclaimAbandonedSnapshots()
-  }
-  holdSignals()
-  let base = null
-  try {
-    base = fs.mkdtempSync(path.join(os.tmpdir(), `${SNAPSHOT_PREFIX}${process.pid}-`))
-    activeSnapshots.add(base)
-    // Who made it, so a later run can tell an abandoned snapshot from a live one.
-    fs.writeFileSync(path.join(base, SNAPSHOT_OWNER_FILE), `${JSON.stringify({ pid: process.pid, nonce: crypto.randomBytes(16).toString('hex'), created: new Date().toISOString() })}\n`, { flag: 'wx', mode: 0o600 })
-    return body(base)
-  } finally {
-    if (base) {
-      fs.rmSync(base, { recursive: true, force: true })
-      activeSnapshots.delete(base)
-    }
-    // A signal that arrived during synchronous work is delivered only once
-    // the event loop runs. Keep the handler, and the loop, for one short tick
-    // so the pending signal is delivered and re-raised, not dropped at exit.
-    setTimeout(() => {
-      if (!activeSnapshots.size) releaseSignals()
-    }, 25)
-  }
-}
-
-export const SNAPSHOT_OWNER_FILE = 'owner.json'
-
-// Remove snapshots a killed run left behind in `dir`: only directories with
-// this prefix (never links), whose owner file names the same process id as
-// the directory name, and only once that process is gone. Where the platform
-// has user ids, the directory must belong to this user too; where it has none
-// (Windows), the system temporary folder is already per user. A directory
-// without a readable owner file is left alone.
-export function reclaimAbandonedSnapshots(dir = os.tmpdir(), { uid = typeof process.getuid === 'function' ? process.getuid() : null } = {}) {
-  let names = []
-  try {
-    names = fs.readdirSync(dir)
-  } catch {
-    return
-  }
-  const pattern = new RegExp(`^${SNAPSHOT_PREFIX}([0-9]+)-[A-Za-z0-9]+$`)
-  for (const name of names) {
-    const match = pattern.exec(name)
-    if (!match || Number(match[1]) === process.pid) continue
-    const full = path.join(dir, name)
-    try {
-      const stat = fs.lstatSync(full)
-      if (!stat.isDirectory() || stat.isSymbolicLink()) continue
-      if (uid !== null && stat.uid !== uid) continue
-      const ownerFile = path.join(full, SNAPSHOT_OWNER_FILE)
-      const ownerStat = fs.lstatSync(ownerFile)
-      if (!ownerStat.isFile() || ownerStat.size > 4096) continue
-      const owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'))
-      if (!Number.isInteger(owner?.pid) || owner.pid !== Number(match[1]) || typeof owner.nonce !== 'string') continue
-      process.kill(owner.pid, 0)
-    } catch (error) {
-      if (error?.code === 'ESRCH') fs.rmSync(full, { recursive: true, force: true })
-    }
-  }
-}
-
-// Paths a checkout of this tree could not hold faithfully: not valid UTF-8,
-// a segment Git refuses, the same path twice, or two paths that one
-// case-insensitive or Unicode-normalising filesystem would merge.
-// Paths Git can hold but a checkout cannot write as given: not valid UTF-8, a
-// segment Git refuses, or the same path twice. Whether two different names
-// are one file on this volume is not modelled here: the volume answers it,
-// through exclusive creation and file identities (below).
+// Paths that are not one exact name here: not valid UTF-8, a segment Git
+// refuses, the same path twice, or one that this host's path rules would not
+// keep as one literal path (on Windows, a "\\" inside a name).
 function pathProblems(entries) {
   const problems = []
   const exact = new Set()
@@ -511,184 +418,21 @@ function pathProblems(entries) {
       problems.push(`${entry.path} is not a path a checkout can hold`)
       continue
     }
+    if (toPosix(path.relative('committed', path.join('committed', ...segments))) !== entry.path) {
+      problems.push(`${entry.path} is not one literal path on this host`)
+      continue
+    }
     if (exact.has(entry.path)) problems.push(`${entry.path} appears twice`)
     exact.add(entry.path)
   }
   return [...new Set(problems)]
 }
 
-// Which file on this volume a snapshot path is: its device and inode.
-const identityOf = (stat) => `${stat.dev}:${stat.ino}`
-
-// The record of what the snapshot of one repository holds: for each committed
-// path written, the identity of the file or folder this volume made for it,
-// and for each identity the committed path it belongs to.
-function newHoldings() {
-  return { byPath: new Map(), byIdentity: new Map(), problems: [] }
-}
-
-function hold(holdings, rel, stat) {
-  const key = identityOf(stat)
-  const owner = holdings.byIdentity.get(key)
-  if (owner !== undefined && owner !== rel) {
-    holdings.problems.push(`${owner} and ${rel} are one ${stat.isDirectory() ? 'folder' : 'file'} on this filesystem`)
-    return false
-  }
-  holdings.byIdentity.set(key, rel)
-  holdings.byPath.set(rel, key)
-  return true
-}
-
-// What this volume finds at the snapshot path for `rel`, a committed path or
-// not: `absent`, `exact` (the file or folder written for `rel` itself), or
-// `alias` (one written for another committed path). Asked of the volume, not
-// modelled: whatever case or normalisation rules it has, it applies them.
-function onVolume(holdings, mirror, rel) {
-  let stat
-  try {
-    stat = fs.lstatSync(rel ? path.join(mirror, ...rel.split('/')) : mirror)
-  } catch (error) {
-    return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? { kind: 'absent' } : { kind: 'failed', code: error?.code }
-  }
-  const owner = holdings.byIdentity.get(identityOf(stat))
-  if (owner === rel) return { kind: 'exact' }
-  return owner === undefined ? { kind: 'unknown' } : { kind: 'alias', owner }
-}
-
-// Lay down, as empty placeholders and folders, the committed names of the
-// folder `committedDir`, inside the snapshot folder the volume resolves
-// `realDir` to, so the volume can answer for a path outside the copied files.
-// Names already written keep their bytes; placeholders are never read.
-function scaffold(root, commit, committedDir, realDir, holdings) {
-  const listed = git(root, ['ls-tree', '-z', '--end-of-options', commit, ...(committedDir ? ['--', `${committedDir}/`] : [])])
-  if (listed === null) return false
-  fs.mkdirSync(realDir, { recursive: true })
-  for (const entry of treeEntries(listed)) {
-    if (entry.path === null || holdings.byPath.has(entry.path)) continue
-    const target = path.join(realDir, path.posix.basename(entry.path))
-    try {
-      if (entry.type === 'tree') fs.mkdirSync(target)
-      else fs.closeSync(fs.openSync(target, 'wx'))
-    } catch (error) {
-      if (error?.code !== 'EEXIST') return false
-    }
-    hold(holdings, entry.path, fs.lstatSync(target))
-  }
-  return true
-}
-
-// Whether a path the committed tree does not hold would still open a
-// committed file on this volume: walk it one folder at a time, laying down
-// each committed folder's names as the volume resolves it.
-function aliasOnVolume(root, commit, mirror, rel, holdings) {
-  const segments = rel.split('/')
-  let committedDir = ''
-  let realDir = mirror
-  for (let index = 0; index < segments.length; index += 1) {
-    if (!scaffold(root, commit, committedDir, realDir, holdings)) return { kind: 'failed' }
-    const candidate = path.join(realDir, segments[index])
-    let stat
-    try {
-      stat = fs.lstatSync(candidate)
-    } catch (error) {
-      return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? { kind: 'absent' } : { kind: 'failed' }
-    }
-    const owner = holdings.byIdentity.get(identityOf(stat))
-    if (owner === undefined) return { kind: 'failed' }
-    if (index === segments.length - 1) return owner === rel ? { kind: 'exact' } : { kind: 'alias', owner }
-    if (!stat.isDirectory()) return { kind: 'absent' }
-    committedDir = owner
-    realDir = candidate
-  }
-  return { kind: 'absent' }
-}
-
-// Stream the blobs of `items` from Git into files under `destination` with
-// bounded memory: `cat-file --batch` writes into a file, which is copied out
-// in chunks. Files are created exclusively, so nothing is overwritten.
-function streamBlobs(root, items, destination, base, recorded) {
-  if (!items.length) return
-  const stamp = `${process.pid}-${crypto.randomBytes(6).toString('hex')}`
-  const listFile = path.join(base, `batch-${stamp}.in`)
-  const outFile = path.join(base, `batch-${stamp}.out`)
-  fs.writeFileSync(listFile, `${items.map((item) => item.oid).join('\n')}\n`)
-  const input = fs.openSync(listFile, 'r')
-  const output = fs.openSync(outFile, 'w')
-  let status
-  try {
-    status = gitRun(root, ['cat-file', '--batch'], { stdin: input, stdout: output }).status
-  } finally {
-    fs.closeSync(input)
-    fs.closeSync(output)
-  }
-  if (status !== 0) {
-    for (const item of items) recorded.missing.push(item.path)
-    fs.rmSync(listFile, { force: true })
-    fs.rmSync(outFile, { force: true })
-    return
-  }
-  const reader = fs.openSync(outFile, 'r')
-  const chunk = Buffer.alloc(COPY_CHUNK_BYTES)
-  let offset = 0
-  try {
-    for (const item of items) {
-      const head = Buffer.alloc(256)
-      const got = fs.readSync(reader, head, 0, head.length, offset)
-      const newline = head.subarray(0, got).indexOf(0x0a)
-      if (newline < 0) {
-        recorded.missing.push(item.path)
-        break
-      }
-      const [oid, type, sizeText] = head.subarray(0, newline).toString('latin1').split(' ')
-      offset += newline + 1
-      if (oid !== item.oid || type !== 'blob') {
-        recorded.missing.push(item.path)
-        continue
-      }
-      const file = path.join(destination, ...item.path.split('/'))
-      if (!inside(destination, file)) throw new Error(`refusing to write outside the snapshot: ${item.path}`)
-      fs.mkdirSync(path.dirname(file), { recursive: true })
-      let target
-      try {
-        target = fs.openSync(file, 'wx')
-      } catch (error) {
-        if (error?.code !== 'EEXIST') throw error
-        // Exclusive creation found a file already there: this volume makes
-        // two committed names one file.
-        const owner = recorded.holdings.byIdentity.get(identityOf(fs.lstatSync(file)))
-        recorded.problems.push(`${owner ?? 'another committed path'} and ${item.path} are one file on this filesystem`)
-        return
-      }
-      try {
-        for (let remaining = Number(sizeText); remaining > 0;) {
-          const read = fs.readSync(reader, chunk, 0, Math.min(chunk.length, remaining), offset)
-          if (read <= 0) throw new Error(`the batch for ${item.path} ended early`)
-          // A write may take fewer bytes than offered; finish the chunk.
-          for (let written = 0; written < read;) {
-            const took = fs.writeSync(target, chunk, written, read - written)
-            if (!(took > 0)) throw new Error(`writing ${item.path} into the snapshot stopped short`)
-            written += took
-          }
-          offset += read
-          remaining -= read
-        }
-        hold(recorded.holdings, item.path, fs.fstatSync(target))
-      } finally {
-        fs.closeSync(target)
-      }
-      offset += 1
-    }
-  } finally {
-    fs.closeSync(reader)
-    fs.rmSync(listFile, { force: true })
-    fs.rmSync(outFile, { force: true })
-  }
-}
-
-// Write the committed regular files under `prefixes` of `root` at HEAD into
-// `destination`, after checking that every path can be held faithfully.
-function materialise(root, commit, prefixes, destination, base) {
-  const recorded = { links: [], gitlinks: [], missing: [], unreadable: false, problems: [], written: new Set(), holdings: newHoldings() }
+// The committed entries under `prefixes` at `commit`: each regular file's
+// object id by exact path, with links, submodules and the objects a partial
+// clone lacks recorded.
+function committedFiles(root, commit, prefixes) {
+  const recorded = { files: new Map(), links: [], gitlinks: [], missing: [], unreadable: false, problems: [] }
   const view = missingAt(root, commit)
   const scope = prefixes.includes('') ? [] : ['--', ...prefixes]
   const listing = view && !view.treesMissing ? git(root, ['ls-tree', '-r', '-z', '--full-tree', commit, ...scope], { maxBuffer: 512 * 1024 * 1024 }) : null
@@ -699,56 +443,146 @@ function materialise(root, commit, prefixes, destination, base) {
   const entries = treeEntries(listing)
   recorded.problems = pathProblems(entries)
   if (recorded.problems.length) return recorded
-  const regular = []
   for (const entry of entries) {
     if (entry.mode === '120000') recorded.links.push(entry.path)
     else if (entry.mode === '160000') recorded.gitlinks.push(entry.path)
     else if (entry.type === 'blob' && (entry.mode === '100644' || entry.mode === '100755')) {
       if (view.missing.has(entry.oid)) recorded.missing.push(entry.path)
-      else regular.push({ oid: entry.oid, path: entry.path })
+      else recorded.files.set(entry.path, entry.oid)
     }
   }
-  try {
-    fs.mkdirSync(destination, { recursive: true })
-    hold(recorded.holdings, '', fs.lstatSync(destination))
-    streamBlobs(root, regular, destination, base, recorded)
-  } catch (error) {
-    recorded.problems.push(`a file could not be written into the snapshot (${error.message})`)
-  }
-  // Each committed folder must be its own folder on this volume too.
-  const folders = new Set()
-  for (const item of regular) {
-    recorded.written.add(item.path)
-    const parts = item.path.split('/')
-    for (let depth = 1; depth < parts.length; depth += 1) folders.add(parts.slice(0, depth).join('/'))
-  }
-  for (const folder of [...folders].sort()) {
-    try {
-      hold(recorded.holdings, folder, fs.lstatSync(path.join(destination, ...folder.split('/'))))
-    } catch {
-      recorded.problems.push(`${folder} could not be found in the snapshot after it was written`)
-    }
-  }
-  recorded.problems.push(...recorded.holdings.problems)
   return recorded
 }
 
-// Run `build` with no ambient Git variables and with Git unable to find a
-// repository above the snapshot, so the graph's own Git calls see only it.
-function hermeticGit(ceiling, build) {
-  const saved = {}
-  for (const key of Object.keys(process.env)) {
-    if (key.toUpperCase().startsWith('GIT_')) {
-      saved[key] = process.env[key]
-      delete process.env[key]
-    }
+const fsError = (code, syscall, target) => Object.assign(new Error(`${code}: committed tree, ${syscall} '${target}'`), { code, syscall, path: target })
+const kindTest = (kind) => ({
+  isFile: () => kind === 'file',
+  isDirectory: () => kind === 'dir',
+  isSymbolicLink: () => kind === 'link',
+  isBlockDevice: () => false,
+  isCharacterDevice: () => false,
+  isFIFO: () => false,
+  isSocket: () => false,
+})
+
+// The committed tree as the knowledge graph will see it: folders, regular
+// files (read from their Git objects on demand) and links (listed, never
+// followed). Submodules are not part of it.
+export function committedReader(base) {
+  const entries = new Map([[base, { kind: 'dir', children: new Map() }]])
+  const cache = new Map()
+  const violations = []
+  const addDir = (dir) => {
+    if (entries.has(dir)) return
+    const parent = path.dirname(dir)
+    if (!inside(base, parent)) throw new Error(`committed path outside the reader: ${dir}`)
+    addDir(parent)
+    entries.set(dir, { kind: 'dir', children: new Map() })
+    entries.get(parent).children.set(path.basename(dir), 'dir')
   }
-  process.env.GIT_CEILING_DIRECTORIES = ceiling
+  const add = (name, kind, source) => {
+    const parent = path.dirname(name)
+    addDir(parent)
+    entries.set(name, { kind, ...source })
+    entries.get(parent).children.set(path.basename(name), kind)
+  }
+  const at = (target) => entries.get(path.resolve(String(target))) ?? null
+  const bytesOf = (entry, target) => {
+    if (entry.bytes) return entry.bytes
+    if (!cache.has(entry.oid)) {
+      const read = gitRun(entry.root, ['cat-file', 'blob', entry.oid], { maxBuffer: 512 * 1024 * 1024 })
+      if (read.status !== 0) {
+        violations.push(`${target} could not be read from Git`)
+        throw fsError('EIO', 'read', target)
+      }
+      cache.set(entry.oid, read.stdout)
+    }
+    return cache.get(entry.oid)
+  }
+  const statOf = (entry, target, follow, options) => {
+    if (!entry || (follow && entry.kind === 'link')) {
+      if (options?.throwIfNoEntry === false) return undefined
+      throw fsError('ENOENT', follow ? 'stat' : 'lstat', target)
+    }
+    return { ...kindTest(entry.kind), size: entry.kind === 'file' ? bytesOf(entry, target).length : 0, mode: entry.kind === 'dir' ? 0o40755 : 0o100644, mtimeMs: 0, mtime: new Date(0), dev: 0, ino: 0 }
+  }
+  const implementation = {
+    existsSync: (target) => {
+      const entry = at(target)
+      return Boolean(entry) && entry.kind !== 'link'
+    },
+    statSync: (target, options) => statOf(at(target), target, true, options),
+    lstatSync: (target, options) => statOf(at(target), target, false, options),
+    readFileSync: (target, options) => {
+      const entry = at(target)
+      if (!entry || entry.kind === 'link') throw fsError('ENOENT', 'open', target)
+      if (entry.kind === 'dir') throw fsError('EISDIR', 'read', target)
+      const bytes = bytesOf(entry, target)
+      const encoding = typeof options === 'string' ? options : options?.encoding
+      return encoding ? bytes.toString(encoding) : Buffer.from(bytes)
+    },
+    readdirSync: (target, options) => {
+      const entry = at(target)
+      if (!entry || entry.kind === 'link') throw fsError('ENOENT', 'scandir', target)
+      if (entry.kind !== 'dir') throw fsError('ENOTDIR', 'scandir', target)
+      const names = [...entry.children.keys()].sort()
+      if (!options?.withFileTypes) return names
+      const parent = path.resolve(String(target))
+      return names.map((name) => ({ name, parentPath: parent, path: parent, ...kindTest(entry.children.get(name)) }))
+    },
+    realpathSync: (target) => {
+      const entry = at(target)
+      if (!entry || entry.kind === 'link') throw fsError('ENOENT', 'realpath', target)
+      return path.resolve(String(target))
+    },
+    accessSync: (target) => {
+      const entry = at(target)
+      if (!entry || entry.kind === 'link') throw fsError('ENOENT', 'access', target)
+    },
+  }
+  return { base, add, addDir, implementation, violations }
+}
+
+const pathArgument = (target) => (typeof target === 'string' ? target : Buffer.isBuffer(target) ? target.toString('utf8') : target instanceof URL ? (target.protocol === 'file:' ? decodeURIComponent(target.pathname) : null) : null)
+
+// Run `build` with `fs` answering for the reader's virtual root from Git
+// objects. A path elsewhere goes to the real `fs`, untouched. Any `fs` call on
+// a virtual path that the reader does not implement, synchronous or not, is
+// refused and recorded, so a future read the graph adds cannot go unchecked.
+export function withCommittedReader(reader, build) {
+  const prefix = reader.base + path.sep
+  const virtual = (target) => {
+    const name = pathArgument(target)
+    return name !== null && (name === reader.base || name.startsWith(prefix))
+  }
+  const refuse = (name) => {
+    reader.violations.push(`the knowledge graph used fs.${name} on the committed tree, which only Git-object reads may serve`)
+    throw fsError('EPERM', name, reader.base)
+  }
+  const restore = []
+  const wrap = (owner, name) => {
+    const original = owner[name]
+    if (typeof original !== 'function' || /^[A-Z]/.test(name)) return
+    const own = owner === fs ? reader.implementation[name] : undefined
+    const wrapped = function (target, ...rest) {
+      if (!virtual(target)) return original.call(this, target, ...rest)
+      return own ? own(target, ...rest) : refuse(name)
+    }
+    if (typeof original.native === 'function') {
+      wrapped.native = function (target, ...rest) {
+        if (!virtual(target)) return original.native.call(this, target, ...rest)
+        return own ? own(target, ...rest) : refuse(`${name}.native`)
+      }
+    }
+    owner[name] = wrapped
+    restore.push(() => { owner[name] = original })
+  }
+  for (const name of Object.keys(fs)) wrap(fs, name)
+  for (const name of Object.keys(fs.promises ?? {})) wrap(fs.promises, name)
   try {
     return build()
   } finally {
-    delete process.env.GIT_CEILING_DIRECTORIES
-    Object.assign(process.env, saved)
+    for (const undo of restore.reverse()) undo()
   }
 }
 
@@ -774,17 +608,21 @@ function accessPolicyProblems(bytes, managedNames, externalNames, label) {
 // The committed project, verified from Git:
 // 1. find the config's repository and read the config from its HEAD blob (it
 //    need not be checked out, and an unfinished edit does not matter);
-// 2. resolve it against this checkout (tracked paths, --repo-path, a local
-//    overlay, sibling discovery give each repository its location);
-// 3. read the effective repository access file from the committed tree of the
-//    project repository that holds it; only true absence means defaults;
-// 4. stream each managed repository folder's committed files into the
-//    snapshot, and map the project onto it with no further resolution.
-function buildSnapshot(base, request) {
+// 2. resolve it against this checkout only for locations (tracked paths,
+//    --repo-path, a local overlay, sibling discovery);
+// 3. list the committed files of each managed repository folder;
+// 4. read the effective repository access file from the committed tree of the
+//    project repository that holds it, by exact path; only true absence under
+//    plain folders means defaults;
+// 5. map the project onto the reader's virtual root, with no further
+//    resolution, so the graph reads exactly those objects.
+function buildCommitted(request) {
+  const base = path.join(os.tmpdir(), `.atelier-graphmark-committed-${process.pid}-${crypto.randomBytes(12).toString('hex')}`)
   const mirror = (abs) => path.join(base, 'tree', path.resolve(abs).replace(/^([A-Za-z]):/, '$1'))
   const errors = []
   const warnings = []
-  const snapshot = { errors, warnings, repositories: new Map(), project: null }
+  const reader = committedReader(base)
+  const committed = { errors, warnings, repositories: new Map(), project: null, reader }
   const roots = new Map()
   const take = (root) => {
     if (!roots.has(root)) {
@@ -802,27 +640,27 @@ function buildSnapshot(base, request) {
   const configRoot = gitRoot(path.dirname(configPath))
   if (!configRoot) {
     errors.push(`${configPath}: the project config is not in a Git repository, so its committed policy cannot be read`)
-    return snapshot
+    return committed
   }
   const configOwner = take(configRoot)
-  if (errors.length) return snapshot
+  if (errors.length) return committed
   const configRel = toPosix(path.relative(configRoot, configPath))
   const committedConfig = lookup(configRoot, configOwner.head.commit, configRel)
   if (committedConfig.kind !== 'file') {
     errors.push(committedConfig.kind === 'absent'
       ? `${configRel}: the project config is not committed at HEAD, so its policy cannot be verified`
       : `${configRel}: the committed project config ${describeLookup(committedConfig)}, so its policy cannot be verified`)
-    return snapshot
+    return committed
   }
   let document
   try {
     document = JSON.parse(committedConfig.bytes.toString('utf8'))
   } catch {
     errors.push(`${configRel}: the project config committed at HEAD is not valid JSON`)
-    return snapshot
+    return committed
   }
   for (const problem of validateProjectConfigDoc(document)) errors.push(`${configRel} (committed at HEAD): ${problem}`)
-  if (errors.length) return snapshot
+  if (errors.length) return committed
   const configChange = configOwner.status.changes.get(configRel)
   if (configChange) warnings.push(`${configRel}: has uncommitted changes (${configChange.kind}), which this check does not use; it reads the project config committed at HEAD`)
 
@@ -838,7 +676,7 @@ function buildSnapshot(base, request) {
     resolved = resolveProjectConfig({ argv: ['--project', configPath, ...request.overrides], cwd: request.cwd, env, configDocument: { ...document, repos: declared.filter((repo) => !isExternalRepo(repo)) }, writeLocalState: false })
   } catch (error) {
     errors.push(`the project config committed at HEAD cannot be resolved here: ${error.message}`)
-    return snapshot
+    return committed
   }
   if (resolved.schema !== PROJECT_CONFIG_SCHEMA) errors.push(`${configRel} (committed at HEAD): schema must be ${PROJECT_CONFIG_SCHEMA}`)
   const managed = (resolved.repos ?? []).filter((repo) => !repo.external && repo.name)
@@ -851,27 +689,26 @@ function buildSnapshot(base, request) {
     }
     take(root).prefixes.add(toPosix(path.relative(root, repo.path)))
   }
-  if (errors.length) return snapshot
+  if (errors.length) return committed
 
-  // 3. The committed files of each managed folder, each written once and
-  // held by the identity this volume gave it.
+  // 3. The committed files of each managed folder, by exact path.
   for (const entry of roots.values()) {
     const prefixes = [...entry.prefixes]
-    const recorded = prefixes.length
-      ? materialise(entry.root, entry.head.commit, prefixes, entry.mirror, base)
-      : { links: [], gitlinks: [], missing: [], unreadable: false, problems: [], written: new Set(), holdings: newHoldings() }
+    const recorded = prefixes.length ? committedFiles(entry.root, entry.head.commit, prefixes) : { files: new Map(), links: [], gitlinks: [], missing: [], unreadable: false, problems: [] }
     entry.recorded = recorded
     if (recorded.unreadable) errors.push(`${entry.root}: HEAD's tree cannot be read without fetching objects this clone lacks`)
-    for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be written faithfully: ${problem}; the check refuses rather than lose or merge a file`)
+    for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be read exactly: ${problem}; the check refuses rather than read a different file`)
+    for (const [rel, oid] of recorded.files) reader.add(path.join(entry.mirror, ...rel.split('/')), 'file', { root: entry.root, oid })
+    for (const rel of recorded.links) reader.add(path.join(entry.mirror, ...rel.split('/')), 'link', {})
   }
-  if (errors.length) return snapshot
+  if (errors.length) return committed
 
   // 4. The effective read policy, bound to the committed tree that holds it.
   const accessPath = path.resolve(resolved.repoAccessPath)
   const accessOwner = [...roots.values()].filter((entry) => inside(entry.root, accessPath)).sort((a, b) => b.root.length - a.root.length)[0]
   if (!accessOwner) {
     errors.push(`the repository access file ${accessPath} is outside the project's repositories, so no committed version of it can be read; the check does not read live files or fall back to defaults`)
-    return snapshot
+    return committed
   }
   const accessRel = toPosix(path.relative(accessOwner.root, accessPath))
   const committedAccess = lookup(accessOwner.root, accessOwner.head.commit, accessRel)
@@ -880,67 +717,36 @@ function buildSnapshot(base, request) {
     // defaults: a supported format, and a read boundary for every managed
     // repository.
     for (const problem of accessPolicyProblems(committedAccess.bytes, managed.map((repo) => repo.name), externalNames, accessRel)) errors.push(problem)
-    if (errors.length) return snapshot
+    if (errors.length) return committed
   } else if (committedAccess.kind !== 'absent') {
     errors.push(`${accessRel}: the committed repository access file ${describeLookup(committedAccess)}; the check does not fall back to defaults`)
-    return snapshot
-  } else {
-    // Absent from the committed tree, so the defaults apply, unless this
-    // volume would open a committed file under that name: ask it.
-    const found = aliasOnVolume(accessOwner.root, accessOwner.head.commit, accessOwner.mirror, accessRel, accessOwner.recorded.holdings)
-    if (found.kind === 'alias') {
-      errors.push(`${found.owner} would be read as the absent repository access file ${accessRel} on this filesystem; rename one of them, so the policy is the same on every checkout`)
-      return snapshot
-    }
-    if (found.kind === 'failed' || found.kind === 'exact') {
-      errors.push(`${accessRel}: whether this filesystem would read another committed file as the repository access file could not be settled`)
-      return snapshot
-    }
-    errors.push(...accessOwner.recorded.holdings.problems.splice(0).map((problem) => `${accessOwner.root}: HEAD's tree cannot be written faithfully: ${problem}`))
-    if (errors.length) return snapshot
+    return committed
   }
-  // The graph reads the policy from a file of its own, outside the copied
-  // tree, holding exactly the verified committed bytes, or from nowhere when
-  // the policy is absent. No file in the tree can stand in for it.
-  const policyDir = path.join(base, 'policy')
-  fs.mkdirSync(policyDir)
-  const policyFile = path.join(policyDir, 'repo-access.json')
-  if (committedAccess.kind === 'file') fs.writeFileSync(policyFile, committedAccess.bytes, { flag: 'wx' })
+  // The graph reads the policy from its own virtual file: the verified bytes,
+  // or nothing when the committed policy is absent.
+  const policyFile = path.join(base, 'policy', 'repo-access.json')
+  if (committedAccess.kind === 'file') reader.add(policyFile, 'file', { bytes: committedAccess.bytes })
+  else reader.addDir(path.dirname(policyFile))
   const accessChange = accessOwner.status.changes.get(accessRel)
   if (accessChange) warnings.push(`${accessRel}: has uncommitted changes (${accessChange.kind}), which this check does not use; it reads the repository access file committed at HEAD${committedAccess.kind === 'absent' ? ' (there is none, so defaults apply)' : ''}`)
 
   for (const repo of managed) {
     const owner = roots.get(gitRoot(repo.path))
     const folder = mirror(repo.path)
-    snapshot.repositories.set(repo.name, { folder, realFolder: path.resolve(repo.path), root: owner.root, mirror: owner.mirror, head: owner.head, status: owner.status, holdings: owner.recorded.holdings })
+    committed.repositories.set(repo.name, { folder, realFolder: path.resolve(repo.path), root: owner.root, mirror: owner.mirror, head: owner.head, status: owner.status })
     const prefix = toPosix(path.relative(owner.root, repo.path))
     const within = (objectPath) => prefix === '' || objectPath === prefix || objectPath.startsWith(`${prefix}/`)
-    // A managed folder the committed tree does not hold may still be opened
-    // under another committed name on this volume; ask it.
-    if (prefix && !owner.recorded.holdings.byPath.has(prefix)) {
-      const found = aliasOnVolume(owner.root, owner.head.commit, owner.mirror, prefix, owner.recorded.holdings)
-      if (found.kind === 'alias') errors.push(`repository ${repo.name}: ${found.owner} would be read as its folder ${prefix}, which the committed tree does not hold, on this filesystem`)
-      else if (found.kind === 'failed') errors.push(`repository ${repo.name}: whether this filesystem would read another committed folder as ${prefix} could not be settled`)
-    }
     const missing = owner.recorded.missing.filter(within)
     if (missing.length) errors.push(`repository ${repo.name}: HEAD names ${missing.length} file(s) this clone lacks (${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', …' : ''}); the committed graph cannot be built without them`)
     for (const link of owner.recorded.links.filter(within).filter((objectPath) => /\.(md|kg\.json)$/i.test(objectPath))) {
       warnings.push(`${link}: is a symbolic link at HEAD; the check does not follow links, so it is not part of the committed graph`)
     }
   }
-  if (errors.length) return snapshot
-  // The committed project, mapped onto the snapshot. External repositories
-  // are not read, so they are left out: no discovery, no remote probes.
-  for (const dir of [resolved.configDir, resolved.workspaceRoot, resolved.repoOpsRoot]) {
-    fs.mkdirSync(mirror(dir), { recursive: true })
-    // A folder made for the project's own paths is known to the snapshot too.
-    const owner = [...roots.values()].filter((entry) => inside(entry.root, path.resolve(dir))).sort((a, b) => b.root.length - a.root.length)[0]
-    const rel = owner ? toPosix(path.relative(owner.root, path.resolve(dir))) : null
-    if (owner && !owner.recorded.holdings.byPath.has(rel)) hold(owner.recorded.holdings, rel, fs.lstatSync(mirror(dir)))
-  }
-  snapshot.tree = path.join(base, 'tree')
-  snapshot.holdings = [...roots.values()].map((entry) => [entry.mirror, entry.recorded.holdings])
-  snapshot.project = {
+  if (errors.length) return committed
+  // The committed project, mapped onto the virtual root. External
+  // repositories are not read, so they are left out: no remote probes.
+  for (const dir of [resolved.configDir, resolved.workspaceRoot, resolved.repoOpsRoot]) reader.addDir(mirror(dir))
+  committed.project = {
     ...resolved,
     configPath: mirror(configPath),
     configDir: mirror(resolved.configDir),
@@ -949,7 +755,7 @@ function buildSnapshot(base, request) {
     repoAccessPath: policyFile,
     repos: managed.map((repo) => ({ ...repo, path: mirror(repo.path) })),
   }
-  return snapshot
+  return committed
 }
 
 // objectId must be one literal path from the Git repository root.
@@ -1070,7 +876,7 @@ function repositoryContext(value) {
 }
 
 // Check every mark in a built graph. `repositories` maps every configured repo
-// name to its context (from the committed snapshot) or to its directory;
+// name to its context (from the committed tree) or to its directory;
 // `expect` lists mark ids that must be present. Returns { ok, marks, errors,
 // warnings }; every mark record appears in `marks`, `refused` when it has any
 // error.
@@ -1435,81 +1241,36 @@ function checkRequest(input) {
   return { configPath, overrides: [...repoPaths].flatMap(([name, value]) => ['--repo-path', `${name}=${path.resolve(cwd, value)}`]), cwd, env }
 }
 
-// Every path the knowledge graph opens in the snapshot, by whatever rule it
-// derives it (a sidecar name, a manifest, a folder): recorded while the graph
-// is built from this synchronous call, so the walker's own rules are the ones
-// checked, never a copy of them.
-const TRACED_FS = ['existsSync', 'statSync', 'lstatSync', 'readFileSync', 'openSync', 'readdirSync', 'accessSync', 'realpathSync']
-function traceSnapshotOpens(tree, build) {
-  const opened = new Set()
-  const prefix = tree + path.sep
-  const note = (target) => {
-    const name = typeof target === 'string' ? target : Buffer.isBuffer(target) ? target.toString('utf8') : target instanceof URL ? target.pathname : null
-    if (name && (name === tree || name.startsWith(prefix))) opened.add(path.resolve(name))
-  }
-  const saved = Object.fromEntries(TRACED_FS.map((method) => [method, fs[method]]))
-  for (const method of TRACED_FS) {
-    const original = saved[method]
-    const traced = function (target, ...rest) {
-      note(target)
-      return original.call(this, target, ...rest)
-    }
-    if (typeof original.native === 'function') {
-      traced.native = function (target, ...rest) {
-        note(target)
-        return original.native.call(this, target, ...rest)
-      }
-    }
-    fs[method] = traced
-  }
-  try {
-    return { result: build(), opened }
-  } finally {
-    Object.assign(fs, saved)
-  }
-}
-
-// What the graph opened must be what the committed tree holds, exactly: a
-// committed path must be the file or folder written for it, and a name the
-// tree does not hold must be absent on this volume. Anything else means the
-// volume let one name stand for another, and the graph used it.
-function aliasedOpens(opened, holdings) {
-  const problems = []
-  for (const name of [...opened].sort()) {
-    const owner = holdings.filter(([mirror]) => inside(mirror, name)).sort((a, b) => b[0].length - a[0].length)[0]
-    if (!owner) continue
-    const [mirror, held] = owner
-    const rel = toPosix(path.relative(mirror, name))
-    const found = onVolume(held, mirror, rel)
-    if (found.kind === 'absent' || found.kind === 'exact') continue
-    problems.push(found.kind === 'alias'
-      ? `the knowledge graph opened ${rel}, which the committed tree does not hold under that name, and this filesystem gave it ${found.owner}; the check refuses rather than take graph facts from another file`
-      : `the knowledge graph opened ${rel}, which is not a file or folder the snapshot wrote for the committed tree; the check refuses rather than take graph facts from it`)
-  }
-  return problems
-}
-
-// Verify the project's marks against its committed tree: read the committed
-// config, stream the committed files into a private snapshot, build the graph
-// there, check, and remove the snapshot. `input` is a resolved project or the
-// command's { argv, cwd, env }.
-export function checkGraphmarks(input, options = {}) {
+// Build the knowledge graph of the committed tree from Git objects alone.
+// Returns { graph, committed, errors }; `graph` is null when the committed
+// tree could not be read or the graph build reached past what Git serves.
+export function buildCommittedGraph(input) {
   const request = checkRequest(input)
-  if (!request.configPath) {
-    return { ok: false, marks: [], errors: ['graphmark check needs a project config file (atelier.project.json) committed in a Git repository'], warnings: [] }
+  if (!request.configPath) return { graph: null, committed: null, errors: ['graphmark check needs a project config file (atelier.project.json) committed in a Git repository'], warnings: [] }
+  const committed = buildCommitted(request)
+  if (committed.errors.length) return { graph: null, committed, errors: committed.errors, warnings: committed.warnings }
+  let graph = null
+  let failure = null
+  try {
+    graph = withCommittedReader(committed.reader, () => buildGraph(committed.project))
+  } catch (error) {
+    failure = error
   }
-  return withPrivateSnapshot((base) => {
-    const snapshot = buildSnapshot(base, request)
-    if (snapshot.errors.length) return { ok: false, marks: [], errors: snapshot.errors, warnings: snapshot.warnings }
-    const { result: built, opened } = traceSnapshotOpens(snapshot.tree, () => hermeticGit(base, () => buildGraph(snapshot.project)))
-    const aliased = aliasedOpens(opened, snapshot.holdings)
-    const graph = aliased.length ? { ...built, errors: [...(built.errors ?? []), ...aliased] } : built
-    const report = checkGraphmarksInGraph(graph, snapshot.repositories, options)
-    return { ...report, warnings: [...snapshot.warnings, ...report.warnings] }
-  })
+  const errors = [...committed.reader.violations]
+  if (failure && !errors.length) errors.push(`the committed knowledge graph could not be built from Git objects: ${failure.message}`)
+  return { graph: errors.length ? null : graph, committed, errors, warnings: committed.warnings }
 }
 
-const USAGE = 'Usage: atelier graphmark check [--json] [--expect ID]... [--project PATH] [--repo-path NAME=PATH]...\n\nVerify every GraphMark record against the committed tree at HEAD: the atelier-graphmark@v1 contract, that the target lies in its own repository, that its full commit id holds the marked edition, that the selector names one part of it, and the audience. An uncommitted or edited mark record is refused. --expect fails the check when the mark with that kg id is missing; repeat it for several.\nWrites nothing outside a temporary snapshot, which it removes.'
+// Verify the project's marks against its committed tree, from Git objects
+// alone. `input` is a resolved project or the command's { argv, cwd, env }.
+export function checkGraphmarks(input, options = {}) {
+  const { graph, committed, errors, warnings } = buildCommittedGraph(input)
+  if (!graph) return { ok: false, marks: [], errors, warnings }
+  const report = checkGraphmarksInGraph(graph, committed.repositories, options)
+  return { ...report, warnings: [...warnings, ...report.warnings] }
+}
+
+const USAGE = 'Usage: atelier graphmark check [--json] [--expect ID]... [--project PATH] [--repo-path NAME=PATH]...\n\nVerify every GraphMark record against the committed tree at HEAD: the atelier-graphmark@v1 contract, that the target lies in its own repository, that its full commit id holds the marked edition, that the selector names one part of it, and the audience. An uncommitted or edited mark record is refused. --expect fails the check when the mark with that kg id is missing; repeat it for several.\nReads Git objects only; writes nothing.'
 
 export function runGraphmarkCommand(argv = process.argv.slice(2)) {
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -1563,7 +1324,5 @@ export function runGraphmarkCommand(argv = process.argv.slice(2)) {
     const count = (state) => report.marks.filter((mark) => mark.edition === state).length
     console.log(`graphmark: ${report.marks.length} marks · ${count('intact')} intact · ${count('changed')} changed · ${count('removed')} removed · ${count('refused')} refused · ${report.errors.length} errors`)
   }
-  // Leave through the event loop, so a signal received during the check is
-  // re-raised after the snapshot is gone.
   if (!report.ok) process.exitCode = 1
 }

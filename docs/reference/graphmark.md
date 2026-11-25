@@ -159,7 +159,12 @@ A passing check proves structure, not meaning.
 
 `atelier graphmark check [--json] [--expect ID]... [--project PATH]` (and the
 other [project options](project-options.md)) verifies what readers receive:
-the committed tree at `HEAD`.
+the committed tree at `HEAD`, read from Git objects alone. It makes no copy of
+the tree on any filesystem and writes nothing, so the host's case and
+normalisation rules, links and path grammar cannot change what it reads. It
+reads the working tree's bytes only through `git status` and, for Markdown
+that status reports as changed, that file's front matter, to tell a pending
+mark record (below).
 
 1. **The committed config.** It finds the Git repository that holds the
    project config and reads the config from its `HEAD` blob, so the config
@@ -170,43 +175,33 @@ the committed tree at `HEAD`.
    committed config. External repositories are dropped before resolution, so
    no sibling discovery or remote probe runs for them.
 2. **The committed read policy.** The repository access file the committed
-   config names is read from the committed tree of the project repository
-   that holds it. One outside every project repository is refused rather than
-   read from disk. One that is a link, a directory, too large or unreadable,
-   or that lies under a committed link, submodule or file, is refused rather
-   than replaced by defaults; only a file that is absent under plain
-   committed folders leaves the defaults. A committed access file is
+   config names is looked up in the committed tree of the project repository
+   that holds it, by its exact path. One outside every project repository is
+   refused rather than read from disk. One that is a link, a directory, too
+   large or unreadable, or that lies under a committed link, submodule or
+   file, is refused rather than replaced by defaults; only a file absent under
+   plain committed folders leaves the defaults. A committed access file is
    validated as written, before any defaults are filled in: it must use a
    supported format (`mnstry.atelier-repo-access@v1` or
    `mnstry.repo-access@v1`), name a valid default, and give every managed
-   repository a valid read boundary. The graph then reads the policy from a
-   file of the snapshot's own, outside the copied tree, holding exactly those
-   verified bytes, or from nowhere when the policy is absent. Before an absent
-   policy leaves the defaults, the check asks this volume whether it would
-   open a committed file under that name (laying down the committed names of
-   each folder on the way), and refuses if it would.
-3. **The committed files.** It streams the regular files committed under
-   each managed repository folder into a private snapshot, with bounded
-   memory and with no checkout (so no line-ending conversion or checkout
-   filter applies). Symbolic links and submodules are recorded and not
-   written. A path that is not valid UTF-8, a segment Git refuses, and the
-   same path twice are refused before anything is written. Names are kept as
-   Git's bytes, a leading U+FEFF included, and compared as bytes. Whether two
-   different names are one file is not modelled but asked of the volume the
-   snapshot is on, whatever its case and normalisation rules: every file is
-   created exclusively, so two committed names it holds as one file are
-   refused, naming both, and each committed file and folder is recorded by
-   the identity (device and inode) the volume gave it. A partial clone that lacks a file there is refused.
-4. **The committed graph.** It builds the knowledge graph from the snapshot,
-   with no repository discovery and no remote probes (external repositories
-   are not read), and records every path the graph opens there, by whatever
-   rule the graph derives it (a file's sidecar, a sidecar's source, a
-   folder's manifest, the folder itself). Each must be what the committed
-   tree holds: a committed path must open the very file written for it, and a
-   name the tree does not hold must be absent on this volume. Otherwise the
-   graph took its facts from another file, and every mark is refused. A
-   managed folder the tree does not hold is asked about the same way. Then it
-   checks every mark against the graph.
+   repository a valid read boundary. The graph receives exactly those
+   verified bytes, or no policy when it is absent.
+3. **The committed files.** It lists the regular files committed under each
+   managed repository folder by exact path. Symbolic links are listed and
+   never followed; submodules are not part of it. A path that is not valid
+   UTF-8, a segment Git refuses, the same path twice, and a name this host's
+   path rules would not keep as one literal path (on Windows, a `\` inside a
+   name) are refused. Names are Git's bytes, a leading U+FEFF included, and
+   are compared exactly: no case or Unicode folding. A partial clone that
+   lacks a file there is refused.
+4. **The committed graph.** It builds the knowledge graph with the graph's
+   own, unchanged code, which reads through an in-memory reader: every
+   filesystem call the graph makes on the committed tree is answered from Git
+   objects by exact path at the moment of the read, a sidecar belongs to its
+   source only when `<source>.kg.json` is committed under exactly that name,
+   and any other kind of filesystem call on the committed tree is refused, so
+   a later change to the graph cannot read past it. Then it checks every mark
+   against that graph.
 
 Then, for every Markdown node tagged `graphmark` other than a marks index
 (`kg.type: index`) without a `target`, it:
@@ -298,17 +293,9 @@ boolean parser, a `remote.<name>.partialclonefilter` or
 absent before reading anything). It runs Git without ambient `GIT_*`
 variables and ignores local replace refs. It still honours the repository's
 own trusted configuration: object alternates, includes, safe-directory
-ownership, and the clean filters `git status` may run. It writes nothing
-outside its snapshot, which it removes when it finishes, when it fails and,
-where the platform delivers them, on `SIGINT` or `SIGTERM` (re-raising the
-signal afterwards). A run killed outright, and on Windows any run that is
-terminated, leaves its snapshot: a directory named
-`atelier-graphmark-snapshot-<pid>-…` in the system temporary folder, holding
-an owner file with that process id and a random nonce. The next run removes
-it once that process is gone, touching only directories with that name and a
-matching owner file, and, where the platform has user ids, only those the
-same user owns; on Windows the system temporary folder is already per user. The graph itself
-already refuses a mark whose relations name nodes that do not exist.
+ownership, and the clean filters `git status` may run. It writes nothing.
+The graph itself already refuses a mark whose relations name nodes that do
+not exist.
 
 Not checked mechanically: that the reason is the marker's, that custody was
 settled before anything was written, that the boundary check ran on each
