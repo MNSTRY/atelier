@@ -6,9 +6,9 @@ import path from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import { buildGraph } from '../graph/graph.mjs'
-import { parseYamlSubset, splitFrontmatter } from '../graph/knowledge-graph.mjs'
+import { REPO_ACCESS_SCHEMA, parseYamlSubset, splitFrontmatter, validateRepoAccessConfig } from '../graph/knowledge-graph.mjs'
 import { parseProjectOptions, projectOptionAt } from '../cli/project-options.mjs'
-import { PROJECT_CONFIG_ENV, PROJECT_CONFIG_SCHEMA, resolveProjectConfig, validateProjectConfigDoc } from '../project/config.mjs'
+import { PROJECT_CONFIG_ENV, PROJECT_CONFIG_SCHEMA, isExternalRepo, resolveProjectConfig, validateProjectConfigDoc } from '../project/config.mjs'
 import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 
 // The MNSTRY GraphMark standard (docs/reference/graphmark.md): a mark points at
@@ -179,7 +179,8 @@ function treeEntries(output) {
     const pathBytes = Buffer.from(record.subarray(tab + 1))
     let decoded = null
     try {
-      decoded = new TextDecoder('utf-8', { fatal: true }).decode(pathBytes)
+      // ignoreBOM keeps a leading U+FEFF, which is part of the name.
+      decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(pathBytes)
     } catch {
       decoded = null
     }
@@ -198,12 +199,15 @@ function treeEntries(output) {
 // Whether `root` is a promisor (partial clone) repository, by Git's own
 // boolean parser: any true spelling Git accepts counts, and a setting Git
 // cannot parse counts too, so the check stays on the side that never fetches.
+// A remote with a partial-clone filter is a promisor too, as Git registers it.
 export function isPromisorRepository(root) {
   const flags = gitRun(root, ['config', '--type=bool', '--get-regexp', '^remote\\..*\\.promisor$'])
+  const filters = gitRun(root, ['config', '--get-regexp', '^remote\\..*\\.partialclonefilter$'])
   const extension = gitRun(root, ['config', '--get', 'extensions.partialclone'])
   const settled = (result) => result.status === 0 || result.status === 1
-  return !settled(flags) || !settled(extension) ||
+  return !settled(flags) || !settled(filters) || !settled(extension) ||
     (flags.status === 0 && flags.stdout.toString('utf8').split('\n').some((line) => / true$/.test(line))) ||
+    filters.status === 0 ||
     (extension.status === 0 && extension.stdout.toString('utf8').trim() !== '')
 }
 
@@ -226,16 +230,32 @@ function missingAt(root, commit) {
 }
 
 // What `commit` holds at exactly `objectPath`, as a kind: `file` (with its
-// bytes), `absent`, `symlink`, `directory`, `gitlink`, `too-large` (with its
-// size), `unavailable` (a partial clone lacks it) or `failed` (Git could not
-// say). Only `absent` means there is nothing there.
+// bytes), `absent`, `symlink`, `directory`, `gitlink`, `blocked` (a folder on
+// the way is a link, a submodule or a file), `too-large` (with its size),
+// `unavailable` (a partial clone lacks it) or `failed` (Git could not say).
+// Only `absent` means there is nothing there, and only when every folder on
+// the way is a plain tree. Paths are compared as bytes.
 function lookup(root, commit, objectPath, limit = MAX_OBJECT_BYTES) {
   const view = missingAt(root, commit)
   if (!view) return { kind: 'failed' }
   if (view.treesMissing) return { kind: 'unavailable' }
-  const listed = git(root, ['ls-tree', '-z', '--end-of-options', commit, '--', objectPath])
+  const segments = objectPath.split('/')
+  const ancestors = segments.slice(0, -1).map((_, index) => segments.slice(0, index + 1).join('/'))
+  // -t lists each folder on the way; naming each one lists what stands there.
+  const listed = git(root, ['ls-tree', '-t', '-z', '--end-of-options', commit, '--', ...ancestors, objectPath])
   if (listed === null) return { kind: 'failed' }
-  const entry = treeEntries(listed).find((item) => item.path === objectPath)
+  const entries = treeEntries(listed)
+  const at = (wanted) => {
+    const bytes = Buffer.from(wanted, 'utf8')
+    return entries.find((item) => item.pathBytes.equals(bytes))
+  }
+  for (const ancestor of ancestors) {
+    const folder = at(ancestor)
+    if (!folder) return { kind: 'absent' }
+    if (folder.type === 'tree' && folder.mode === '040000') continue
+    return { kind: 'blocked', at: ancestor, as: folder.mode === '120000' ? 'a symbolic link' : folder.mode === '160000' ? 'a submodule' : 'a file' }
+  }
+  const entry = at(objectPath)
   if (!entry) return { kind: 'absent' }
   if (entry.mode === '120000') return { kind: 'symlink' }
   if (entry.mode === '160000') return { kind: 'gitlink' }
@@ -254,6 +274,7 @@ const DESCRIBE_LOOKUP = {
   symlink: () => 'is a symbolic link',
   directory: () => 'is a directory',
   gitlink: () => 'is a submodule (gitlink)',
+  blocked: (found) => `lies under ${found.at}, which is ${found.as} in the committed tree, not a folder`,
   'too-large': (found) => `holds ${found.size} bytes, more than this check reads`,
   unavailable: () => 'names bytes that are not available in this clone (a partial clone is not fetched offline)',
   failed: () => 'could not be read from Git',
@@ -279,23 +300,40 @@ function workingStatus(root) {
       const kind = x === 'A' ? 'added' : x === 'D' || y === 'D' ? 'deleted' : 'modified'
       const index = x !== '.' && x !== 'D' && !NULL_OID.test(fields[7]) ? fields[7] : null
       changes.set(fields.slice(8).join(' '), { kind, xy: fields[1], index, working: x !== 'D' && y !== 'D' })
-    } else if (entry.startsWith('u ')) changes.set(entry.split(' ').slice(10).join(' '), { kind: 'unmerged', index: null, working: true })
+    } else if (entry.startsWith('u ')) {
+      // An unresolved conflict: each stage (base, ours, theirs) is a version.
+      const fields = entry.split(' ')
+      const stages = fields.slice(7, 10).filter((oid) => !NULL_OID.test(oid))
+      changes.set(fields.slice(10).join(' '), { kind: 'unmerged', index: null, stages, working: true })
+    }
   }
   return { available: true, changes }
 }
 
 // The start of a regular working-tree file inside `base`, never through a
-// symbolic link: { bytes, complete }, or null when it is not a regular file.
+// symbolic link: { bytes, complete }; { nonregular } for a link, a folder or
+// anything else that is known not to be a regular file; null when it cannot
+// be read (no permission, a failed read), which is never a known answer.
 function workingHead(base, file) {
+  let stat
   try {
-    if (!inside(fs.realpathSync(base), fs.realpathSync(file))) return null
-    const stat = fs.lstatSync(file)
-    if (!stat.isFile()) return null
+    stat = fs.lstatSync(file)
+  } catch (error) {
+    return error?.code === 'ENOENT' ? { nonregular: true } : null
+  }
+  if (!stat.isFile()) return { nonregular: true }
+  try {
+    if (!inside(fs.realpathSync(base), fs.realpathSync(file))) return { nonregular: true }
     const fd = fs.openSync(file, 'r')
     try {
       const buffer = Buffer.alloc(Math.min(stat.size, FRONT_MATTER_LIMIT))
-      const read = fs.readSync(fd, buffer, 0, buffer.length, 0)
-      return { bytes: buffer.subarray(0, read), complete: stat.size <= FRONT_MATTER_LIMIT }
+      let read = 0
+      while (read < buffer.length) {
+        const got = fs.readSync(fd, buffer, read, buffer.length - read, read)
+        if (got <= 0) break
+        read += got
+      }
+      return { bytes: buffer.subarray(0, read), complete: stat.size <= FRONT_MATTER_LIMIT && read === stat.size }
     } finally {
       fs.closeSync(fd)
     }
@@ -315,8 +353,9 @@ function blobHead(root, oid) {
 // What one version of a Markdown file is, by its front matter: a mark record,
 // a marks index, something else, or indeterminate (unreadable, or front
 // matter that does not end within the limit).
-function classifyMarkdown(head, unreadable = 'indeterminate') {
-  if (!head) return unreadable
+function classifyMarkdown(head) {
+  if (!head) return 'indeterminate'
+  if (head.nonregular) return 'other'
   const text = head.bytes.toString('utf8')
   const split = splitFrontmatter(text)
   if (!split) return !head.complete && /^---\r?\n/.test(text) ? 'indeterminate' : 'other'
@@ -360,6 +399,8 @@ export function withPrivateSnapshot(body) {
   try {
     base = fs.mkdtempSync(path.join(os.tmpdir(), `${SNAPSHOT_PREFIX}${process.pid}-`))
     activeSnapshots.add(base)
+    // Who made it, so a later run can tell an abandoned snapshot from a live one.
+    fs.writeFileSync(path.join(base, SNAPSHOT_OWNER_FILE), `${JSON.stringify({ pid: process.pid, nonce: crypto.randomBytes(16).toString('hex'), created: new Date().toISOString() })}\n`, { flag: 'wx', mode: 0o600 })
     return body(base)
   } finally {
     if (base) {
@@ -375,23 +416,36 @@ export function withPrivateSnapshot(body) {
   }
 }
 
-export function reclaimAbandonedSnapshots(dir = os.tmpdir()) {
-  const uid = typeof process.getuid === 'function' ? process.getuid() : null
-  if (uid === null) return
+export const SNAPSHOT_OWNER_FILE = 'owner.json'
+
+// Remove snapshots a killed run left behind in `dir`: only directories with
+// this prefix (never links), whose owner file names the same process id as
+// the directory name, and only once that process is gone. Where the platform
+// has user ids, the directory must belong to this user too; where it has none
+// (Windows), the system temporary folder is already per user. A directory
+// without a readable owner file is left alone.
+export function reclaimAbandonedSnapshots(dir = os.tmpdir(), { uid = typeof process.getuid === 'function' ? process.getuid() : null } = {}) {
   let names = []
   try {
     names = fs.readdirSync(dir)
   } catch {
     return
   }
+  const pattern = new RegExp(`^${SNAPSHOT_PREFIX}([0-9]+)-[A-Za-z0-9]+$`)
   for (const name of names) {
-    const match = new RegExp(`^${SNAPSHOT_PREFIX}([0-9]+)-[A-Za-z0-9]+$`).exec(name)
+    const match = pattern.exec(name)
     if (!match || Number(match[1]) === process.pid) continue
     const full = path.join(dir, name)
     try {
       const stat = fs.lstatSync(full)
-      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid) continue
-      process.kill(Number(match[1]), 0)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue
+      if (uid !== null && stat.uid !== uid) continue
+      const ownerFile = path.join(full, SNAPSHOT_OWNER_FILE)
+      const ownerStat = fs.lstatSync(ownerFile)
+      if (!ownerStat.isFile() || ownerStat.size > 4096) continue
+      const owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'))
+      if (!Number.isInteger(owner?.pid) || owner.pid !== Number(match[1]) || typeof owner.nonce !== 'string') continue
+      process.kill(owner.pid, 0)
     } catch (error) {
       if (error?.code === 'ESRCH') fs.rmSync(full, { recursive: true, force: true })
     }
@@ -478,7 +532,12 @@ function streamBlobs(root, items, destination, base, recorded) {
         for (let remaining = Number(sizeText); remaining > 0;) {
           const read = fs.readSync(reader, chunk, 0, Math.min(chunk.length, remaining), offset)
           if (read <= 0) throw new Error(`the batch for ${item.path} ended early`)
-          fs.writeSync(target, chunk, 0, read)
+          // A write may take fewer bytes than offered; finish the chunk.
+          for (let written = 0; written < read;) {
+            const took = fs.writeSync(target, chunk, written, read - written)
+            if (!(took > 0)) throw new Error(`writing ${item.path} into the snapshot stopped short`)
+            written += took
+          }
           offset += read
           remaining -= read
         }
@@ -545,6 +604,25 @@ function hermeticGit(ceiling, build) {
   }
 }
 
+// The repository access formats Atelier writes (`atelier init` and setup) and
+// reads (the knowledge graph).
+const ACCESS_SCHEMAS = new Set(['mnstry.atelier-repo-access@v1', REPO_ACCESS_SCHEMA])
+
+function accessPolicyProblems(bytes, managedNames, externalNames, label) {
+  let doc
+  try {
+    doc = JSON.parse(bytes.toString('utf8'))
+  } catch {
+    return [`${label}: the committed repository access file is not valid JSON`]
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return [`${label}: the committed repository access file is not a JSON object`]
+  const problems = []
+  if (!ACCESS_SCHEMAS.has(doc.schema)) problems.push(`${label}: schema must be one of ${[...ACCESS_SCHEMAS].join(', ')}`)
+  const shaped = { ...doc, schema: REPO_ACCESS_SCHEMA }
+  for (const problem of validateRepoAccessConfig(shaped, managedNames, { configPath: label, externalRepos: externalNames })) problems.push(problem)
+  return problems.map((problem) => `${problem} (in the committed repository access file); the check does not fill in defaults`)
+}
+
 // The committed project, verified from Git:
 // 1. find the config's repository and read the config from its HEAD blob (it
 //    need not be checked out, and an unfinished edit does not matter);
@@ -601,12 +679,16 @@ function buildSnapshot(base, request) {
   const configChange = configOwner.status.changes.get(configRel)
   if (configChange) warnings.push(`${configRel}: has uncommitted changes (${configChange.kind}), which this check does not use; it reads the project config committed at HEAD`)
 
-  // 2. Locations for this checkout.
+  // 2. Locations for this checkout. External repositories are not read, so
+  // they are dropped before resolution: no sibling discovery or remote probe
+  // runs for them.
   const env = { ...request.env }
   delete env[PROJECT_CONFIG_ENV]
+  const declared = Array.isArray(document.repos) ? document.repos : []
+  const externalNames = declared.filter((repo) => isExternalRepo(repo)).map((repo) => repo.name).filter(Boolean)
   let resolved
   try {
-    resolved = resolveProjectConfig({ argv: ['--project', configPath, ...request.overrides], cwd: request.cwd, env, configDocument: document, writeLocalState: false })
+    resolved = resolveProjectConfig({ argv: ['--project', configPath, ...request.overrides], cwd: request.cwd, env, configDocument: { ...document, repos: declared.filter((repo) => !isExternalRepo(repo)) }, writeLocalState: false })
   } catch (error) {
     errors.push(`the project config committed at HEAD cannot be resolved here: ${error.message}`)
     return snapshot
@@ -633,8 +715,14 @@ function buildSnapshot(base, request) {
   }
   const accessRel = toPosix(path.relative(accessOwner.root, accessPath))
   const committedAccess = lookup(accessOwner.root, accessOwner.head.commit, accessRel)
-  if (committedAccess.kind === 'file') accessOwner.extra.push({ rel: accessRel, bytes: committedAccess.bytes })
-  else if (committedAccess.kind !== 'absent') {
+  if (committedAccess.kind === 'file') {
+    // Validate the committed policy as written, before any loader fills in
+    // defaults: a supported format, and a read boundary for every managed
+    // repository.
+    for (const problem of accessPolicyProblems(committedAccess.bytes, managed.map((repo) => repo.name), externalNames, accessRel)) errors.push(problem)
+    if (errors.length) return snapshot
+    accessOwner.extra.push({ rel: accessRel, bytes: committedAccess.bytes })
+  } else if (committedAccess.kind !== 'absent') {
     errors.push(`${accessRel}: the committed repository access file ${describeLookup(committedAccess)}; the check does not fall back to defaults`)
     return snapshot
   }
@@ -828,10 +916,14 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
     if (!context?.root || !context.head) return { kind: 'failed' }
     return lookup(context.root, context.head.commit, fromRoot(context, path.join(context.folder, node.path)))
   }
+  // Exempt only an index whose committed record was read and has no target;
+  // one that cannot be read is inspected, and its read failure reported.
   const isIndexWithoutTarget = (node) => {
     if (node.type !== 'index') return false
     const found = committedRecord(node)
-    return found.kind !== 'file' || readMarkRecord(found.bytes.toString('utf8'))?.target === undefined
+    if (found.kind !== 'file') return false
+    const record = readMarkRecord(found.bytes.toString('utf8'))
+    return Boolean(record) && record.target === undefined
   }
   // Every Markdown node tagged graphmark is a mark record, except a marks index
   // (kg type index) that carries no target.
@@ -865,7 +957,8 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
       if (headKind === 'mark') continue // a committed record: inspected with the marks
       const versions = []
       if (change.index) versions.push(['index', classifyMarkdown(blobHead(context.root, change.index))])
-      if (change.working) versions.push(['working tree', classifyMarkdown(workingHead(context.root, file), 'other')])
+      for (const stage of change.stages ?? []) versions.push(['index (an unresolved conflict)', classifyMarkdown(blobHead(context.root, stage))])
+      if (change.working) versions.push(['working tree', classifyMarkdown(workingHead(context.root, file))])
       if (headKind === 'indeterminate') versions.push(['committed tree', 'indeterminate'])
       const where = `${name}/${toPosix(path.relative(context.realFolder, file))}`
       const of = (kind) => versions.filter(([, found]) => found === kind).map(([place]) => place).join(' and ')

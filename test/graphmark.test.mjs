@@ -9,7 +9,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
 import { REPO_ACCESS_SCHEMA, buildKnowledgeGraph } from '../src/graph/knowledge-graph.mjs'
-import { SNAPSHOT_PREFIX, checkGraphmarks, isPromisorRepository, readMarkRecord, reclaimAbandonedSnapshots, validateMarkRecord, withPrivateSnapshot } from '../src/graphmark/graphmark.mjs'
+import { SNAPSHOT_OWNER_FILE, SNAPSHOT_PREFIX, checkGraphmarks, isPromisorRepository, readMarkRecord, reclaimAbandonedSnapshots, validateMarkRecord, withPrivateSnapshot } from '../src/graphmark/graphmark.mjs'
 import { commandProject } from '../src/project/config.mjs'
 
 // The MNSTRY GraphMark standard (docs/reference/graphmark.md). A mark is a
@@ -208,6 +208,14 @@ function checkProject(dir, options) {
   return checkGraphmarks(commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false }), options)
 }
 
+// The bytes Git holds for a path at a revision: what the check verifies, which
+// on a host that converts line endings is not what the working file holds.
+function committedBytes(dir, objectId, revision = 'HEAD') {
+  const result = spawnSync('git', ['cat-file', 'blob', `${revision}:${objectId}`], { cwd: dir, maxBuffer: 256 * 1024 * 1024 })
+  assert.equal(result.status, 0, String(result.stderr))
+  return result.stdout
+}
+
 // Point a mark at a committed file: its path from the repository root, the
 // digest of its committed bytes and the commit at HEAD.
 function retarget(dir, name, objectId, extra = (text) => text) {
@@ -215,7 +223,21 @@ function retarget(dir, name, objectId, extra = (text) => text) {
   editMark(dir, name, (text) => extra(text
     .replace(/objectId: ".*"/, `objectId: "${objectId}"`)
     .replace(/revision: ".*"/, `revision: "${head}"`)
-    .replace(/contentDigest: ".*"/, `contentDigest: "${digest(fs.readFileSync(path.join(dir, objectId)))}"`)))
+    .replace(/contentDigest: ".*"/, `contentDigest: "${digest(committedBytes(dir, objectId))}"`)))
+}
+
+// Add a file to the index and commit it through Git's own objects, so the
+// tree holds exactly these names whatever the host filesystem would merge.
+function commitObjects(dir, entries, message) {
+  const lines = []
+  for (const { path: name, content = '', mode = '100644' } of entries) {
+    const hashed = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: dir, input: content })
+    assert.equal(hashed.status, 0, String(hashed.stderr))
+    lines.push(Buffer.concat([Buffer.from(`${mode} ${String(hashed.stdout).trim()}\t`), Buffer.isBuffer(name) ? name : Buffer.from(name), Buffer.from([0])]))
+  }
+  const updated = spawnSync('git', ['update-index', '-z', '--add', '--index-info'], { cwd: dir, input: Buffer.concat(lines) })
+  assert.equal(updated.status, 0, String(updated.stderr))
+  git(dir, ['commit', '-qm', message])
 }
 
 const markOf = (report, suffix) => report.marks.find((mark) => mark.id.endsWith(suffix))
@@ -1113,7 +1135,7 @@ test('the committed config is read from HEAD: a sparse checkout or an unfinished
   assert.ok(has(unfinished.warnings, 'atelier.project.json: has uncommitted changes'), unfinished.warnings.join('\n'))
 })
 
-test('the snapshot is removed when its work throws or the process is signalled, and abandoned ones are reclaimed', async () => {
+test('the snapshot is removed when its work throws', () => {
   let seen = null
   assert.throws(() => withPrivateSnapshot((base) => {
     seen = base
@@ -1121,7 +1143,9 @@ test('the snapshot is removed when its work throws or the process is signalled, 
     throw new Error('construction failed')
   }), /construction failed/)
   assert.equal(fs.existsSync(seen), false)
+})
 
+test('the snapshot is removed when the process is signalled, and the signal still ends it', { skip: process.platform === 'win32' && 'Windows has no catchable SIGTERM; abandoned snapshots are reclaimed instead' }, async () => {
   const child = spawn(process.execPath, ['--input-type=module', '-e', `import { withPrivateSnapshot } from ${JSON.stringify(moduleUrl)}
 withPrivateSnapshot((base) => { console.log(base); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000) })`], { stdio: ['ignore', 'pipe', 'inherit'] })
   const base = await new Promise((resolve) => child.stdout.once('data', (data) => resolve(data.toString().trim())))
@@ -1130,18 +1154,37 @@ withPrivateSnapshot((base) => { console.log(base); Atomics.wait(new Int32Array(n
   const [, signal] = await once(child, 'exit')
   assert.equal(signal, 'SIGTERM')
   assert.equal(fs.existsSync(base), false, 'the snapshot was removed before the signal ended the process')
+})
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-reclaim-'))
+test('abandoned snapshots are reclaimed only when their owner file names a process that is gone', () => {
   const dead = spawnSync(process.execPath, ['-e', '']).pid
   const sleeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'])
+  const owner = (pid) => `${JSON.stringify({ pid, nonce: 'f'.repeat(32), created: '2026-01-01T00:00:00.000Z' })}\n`
   try {
-    for (const name of [`${SNAPSHOT_PREFIX}${dead}-AbC123`, `${SNAPSHOT_PREFIX}${sleeper.pid}-AbC123`, `other-${dead}-AbC123`]) fs.mkdirSync(path.join(tmp, name))
-    fs.symlinkSync(tmp, path.join(tmp, `${SNAPSHOT_PREFIX}${dead}-LiNk00`))
-    reclaimAbandonedSnapshots(tmp)
-    assert.deepEqual(fs.readdirSync(tmp).sort(), [`${SNAPSHOT_PREFIX}${dead}-LiNk00`, `${SNAPSHOT_PREFIX}${sleeper.pid}-AbC123`, `other-${dead}-AbC123`].sort())
+    // With user ids (POSIX) and without them (as on Windows).
+    for (const uid of [typeof process.getuid === 'function' ? process.getuid() : null, null]) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-reclaim-'))
+      const make = (name, contents) => {
+        fs.mkdirSync(path.join(tmp, name))
+        if (contents !== undefined) fs.writeFileSync(path.join(tmp, name, SNAPSHOT_OWNER_FILE), contents)
+      }
+      make(`${SNAPSHOT_PREFIX}${dead}-AbC123`, owner(dead))
+      make(`${SNAPSHOT_PREFIX}${sleeper.pid}-AbC123`, owner(sleeper.pid))
+      make(`${SNAPSHOT_PREFIX}${dead}-NoOwnr`)
+      make(`${SNAPSHOT_PREFIX}${dead}-Mismch`, owner(sleeper.pid))
+      make(`other-${dead}-AbC123`, owner(dead))
+      reclaimAbandonedSnapshots(tmp, { uid })
+      assert.deepEqual(fs.readdirSync(tmp).sort(), [`${SNAPSHOT_PREFIX}${dead}-Mismch`, `${SNAPSHOT_PREFIX}${dead}-NoOwnr`, `${SNAPSHOT_PREFIX}${sleeper.pid}-AbC123`, `other-${dead}-AbC123`].sort(), `uid ${uid}`)
+    }
   } finally {
     sleeper.kill()
   }
+  // A real snapshot carries its owner file.
+  withPrivateSnapshot((base) => {
+    const recorded = JSON.parse(fs.readFileSync(path.join(base, SNAPSHOT_OWNER_FILE), 'utf8'))
+    assert.equal(recorded.pid, process.pid)
+    assert.match(recorded.nonce, /^[0-9a-f]{32}$/)
+  })
 })
 
 test('promisor settings are read with Git\'s boolean parser', () => {
@@ -1180,22 +1223,13 @@ test('a promisor remote spelled with another true value still keeps the check fr
 
 test('paths a checkout could not hold faithfully are refused before anything is written', () => {
   const cases = [
-    ['a case-insensitive collision', (dir) => {
-      fs.writeFileSync(path.join(dir, 'content', 'notes', 'Parts.md'), '# Parts\n')
-      fs.writeFileSync(path.join(dir, 'content', 'notes', 'parts.md'), '# parts\n')
-    }, 'name one file on a case-insensitive or Unicode-normalising filesystem'],
-    ['a normalisation collision', (dir) => {
-      fs.writeFileSync(path.join(dir, 'content', 'notes', 'café.md'), '# NFC\n')
-      fs.writeFileSync(path.join(dir, 'content', 'notes', 'café.md'), '# NFD\n')
-    }, 'name one file on a case-insensitive or Unicode-normalising filesystem'],
-    ['a name that is not UTF-8', (dir) => {
-      fs.writeFileSync(Buffer.concat([Buffer.from(path.join(dir, 'content', 'notes', 'caf')), Buffer.from([0xe9]), Buffer.from('.txt')]), 'latin-1 name\n')
-    }, 'a path that is not valid UTF-8'],
+    ['a case-insensitive collision', [{ path: 'content/notes/Parts.md', content: '# Parts\n' }, { path: 'content/notes/parts.md', content: '# parts\n' }], 'name one file on a case-insensitive or Unicode-normalising filesystem'],
+    ['a normalisation collision', [{ path: 'content/notes/caf\u00e9.md', content: '# NFC\n' }, { path: 'content/notes/cafe\u0301.md', content: '# NFD\n' }], 'name one file on a case-insensitive or Unicode-normalising filesystem'],
+    ['a name that is not UTF-8', [{ path: Buffer.concat([Buffer.from('content/notes/caf'), Buffer.from([0xe9]), Buffer.from('.txt')]), content: 'latin-1 name\n' }], 'a path that is not valid UTF-8'],
   ]
-  for (const [label, make, message] of cases) {
+  for (const [label, entries, message] of cases) {
     const { dir } = pinnedProject()
-    make(dir)
-    commitAll(dir, label)
+    commitObjects(dir, entries, label)
     const report = checkProject(dir)
     assert.equal(report.ok, false, label)
     assert.ok(has(report.errors, 'cannot be written faithfully', message), `${label}: ${report.errors.join('\n')}`)
@@ -1280,4 +1314,136 @@ test('an audience declared with a value that is not a name is an error, not priv
   assert.equal(report.ok, false)
   assert.ok(has(report.errors, DRAWING, 'declares an audience that is not a name (3)'), report.errors.join('\n'))
   assert.ok(has(report.errors, WHEEL, 'declares an audience that is not a name'), report.errors.join('\n'))
+})
+
+// Findings from the confirmation review of d4fa5ba.
+
+test('a policy path under a committed link, submodule or file is refused, not treated as absent', () => {
+  for (const [label, entry] of [['a symbolic link', { mode: '120000', content: 'elsewhere' }], ['a file', { mode: '100644', content: 'not a folder\n' }]]) {
+    const { dir } = pinnedProject()
+    editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'policy/repo-access.v1.json' })
+    commitAll(dir, 'the policy lives under policy/')
+    commitObjects(dir, [{ path: 'policy', ...entry }], `policy is ${label}`)
+    const report = checkProject(dir)
+    assert.equal(report.ok, false, label)
+    assert.ok(has(report.errors, 'policy/repo-access.v1.json', `lies under policy, which is ${label}`, 'does not fall back to defaults'), `${label}: ${report.errors.join('\n')}`)
+  }
+  // Under plain folders, a missing file is truly absent and the defaults apply.
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'content/notes/no-such-policy.json' })
+  commitAll(dir, 'a policy file that does not exist')
+  assert.equal(checkProject(dir).ok, true)
+})
+
+test('a committed access file is validated as written, before any defaults are filled in', () => {
+  const cases = [
+    ['repos that are not an object', (doc) => { doc.repos = 'content' }, 'repos must be an object'],
+    ['a managed repository without a read boundary', (doc) => { doc.repos = {} }, 'repos.content must declare readBoundary'],
+    ['an unknown read boundary', (doc) => { doc.repos.content.readBoundary = 'everyone' }, 'repos.content.readBoundary must be a valid'],
+    ['an unsupported format', (doc) => { doc.schema = 'mnstry.repo-access@v9' }, 'schema must be one of'],
+  ]
+  for (const [label, edit, message] of cases) {
+    const { dir } = pinnedProject()
+    editJson(path.join(dir, 'repo-access.v1.json'), edit)
+    commitAll(dir, label)
+    const report = checkProject(dir)
+    assert.equal(report.ok, false, label)
+    assert.ok(has(report.errors, 'repo-access.v1.json', message, 'does not fill in defaults'), `${label}: ${report.errors.join('\n')}`)
+  }
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'repo-access.v1.json'), (doc) => { doc.schema = 'mnstry.repo-access@v1' })
+  commitAll(dir, 'the other supported format')
+  assert.equal(checkProject(dir).ok, true)
+})
+
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
+test('a pending Markdown file the check cannot read makes the result indeterminate', { skip: (process.platform === 'win32' || isRoot) && 'needs POSIX permissions that bind this user' }, () => {
+  const { dir } = pinnedProject()
+  const unreadable = path.join(dir, 'content', 'notes', 'closed.md')
+  fs.writeFileSync(unreadable, '---\ntitle: "Closed"\n---\n# Closed\n')
+  fs.chmodSync(unreadable, 0o000)
+  try {
+    const report = checkProject(dir)
+    assert.equal(report.ok, false)
+    assert.ok(has(report.errors, 'notes/closed.md: cannot tell whether the version in the working tree is a mark record', 'indeterminate'), report.errors.join('\n'))
+  } finally {
+    fs.chmodSync(unreadable, 0o644)
+  }
+})
+
+test('an unresolved conflict is classified by each of its index stages', () => {
+  const { dir } = pinnedProject()
+  const note = path.join(dir, 'content', 'notes', 'wheel-checks.md')
+  const base = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  git(dir, ['checkout', '-q', '-b', 'other'])
+  fs.writeFileSync(note, fs.readFileSync(note, 'utf8').replace('tags: [repair, wheels]', 'tags: [repair, wheels, graphmark]'))
+  commitAll(dir, 'the other side makes it a mark')
+  git(dir, ['checkout', '-q', base])
+  fs.writeFileSync(note, fs.readFileSync(note, 'utf8').replace('tags: [repair, wheels]', 'tags: [repair, wheels, brakes]'))
+  commitAll(dir, 'this side tags it otherwise')
+  const merge = spawnSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'merge', '-q', 'other'], { cwd: dir, encoding: 'utf8' })
+  assert.notEqual(merge.status, 0, 'the merge conflicts')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, 'notes/wheel-checks.md: the mark record is not committed at HEAD (it is in the index (an unresolved conflict)'), report.errors.join('\n'))
+})
+
+test('a Git name that begins with U+FEFF keeps its identity', () => {
+  const { dir } = pinnedProject()
+  const name = '﻿top.txt'
+  commitObjects(dir, [{ path: name, content: 'a name that starts with a byte order mark\n' }], 'a top-level name with U+FEFF')
+  retarget(dir, DRAWING, name)
+  git(dir, ['commit', '-qm', 'mark it', '--', markPath(dir, DRAWING)])
+  const report = checkProject(dir)
+  assert.equal(markOf(report, 'spoke-tension-drawing').edition, 'intact', report.errors.join('\n'))
+})
+
+test('a remote with a partial-clone filter is a promisor', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-promisor-'))
+  git(dir, ['init', '-q'])
+  assert.equal(isPromisorRepository(dir), false)
+  git(dir, ['config', 'remote.origin.partialclonefilter', 'blob:none'])
+  assert.equal(isPromisorRepository(dir), true)
+})
+
+test('a tagged index the check cannot read is inspected and refused, not skipped', () => {
+  const { dir } = pinnedProject()
+  const index = path.join(dir, 'content', 'marks', 'README.md')
+  fs.appendFileSync(index, `\n${'An index line that will not be read in full.\n'.repeat(1600000)}`)
+  commitAll(dir, 'an index past what the check reads')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, 'content/marks/README.md: the committed mark record holds', 'more than this check reads'), report.errors.join('\n'))
+})
+
+test('the snapshot is complete even when the filesystem takes short writes', () => {
+  const { dir } = pinnedProject()
+  const original = fs.writeSync
+  fs.writeSync = (fd, buffer, offset, length, position) => original(fd, buffer, offset, Math.min(length ?? buffer.length, 7), position)
+  let report
+  try {
+    report = checkProject(dir)
+  } finally {
+    fs.writeSync = original
+  }
+  assert.equal(report.ok, true, report.errors.join('\n'))
+  assert.deepEqual(report.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+})
+
+test('external repositories are never probed while the committed project is resolved', { skip: process.platform === 'win32' && 'uses a POSIX shell wrapper to trace Git' }, () => {
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.repos.push({ name: 'vendor', kind: 'external', remote: 'https://example.invalid/vendor.git' }) })
+  commitAll(dir, 'an external repository')
+  const vendor = path.join(dir, 'vendor')
+  fs.mkdirSync(vendor)
+  git(vendor, ['init', '-q'])
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim()
+  const wrapper = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-trace-'))
+  const log = path.join(wrapper, 'calls.log')
+  fs.writeFileSync(path.join(wrapper, 'git'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexec ${JSON.stringify(realGit)} "$@"\n`, { mode: 0o755 })
+  const run = spawnSync(process.execPath, [binary, 'graphmark', 'check'], { cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${wrapper}${path.delimiter}${process.env.PATH}` } })
+  assert.equal(run.status, 0, run.stderr)
+  const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''
+  assert.ok(calls.length > 0, 'the wrapper traced the check')
+  assert.equal(calls.split('\n').filter((line) => line.includes('remote get-url')).length, 0, calls)
 })

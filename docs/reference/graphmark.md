@@ -167,13 +167,19 @@ the committed tree at `HEAD`.
    does not matter. The config is resolved against this checkout only for
    locations: tracked paths, `--repo-path`, a local overlay or sibling
    discovery tell it where each repository is; its policy comes from the
-   committed config.
+   committed config. External repositories are dropped before resolution, so
+   no sibling discovery or remote probe runs for them.
 2. **The committed read policy.** The repository access file the committed
    config names is read from the committed tree of the project repository
    that holds it. One outside every project repository is refused rather than
-   read from disk. One that is a link, a directory, too large or unreadable
-   is refused rather than replaced by defaults; only a file that is truly
-   absent at `HEAD` leaves the defaults.
+   read from disk. One that is a link, a directory, too large or unreadable,
+   or that lies under a committed link, submodule or file, is refused rather
+   than replaced by defaults; only a file that is absent under plain
+   committed folders leaves the defaults. A committed access file is
+   validated as written, before any defaults are filled in: it must use a
+   supported format (`mnstry.atelier-repo-access@v1` or
+   `mnstry.repo-access@v1`), name a valid default, and give every managed
+   repository a valid read boundary.
 3. **The committed files.** It streams the regular files committed under
    each managed repository folder into a private snapshot, with bounded
    memory and with no checkout (so no line-ending conversion or checkout
@@ -181,7 +187,8 @@ the committed tree at `HEAD`.
    written. A tree that a checkout could not hold faithfully is refused before
    anything is written: a path that is not valid UTF-8, the same path twice,
    or two paths one case-insensitive or Unicode-normalising filesystem would
-   merge. A partial clone that lacks a file there is refused.
+   merge. Names are kept as Git's bytes, a leading U+FEFF included, and
+   compared as bytes. A partial clone that lacks a file there is refused.
 4. **The committed graph.** It builds the knowledge graph from the snapshot,
    with no repository discovery and no remote probes (external repositories
    are not read), and checks every mark against it.
@@ -220,10 +227,13 @@ Then, for every Markdown node tagged `graphmark` other than a marks index
   `git -C <repository> --no-replace-objects cat-file blob <commit>:<path>`
   (also given as an argument list in `--json`), and warns when a marked quote
   has left the current file. Git's answer for a path is one of: a file,
-  absent, a symbolic link, a directory, a submodule, too large (over 64 MiB),
-  not available in this clone, or a failed lookup. Only absence at `HEAD` is
-  `removed`; every other answer refuses the mark, since its currency and
-  current audience cannot be checked;
+  absent, a symbolic link, a directory, a submodule, under a link, submodule
+  or file, too large (over 64 MiB), not available in this clone, or a failed
+  lookup. Only absence under plain folders at `HEAD` is `removed`; every
+  other answer refuses the mark, since its currency and current audience
+  cannot be checked. A tagged marks index is exempt only once its committed
+  record has been read and has no `target`; one that cannot be read is
+  refused;
 - refuses a mark whose audience is wider than any of: the audience its marked
   edition declares at the pinned commit (Markdown front matter, where
   undeclared Markdown counts as `private` as the graph treats it, or the
@@ -238,7 +248,8 @@ Then, for every Markdown node tagged `graphmark` other than a marks index
 
 It also reads the working tree, only through `git status` and the front
 matter of changed Markdown in the managed folders, classifying each changed
-file's index version and working copy:
+file's index version, each stage of an unresolved conflict, and its working
+copy:
 
 - a pending mark record (new, staged, staged and then deleted, or a tracked
   file turned into a mark) is refused;
@@ -248,9 +259,10 @@ file's index version and working copy:
   sidecar, the files behind its `evidences` nodes and its marks index) or to
   the project config or the effective access file are reported as warnings,
   naming the committed path;
-- a file whose front matter cannot be read or does not end within 256 KiB,
-  and a `git status` that fails, make the result indeterminate: an error,
-  never a success.
+- a file whose front matter cannot be read (no permission, a failed read) or
+  does not end within 256 KiB, and a `git status` that fails, make the result
+  indeterminate: an error, never a success. A link or a folder in the working
+  tree is known not to be a mark record.
 
 Every mark record the committed graph holds appears in the summary and in the
 `--json` `marks` list; one with any error has the state `refused`, whatever
@@ -262,17 +274,23 @@ be read, the tree cannot be written faithfully, `git status` fails), the check
 lists no marks and reports why.
 
 It is offline: it never fetches a missing object (it sets
-`GIT_NO_LAZY_FETCH`, and in a promisor repository, recognised by Git's own
-boolean reading of its settings, it asks `git rev-list --missing=print` what
-is absent before reading anything). It runs Git without ambient `GIT_*`
+`GIT_NO_LAZY_FETCH`, and in a promisor repository, recognised as Git
+recognises one, by a true `remote.<name>.promisor` read with Git's own
+boolean parser, a `remote.<name>.partialclonefilter` or
+`extensions.partialClone`, it asks `git rev-list --missing=print` what is
+absent before reading anything). It runs Git without ambient `GIT_*`
 variables and ignores local replace refs. It still honours the repository's
 own trusted configuration: object alternates, includes, safe-directory
 ownership, and the clean filters `git status` may run. It writes nothing
-outside its snapshot, which it removes when it finishes, when it fails and on
-`SIGINT` or `SIGTERM` (re-raising the signal afterwards). A run killed outright
-leaves its snapshot, named `atelier-graphmark-snapshot-<pid>-…` in the system
-temporary folder; the next run removes it once that process is gone, touching
-only directories with that name that the same user owns. The graph itself
+outside its snapshot, which it removes when it finishes, when it fails and,
+where the platform delivers them, on `SIGINT` or `SIGTERM` (re-raising the
+signal afterwards). A run killed outright, and on Windows any run that is
+terminated, leaves its snapshot: a directory named
+`atelier-graphmark-snapshot-<pid>-…` in the system temporary folder, holding
+an owner file with that process id and a random nonce. The next run removes
+it once that process is gone, touching only directories with that name and a
+matching owner file, and, where the platform has user ids, only those the
+same user owns; on Windows the system temporary folder is already per user. The graph itself
 already refuses a mark whose relations name nodes that do not exist.
 
 Not checked mechanically: that the reason is the marker's, that custody was
