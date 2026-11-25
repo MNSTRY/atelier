@@ -155,9 +155,9 @@ atelier graphmark check --project ./atelier.project.json
 ```
 
 The graph builds with no diagnostics, and the check reports three marks, all
-intact. Their `revision` is the placeholder `example`, so the check also says
-each edition is held at `HEAD`; set each `revision` to your commit and the
-warnings go. Commit a change to the note and the check reports the wheel
+intact. Their `revision` is the placeholder `example` and their state
+`recorded`, so the check also says each edition is held at `HEAD`; set each
+`revision` to your full commit id and the warnings go. Commit a change to the note and the check reports the wheel
 checks mark as changed, with the command that returns the marked edition.
 Widen that mark's audience to `public` and the check refuses it. Point a
 mark's `evidences` at an id that does not exist and the build is refused
@@ -172,15 +172,17 @@ longer resolves.
   skipped by the census without an error, so a mark can seem written and still
   be absent. Commit or stage the record, rebuild, and confirm its id is in the
   built graph.
-- `atelier graphmark check` compares audiences only with nodes the graph
-  knows: the marked file's node and the nodes the mark `evidences`. Consent and
-  custody (step 5) remain the agent's and reviewer's responsibility.
+- `atelier graphmark check` compares a mark's audience with the marked file's
+  node, the nodes it `evidences`, and, for a file that is not a graph node, the
+  repository's read boundary. Consent and custody (step 5) remain the agent's
+  and reviewer's responsibility.
 - A changed edition is a warning, not an error: the mark still names the bytes
   that were marked, and Git returns them. An edition no commit holds is an
   error.
-- A history rewrite that drops the marked commit (a squash or a force push)
-  leaves the edition recoverable only if a later commit still holds the same
-  bytes. Mark committed material on a branch that is kept.
+- A history rewrite that drops the marked commit (a squash merge, a rebase or
+  a force push) leaves the edition recoverable only if a reachable commit still
+  holds the same bytes, and the check says so. Mark material once it is on a
+  branch that is kept, and record the full commit id.
 - A mark is local, Git-backed source material. It grants no export, runtime
   visibility or publication. Export audience rules apply unchanged.
 

@@ -14,7 +14,7 @@ target:
     version: "1"
     value: "*"
   contentDigest: "sha256:e77fe4071772c006b87937530767b5e4c7c1ab66c780299a39f77e9c479e168b"
-markState: "graph-checked"
+markState: "recorded"
 kg:
   id: "repair-workshop:mark:2026-01-12-spoke-tension-drawing"
   type: "evidence"

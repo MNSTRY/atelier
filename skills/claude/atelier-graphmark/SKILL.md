@@ -64,9 +64,11 @@ Stage or commit the record first: the graph reads tracked files only, and a
 record in a Git-ignored path is skipped without an error. Run `atelier graph`,
 `atelier graph --check` and `atelier graphmark check`, then find the mark's id
 and edges in the built graph. The check refuses a record that breaks
-`atelier-graphmark@v1`, an edition Git cannot return, a selector that names
-nothing in the edition and a mark wider than what it marks, and reports an
-edition that has changed since marking. If the tool is unavailable, prepare the record and
+`atelier-graphmark@v1`, a target outside this repository, an edition no
+reachable commit holds, a selector that names nothing in the edition and a mark
+wider than what it marks, and reports an edition that has changed since
+marking. Use the full commit id for `revision`, after the material is on a kept
+branch. If the tool is unavailable, prepare the record and
 say plainly that the graph was not built.
 
 ## Report

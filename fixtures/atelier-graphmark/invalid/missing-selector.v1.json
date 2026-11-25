@@ -13,7 +13,7 @@
     "revision": "example",
     "contentDigest": "sha256:832bff3fb9182f2ce85b2b09592b770b5bfb62721771a263ceb0972806cfa3b6"
   },
-  "markState": "graph-checked",
+  "markState": "recorded",
   "kg": {
     "id": "repair-workshop:mark:2026-01-12-order-of-wheel-checks",
     "type": "evidence",

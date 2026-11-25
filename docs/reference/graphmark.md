@@ -58,9 +58,11 @@ sense.
    is named.
 7. **A recoverable edition.** A mark MUST name its target as an exact source
    reference (below) whose `contentDigest` is the SHA-256 of the whole object's
-   bytes, and those bytes MUST be recoverable from Git: committed at
-   `target.revision`, or at least at the current commit. A fingerprint of bytes
-   no commit holds preserves nothing. The original stays unchanged; a later
+   bytes, and those bytes MUST be recoverable from Git: held by
+   `target.revision`, a commit reachable from `HEAD` or from a branch, tag or
+   remote branch (the stash and unreachable commits do not count), or at least
+   by the current commit. `revision` SHOULD be the full commit id. A
+   fingerprint of bytes no reachable commit holds preserves nothing. The original stays unchanged; a later
    change to it does not invalidate the mark, which still names the edition
    that was marked.
 8. **The record.** A mark MUST be one Markdown file in the repository's marks
@@ -87,7 +89,7 @@ source reference (`evidenceRef`), unchanged:
 | `owner` | The Atelier repository name that holds the record; a mark lives with what it marks |
 | `objectId` | The object's path from the Git repository root (a path from the repository entry's folder is also accepted) |
 | `revision` | The commit that holds the marked edition |
-| `selector` | The marked part: `whole` (value `*`), `lines` (`N` or `N-M`, 1-based, inclusive) or `text-quote` (the exact text, which must occur in the edition), each at version `1` |
+| `selector` | The marked part: `whole` (value `*`), `lines` (`N` or `N-M`, 1-based, inclusive) or `text-quote` (the exact text, which must occur in the edition, written double-quoted), each at version `1`; no other type or version is valid |
 | `contentDigest` | `sha256:` and the SHA-256 of the whole object's bytes at `revision` |
 
 Reusing the shared reference means a mark can be handed to anything that reads
@@ -131,26 +133,39 @@ A passing check proves structure, not meaning.
 ## The check
 
 `atelier graphmark check [--json] [--project PATH]` builds the knowledge graph
-and then, for every Markdown node tagged `graphmark` other than the marks
-index:
+and then, for every Markdown node tagged `graphmark` other than a marks index
+(`kg.type: index`):
 
-- refuses a record that does not satisfy `atelier-graphmark@v1`, and a target
-  owned by another repository or whose `objectId` leaves the repository;
-- refuses an edition that Git cannot return: bytes with `contentDigest` must be
-  held at `target.revision` or at `HEAD`, and an edition that exists only in
+- refuses a record that does not satisfy `atelier-graphmark@v1`, a
+  `belongs_to` that is not a marks index, and a selector type, version or
+  `whole` value the standard does not define;
+- refuses a target owned by another repository, an `objectId` that leaves the
+  repository or points into `.git`, a target that lies in another configured
+  repository's folder, and a symbolic link;
+- refuses an edition no reachable commit holds: bytes with `contentDigest` must
+  be held at `target.revision` (resolved to a commit reachable from `HEAD` or a
+  branch, tag or remote branch) or at `HEAD`, and an edition that exists only in
   the working tree is refused until it is committed;
-- warns when the edition is held at `HEAD` but not at the named revision;
+- warns when the edition is held only at `HEAD`, when `revision` is a name or an
+  abbreviation rather than a commit id, and when `markState` claims
+  `graph-checked` or later without a revision that holds the edition;
 - refuses a selector that names nothing inside the edition, and warns about a
   quote that occurs more than once;
-- reports a file changed or removed since marking, with the command that
-  recovers the marked edition, and warns when a marked quote has left the
-  current file;
-- refuses a mark whose audience is wider than the marked file's node or any
-  node it `evidences`.
+- reports a file changed or removed since marking, trying every accepted path
+  form against history, with the command that recovers the marked edition, and
+  warns when a marked quote has left the current file;
+- refuses a mark whose audience is wider than the marked file's node, any node
+  it `evidences`, or, for a marked file that is not a graph node, the
+  repository's read boundary.
 
-It is offline, reads tracked sources and Git objects, and writes nothing. The
-graph itself already refuses a mark whose relations name nodes that do not
-exist.
+It is offline, reads only tracked files and Git objects, never follows a
+symbolic link, and writes nothing. The graph itself already refuses a mark
+whose relations name nodes that do not exist.
+
+Not checked mechanically: that the reason is the marker's, placement in the
+marks folder, `YYYY-MM-DD` naming, that captured material was captured first,
+and that one object part has one record. These stay the marker's and
+reviewer's responsibility.
 
 ## Boundaries
 

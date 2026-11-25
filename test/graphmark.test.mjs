@@ -183,7 +183,7 @@ test('graphmark check passes the fixture, held at HEAD until the revisions name 
     ['repair-workshop:mark:2026-01-12-spoke-tension-drawing', 'intact', 'whole'],
     ['repair-workshop:mark:2026-01-14-pads-before-cable', 'intact', 'text-quote'],
   ])
-  assert.equal(first.warnings.filter((warning) => warning.includes('revision example is not in this repository\'s history; the edition is held at HEAD')).length, 3)
+  assert.equal(first.warnings.filter((warning) => warning.includes('revision example is not a commit in this repository; the edition is held at HEAD')).length, 3)
 
   pinRevisions(dir)
   const pinned = checkProject(dir)
@@ -279,7 +279,8 @@ test('objectId resolves from the Git repository root when the knowledge folder i
   const report = checkProject(dir)
   assert.equal(report.ok, true, report.errors.join('\n'))
   assert.equal(report.marks.find((mark) => mark.id.endsWith('order-of-wheel-checks')).edition, 'intact')
-  assert.ok(report.warnings.some((warning) => warning.includes('tools/checklist.txt: is not a node in the graph')), report.warnings.join('\n'))
+  // Not a graph node, so it is held to the repository's read boundary (team), which the team mark meets.
+  assert.deepEqual(report.warnings.filter((warning) => warning.includes('order-of-wheel-checks')), [])
 })
 
 test('atelier graphmark check reports through the CLI and exits non-zero on a refusal', () => {
@@ -295,4 +296,148 @@ test('atelier graphmark check reports through the CLI and exits non-zero on a re
   const refused = spawnSync(process.execPath, [binary, 'graphmark', 'check'], { cwd: dir, encoding: 'utf8' })
   assert.equal(refused.status, 1)
   assert.match(refused.stderr, /never more widely visible than what it marks/)
+})
+
+
+// Refusals and warnings from the independent review of this standard.
+
+function addRepository(dir, name, readBoundary, files) {
+  const config = JSON.parse(fs.readFileSync(path.join(dir, 'atelier.project.json'), 'utf8'))
+  config.repos.push({ name, path: name, readBoundary })
+  fs.writeFileSync(path.join(dir, 'atelier.project.json'), `${JSON.stringify(config, null, 2)}\n`)
+  const access = JSON.parse(fs.readFileSync(path.join(dir, 'repo-access.v1.json'), 'utf8'))
+  access.repos[name] = { readBoundary }
+  fs.writeFileSync(path.join(dir, 'repo-access.v1.json'), `${JSON.stringify(access, null, 2)}\n`)
+  for (const [file, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, name, file)), { recursive: true })
+    fs.writeFileSync(path.join(dir, name, file), text)
+  }
+}
+
+function retarget(dir, name, objectId, file, extra = (text) => text) {
+  editMark(dir, name, (text) => extra(text
+    .replace(/objectId: ".*"/, `objectId: "${objectId}"`)
+    .replace(/contentDigest: ".*"/, `contentDigest: "${digest(fs.readFileSync(file))}"`)))
+}
+
+test('a mark whose target lies in another configured repository is refused', () => {
+  const dir = projectFromFixture()
+  addRepository(dir, 'vault', 'private', {
+    'diary.md': '---\ntitle: "Diary"\nkg:\n  id: "vault:diary"\n  type: "document"\n  audience: "private"\n---\n# Diary\n\nA private sentence.\n',
+  })
+  commitAll(dir, 'a private sibling')
+  retarget(dir, PADS, 'vault/diary.md', path.join(dir, 'vault', 'diary.md'), (text) => text.replace(/value: "The mechanic.*"/, 'value: "A private sentence."'))
+  commitAll(dir, 'mark the sibling')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes('lies in repository "vault", not in "content"')), report.errors.join('\n'))
+})
+
+test('a revision in the stash or no longer reachable does not hold an edition', () => {
+  const dir = projectFromFixture()
+  const note = path.join(dir, 'content', 'notes', 'wheel-checks.md')
+  fs.appendFileSync(note, '\nA stashed line.\n')
+  const stashedDigest = digest(fs.readFileSync(note))
+  git(dir, ['stash'])
+  editMark(dir, WHEEL, (text) => text.replace('revision: "example"', 'revision: "stash"').replace(/contentDigest: ".*"/, `contentDigest: "${stashedDigest}"`))
+  commitAll(dir, 'mark a stashed edition')
+  const stashed = checkProject(dir)
+  assert.equal(stashed.ok, false)
+  assert.ok(stashed.errors.some((error) => error.includes('not recoverable') && error.includes('revision stash is not a commit')), stashed.errors.join('\n'))
+
+  const dir2 = projectFromFixture()
+  fs.appendFileSync(path.join(dir2, 'content', 'notes', 'wheel-checks.md'), '\nA line later reset away.\n')
+  commitAll(dir2, 'soon unreachable')
+  const lost = git(dir2, ['rev-parse', 'HEAD'])
+  const lostDigest = digest(fs.readFileSync(path.join(dir2, 'content', 'notes', 'wheel-checks.md')))
+  git(dir2, ['reset', '-q', '--hard', 'HEAD~1'])
+  editMark(dir2, WHEEL, (text) => text.replace('revision: "example"', `revision: "${lost}"`).replace(/contentDigest: ".*"/, `contentDigest: "${lostDigest}"`))
+  commitAll(dir2, 'mark an unreachable edition')
+  const unreachable = checkProject(dir2)
+  assert.equal(unreachable.ok, false)
+  assert.ok(unreachable.errors.some((error) => error.includes('is not reachable from HEAD or any branch or tag')), unreachable.errors.join('\n'))
+})
+
+test('a revision given as a name is accepted with a warning to record the commit id', () => {
+  const dir = projectFromFixture()
+  const branch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  editMark(dir, DRAWING, (text) => text.replace('revision: "example"', `revision: "${branch}"`))
+  commitAll(dir, 'name a branch')
+  const report = checkProject(dir)
+  assert.equal(report.ok, true, report.errors.join('\n'))
+  assert.ok(report.warnings.some((warning) => warning.includes(`revision ${branch} is a name or an abbreviation`)), report.warnings.join('\n'))
+})
+
+test('a removed file marked by its folder path is reported removed, with its recovery command', () => {
+  const dir = projectFromFixture()
+  const head = pinRevisions(dir)
+  git(dir, ['rm', '-q', 'content/captures/2026-01-14-brake-check-advice.md'])
+  editMark(dir, PADS, (text) => text.replace('"repair-workshop:captures:2026-01-14-brake-check-advice"', '"repair-workshop:notes:wheel-checks"'))
+  commitAll(dir, 'remove the capture')
+  const report = checkProject(dir)
+  assert.equal(report.ok, true, report.errors.join('\n'))
+  assert.equal(report.marks.find((mark) => mark.id.endsWith('pads-before-cable')).edition, 'removed')
+  assert.ok(report.warnings.some((warning) => warning.includes(`git cat-file blob ${head}:content/captures/2026-01-14-brake-check-advice.md`)), report.warnings.join('\n'))
+})
+
+test('a selector type, version or whole value the standard does not define is refused', () => {
+  const dir = projectFromFixture()
+  editMark(dir, WHEEL, (text) => text.replace('type: "lines"', 'type: "line"'))
+  editMark(dir, PADS, (text) => text.replace(/version: "1"/, 'version: "2"'))
+  editMark(dir, DRAWING, (text) => text.replace('value: "*"', 'value: "lines 3-5"'))
+  commitAll(dir, 'undefined selectors')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes('selector type "line" is not one of whole, lines, text-quote')), report.errors.join('\n'))
+  assert.ok(report.errors.some((error) => error.includes('selector text-quote version "2" is not 1')), report.errors.join('\n'))
+  assert.ok(report.errors.some((error) => error.includes('selector whole must have the value "*"')), report.errors.join('\n'))
+})
+
+test('a marked file that is not a graph node is held to the repository read boundary', () => {
+  const dir = projectFromFixture()
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'parts.txt'), 'spokes, nipples, rim tape\n')
+  commitAll(dir, 'a plain file')
+  retarget(dir, DRAWING, 'notes/parts.txt', path.join(dir, 'content', 'notes', 'parts.txt'), (text) => text.replace('  audience: "team"', '  audience: "public"'))
+  commitAll(dir, 'a public mark of a team file')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes('wider than "team" of notes/parts.txt (the repository\'s read boundary)')), report.errors.join('\n'))
+})
+
+test('a symbolic link, a path into .git and a path out of the repository are refused', () => {
+  const dir = projectFromFixture()
+  fs.symlinkSync('wheel-checks.md', path.join(dir, 'content', 'notes', 'link.md'))
+  commitAll(dir, 'a link')
+  editMark(dir, WHEEL, (text) => text.replace('objectId: "notes/wheel-checks.md"', 'objectId: "notes/link.md"'))
+  editMark(dir, DRAWING, (text) => text.replace('objectId: "drawings/spoke-tension.html"', 'objectId: ".git/config"'))
+  editMark(dir, PADS, (text) => text.replace(/objectId: ".*"/, 'objectId: "../outside.md"'))
+  commitAll(dir, 'escaping targets')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes('notes/link.md') && (error.includes('symbolic link') || error.includes('not recoverable'))), report.errors.join('\n'))
+  assert.ok(report.errors.some((error) => error.includes('points into .git')), report.errors.join('\n'))
+  assert.ok(report.errors.some((error) => error.includes('leaves the repository')), report.errors.join('\n'))
+})
+
+test('an ambiguous quote warns, an overclaimed state warns, and belongs_to must name an index', () => {
+  const dir = projectFromFixture()
+  editMark(dir, PADS, (text) => text.replace(/value: "The mechanic.*"/, 'value: "the "').replace('markState: "recorded"', 'markState: "accepted"'))
+  editMark(dir, DRAWING, (text) => text.replace('      - "repair-workshop:marks"', '      - "repair-workshop:notes:wheel-checks"'))
+  commitAll(dir, 'ambiguity')
+  const report = checkProject(dir)
+  assert.ok(report.warnings.some((warning) => warning.includes('selector text-quote occurs')), report.warnings.join('\n'))
+  assert.ok(report.warnings.some((warning) => warning.includes('markState "accepted" claims a verified edition')), report.warnings.join('\n'))
+  assert.ok(report.errors.some((error) => error.includes('belongs_to repair-workshop:notes:wheel-checks is not a marks index')), report.errors.join('\n'))
+})
+
+test('a record tagged graphmark without front matter fields is refused, and unknown options exit 2', () => {
+  const dir = projectFromFixture()
+  fs.writeFileSync(markPath(dir, '2026-01-15-bare.md'), '---\ntitle: "Bare"\ntags: [graphmark]\nkg:\n  id: "repair-workshop:mark:2026-01-15-bare"\n  type: "evidence"\n  audience: "team"\n  relations:\n    belongs_to:\n      - "repair-workshop:marks"\n---\n# Bare\n')
+  commitAll(dir, 'a bare mark')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes('2026-01-15-bare.md: atelier-graphmark@v1')), report.errors.join('\n'))
+  const unknown = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--jsn'], { cwd: dir, encoding: 'utf8' })
+  assert.equal(unknown.status, 2)
+  assert.match(unknown.stderr, /unknown option: --jsn/)
 })
