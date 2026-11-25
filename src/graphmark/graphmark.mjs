@@ -67,7 +67,8 @@ export const contentDigest = (bytes) => `sha256:${crypto.createHash('sha256').up
 
 function git(root, args) {
   try {
-    return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 })
+    // Replace refs are local and would let a commit appear to hold bytes shared history does not.
+    return execFileSync('git', ['--no-replace-objects', '-C', root, ...args], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 })
   } catch {
     return null
   }
@@ -102,10 +103,31 @@ function blobAt(root, commit, objectPath) {
 function trackedBytes(root, file, objectPath) {
   if (git(root, ['ls-files', '--error-unmatch', '--', objectPath]) === null) return null
   try {
+    // No component of the path may lead outside the repository (a folder swapped for a link).
+    if (!inside(fs.realpathSync(root), fs.realpathSync(file))) return null
     const stat = fs.lstatSync(file)
     return stat.isFile() ? fs.readFileSync(file) : null
   } catch {
     return null
+  }
+}
+
+// The audience an object declares for itself when the graph does not hold it
+// as a node: Markdown front matter (undeclared Markdown is private, as the
+// graph treats it), or a sidecar for any other file. Null when nothing is
+// declared and the object is not Markdown.
+function declaredAudience(root, commit, objectPath, editionText) {
+  if (/\.md$/i.test(objectPath)) {
+    const record = readMarkRecord(editionText)
+    return typeof record?.kg?.audience === 'string' ? record.kg.audience : 'private'
+  }
+  const sidecar = commit ? blobAt(root, commit, `${objectPath}.kg.json`) : null
+  if (!sidecar?.bytes) return null
+  try {
+    const audience = JSON.parse(sidecar.bytes.toString('utf8'))?.kg?.audience
+    return typeof audience === 'string' ? audience : 'private'
+  } catch {
+    return 'private'
   }
 }
 
@@ -150,8 +172,9 @@ export function checkGraphmarksInGraph(graph, repoRoots) {
   const folders = new Map([...repoRoots].map(([name, dir]) => [name, path.resolve(dir)]))
   const nodesByFile = new Map(graph.nodes.filter((node) => folders.has(node.repo)).map((node) => [path.resolve(folders.get(node.repo), node.path), node]))
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]))
-  // Every Markdown node tagged graphmark is a mark record, except a marks index (kg type index).
-  const candidates = graph.nodes.filter((node) => Array.isArray(node.tags) && node.tags.includes(GRAPHMARK_TAG) && node.type !== 'index' && /\.md$/i.test(node.path ?? ''))
+  // Every Markdown node tagged graphmark is a mark record, except a marks index
+  // (kg type index) that carries no target.
+  const candidates = graph.nodes.filter((node) => Array.isArray(node.tags) && node.tags.includes(GRAPHMARK_TAG) && /\.md$/i.test(node.path ?? ''))
 
   for (const node of candidates) {
     const where = `${node.repo}/${node.path}`
@@ -163,6 +186,13 @@ export function checkGraphmarksInGraph(graph, repoRoots) {
     const record = readMarkRecord(fs.readFileSync(path.join(folder, node.path), 'utf8'))
     if (!record) {
       errors.push(`${where}: tagged ${GRAPHMARK_TAG} but has no front matter; a mark exists only when its record is written`)
+      continue
+    }
+    if (node.type === 'index' && record.target === undefined) continue
+    // N2: the record itself must be tracked, or it can vanish without a trace.
+    const recordRoot = gitRoot(folder)
+    if (recordRoot && git(recordRoot, ['ls-files', '--error-unmatch', '--', toPosix(path.relative(recordRoot, path.join(folder, node.path)))]) === null) {
+      errors.push(`${where}: the mark record is not tracked; commit it before checking`)
       continue
     }
     const contract = validateMarkRecord(record)
@@ -279,8 +309,19 @@ export function checkGraphmarksInGraph(graph, repoRoots) {
     // boundary, the widest audience it can already have.
     const materials = []
     const fileNode = nodesByFile.get(chosen.file)
-    if (fileNode) materials.push({ id: fileNode.id, audience: fileNode.audience })
-    else materials.push({ id: `${target.objectId} (the repository's read boundary)`, audience: node.repoAccess?.readBoundary ?? 'private' })
+    if (fileNode) {
+      materials.push({ id: fileNode.id, audience: fileNode.audience })
+      if (!record.kg.relations.evidences.includes(fileNode.id)) {
+        errors.push(`${where}: evidences must name the marked node ${fileNode.id}`)
+      }
+    } else {
+      // Not a graph node: held to the repository's read boundary and to any
+      // narrower audience the object declares itself.
+      materials.push({ id: `${target.objectId} (the repository's read boundary)`, audience: node.repoAccess?.readBoundary ?? 'private' })
+      const declaredCommit = chosen.revMatch ? revision.commit : head?.commit
+      const declared = editionBytes ? declaredAudience(root, declaredCommit, chosen.objectPath, editionBytes.toString('utf8')) : 'private'
+      if (declared) materials.push({ id: `${target.objectId} (its declared audience)`, audience: declared })
+    }
     for (const targetId of record.kg.relations.evidences) {
       const targetNode = nodesById.get(targetId)
       if (targetNode) materials.push({ id: targetNode.id, audience: targetNode.audience })

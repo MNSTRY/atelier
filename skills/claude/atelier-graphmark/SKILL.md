@@ -60,8 +60,8 @@ labelled as candidates, not as edges. Reach a non-Markdown object through its
 sidecar. Follow the repository's own namespace, include scope and boundary
 policy; do not widen them yourself. Never edit a generated graph.
 
-Stage or commit the record first: the graph reads tracked files only, and a
-record in a Git-ignored path is skipped without an error. Run `atelier graph`,
+Commit the record first: the check refuses an untracked record, and a record
+in a Git-ignored path is skipped without an error. Run `atelier graph`,
 `atelier graph --check` and `atelier graphmark check`, then find the mark's id
 and edges in the built graph. The check refuses a record that breaks
 `atelier-graphmark@v1`, a target outside this repository, an edition no

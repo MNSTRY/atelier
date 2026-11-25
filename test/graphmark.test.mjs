@@ -441,3 +441,74 @@ test('a record tagged graphmark without front matter fields is refused, and unkn
   assert.equal(unknown.status, 2)
   assert.match(unknown.stderr, /unknown option: --jsn/)
 })
+
+// Findings from the follow-up review.
+
+test('a marked file outside the graph keeps its own narrower audience', () => {
+  const dir = projectFromFixture()
+  fs.mkdirSync(path.join(dir, 'content', 'uploads'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'content', 'uploads', 'call.md'), '# A call\n\nA private sentence.\n')
+  fs.mkdirSync(path.join(dir, 'content', 'drafts'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'content', 'drafts', 'diary.md'), '---\ntitle: "Diary"\nkg:\n  id: "repair-workshop:drafts:diary"\n  type: "document"\n  audience: "private"\n---\n# Diary\n\nA private sentence.\n')
+  const config = JSON.parse(fs.readFileSync(path.join(dir, 'atelier.project.json'), 'utf8'))
+  config.setup = { ...(config.setup ?? {}), exclude: 'content/drafts' }
+  fs.writeFileSync(path.join(dir, 'atelier.project.json'), `${JSON.stringify(config, null, 2)}\n`)
+  commitAll(dir, 'material outside the graph')
+  const quote = (text) => text.replace(/value: "The mechanic.*"/, 'value: "A private sentence."').replace('"repair-workshop:captures:2026-01-14-brake-check-advice"', '"repair-workshop:notes:wheel-checks"')
+  retarget(dir, PADS, 'uploads/call.md', path.join(dir, 'content', 'uploads', 'call.md'), quote)
+  commitAll(dir, 'mark an undeclared upload')
+  const upload = checkProject(dir)
+  assert.equal(upload.ok, false)
+  assert.ok(upload.errors.some((error) => error.includes('wider than "private" of uploads/call.md (its declared audience)')), upload.errors.join('\n'))
+
+  retarget(dir, PADS, 'drafts/diary.md', path.join(dir, 'content', 'drafts', 'diary.md'))
+  commitAll(dir, 'mark an excluded private draft')
+  const draft = checkProject(dir)
+  assert.equal(draft.ok, false)
+  assert.ok(draft.errors.some((error) => error.includes('wider than "private" of drafts/diary.md (its declared audience)')), draft.errors.join('\n'))
+})
+
+test('an untracked mark record is refused', () => {
+  const dir = projectFromFixture()
+  fs.copyFileSync(markPath(dir, DRAWING), markPath(dir, '2026-01-16-untracked.md'))
+  editMark(dir, '2026-01-16-untracked.md', (text) => text.replace('repair-workshop:mark:2026-01-12-spoke-tension-drawing', 'repair-workshop:mark:2026-01-16-untracked').replace('    supports:\n      - "repair-workshop:mark:2026-01-12-order-of-wheel-checks"\n', ''))
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes('2026-01-16-untracked.md: the mark record is not tracked')), report.errors.join('\n'))
+})
+
+test('an index tagged graphmark that carries a target is checked, not skipped', () => {
+  const dir = projectFromFixture()
+  editMark(dir, DRAWING, (text) => text.replace('  type: "evidence"', '  type: "index"'))
+  commitAll(dir, 'a mark disguised as an index')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes(`${DRAWING}: atelier-graphmark@v1 /kg/type`)), report.errors.join('\n'))
+})
+
+test('evidences must name the marked node', () => {
+  const dir = projectFromFixture()
+  editMark(dir, WHEEL, (text) => text.replace('      - "repair-workshop:notes:wheel-checks"', '      - "repair-workshop:drawings:spoke-tension"'))
+  commitAll(dir, 'evidence of something else')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((error) => error.includes('evidences must name the marked node repair-workshop:notes:wheel-checks')), report.errors.join('\n'))
+})
+
+test('a local replace ref cannot make a commit appear to hold an edition', () => {
+  const dir = projectFromFixture()
+  const head = pinRevisions(dir)
+  const note = path.join(dir, 'content', 'notes', 'wheel-checks.md')
+  fs.appendFileSync(note, '\nA line only a replacement holds.\n')
+  const forged = digest(fs.readFileSync(note))
+  commitAll(dir, 'the replacement')
+  const replacement = git(dir, ['rev-parse', 'HEAD'])
+  git(dir, ['reset', '-q', '--hard', head])
+  git(dir, ['replace', head, replacement])
+  git(dir, ['checkout', '-q', '--', '.'])
+  editMark(dir, WHEEL, (text) => text.replace(/contentDigest: ".*"/, `contentDigest: "${forged}"`))
+  git(dir, ['add', '-A'])
+  git(dir, ['commit', '-qm', 'claim the replaced bytes'])
+  const report = checkProject(dir)
+  assert.ok(report.errors.some((error) => error.includes('order-of-wheel-checks') && error.includes('not recoverable')), report.errors.join('\n') || JSON.stringify(report.marks))
+})

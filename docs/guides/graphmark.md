@@ -168,13 +168,14 @@ longer resolves.
 
 ## Limits
 
-- The graph reads tracked files only. A mark record in a Git-ignored path is
-  skipped by the census without an error, so a mark can seem written and still
-  be absent. Commit or stage the record, rebuild, and confirm its id is in the
-  built graph.
+- The graph reads every file Git does not ignore, so a mark record can be
+  built into the graph before it is committed. `atelier graphmark check`
+  refuses a record that is not tracked; commit the record, rebuild, and
+  confirm its id is in the built graph. A record in a Git-ignored path is not
+  read at all.
 - `atelier graphmark check` compares a mark's audience with the marked file's
   node, the nodes it `evidences`, and, for a file that is not a graph node, the
-  repository's read boundary. Consent and custody (step 5) remain the agent's
+  repository's read boundary and the audience the file declares itself. Consent and custody (step 5) remain the agent's
   and reviewer's responsibility.
 - A changed edition is a warning, not an error: the mark still names the bytes
   that were marked, and Git returns them. An edition no commit holds is an

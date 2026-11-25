@@ -75,9 +75,9 @@ sense.
    interpretations stay in the text, labelled as candidates, and never become
    edges. Ids follow the repository's namespace and never change. A
    non-Markdown object is reached through its sidecar.
-9. **Verification.** The record MUST be tracked (the graph reads tracked files
-   only), and the mark is reported only at the furthest state actually
-   verified.
+9. **Verification.** The record MUST be tracked: the graph reads every file
+   Git does not ignore, so an untracked record can seem written and still be
+   lost. The mark is reported only at the furthest state actually verified.
 
 ## The target
 
@@ -136,9 +136,11 @@ A passing check proves structure, not meaning.
 and then, for every Markdown node tagged `graphmark` other than a marks index
 (`kg.type: index`):
 
-- refuses a record that does not satisfy `atelier-graphmark@v1`, a
-  `belongs_to` that is not a marks index, and a selector type, version or
-  `whole` value the standard does not define;
+- refuses a record that is not tracked, that does not satisfy
+  `atelier-graphmark@v1` (a record tagged `graphmark` that carries a `target`
+  is checked even when typed as an index), whose `evidences` does not name the
+  marked file's node, or whose `belongs_to` is not a marks index, and a
+  selector type, version or `whole` value the standard does not define;
 - refuses a target owned by another repository, an `objectId` that leaves the
   repository or points into `.git`, a target that lies in another configured
   repository's folder, and a symbolic link;
@@ -156,10 +158,13 @@ and then, for every Markdown node tagged `graphmark` other than a marks index
   warns when a marked quote has left the current file;
 - refuses a mark whose audience is wider than the marked file's node, any node
   it `evidences`, or, for a marked file that is not a graph node, the
-  repository's read boundary.
+  repository's read boundary and the audience the file declares itself
+  (Markdown without a declaration counts as `private`, as the graph treats it;
+  another file declares through its sidecar).
 
 It is offline, reads only tracked files and Git objects, never follows a
-symbolic link, and writes nothing. The graph itself already refuses a mark
+symbolic link out of the repository, ignores local replace refs, and writes
+nothing. The graph itself already refuses a mark
 whose relations name nodes that do not exist.
 
 Not checked mechanically: that the reason is the marker's, placement in the
