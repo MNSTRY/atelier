@@ -7,8 +7,8 @@ markedOn: "2026-01-12"
 madeBy: "The workshop's volunteers (invented)"
 target:
   owner: "content"
-  objectId: "notes/wheel-checks.md"
-  revision: "example"
+  objectId: "content/notes/wheel-checks.md"
+  revision: "0000000000000000000000000000000000000000"
   selector:
     type: "lines"
     version: "1"

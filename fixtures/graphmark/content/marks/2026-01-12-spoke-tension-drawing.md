@@ -7,8 +7,8 @@ markedOn: "2026-01-12"
 madeBy: "A volunteer (invented)"
 target:
   owner: "content"
-  objectId: "drawings/spoke-tension.html"
-  revision: "example"
+  objectId: "content/drawings/spoke-tension.html"
+  revision: "0000000000000000000000000000000000000000"
   selector:
     type: "whole"
     version: "1"
@@ -30,9 +30,9 @@ kg:
 ---
 # Mark: the spoke tension drawing
 
-**What was marked.** The whole drawing, `drawings/spoke-tension.html`. It is
-not Markdown, so its sidecar gives it an identity in the graph; this mark
-points at that identity.
+**What was marked.** The whole drawing,
+`content/drawings/spoke-tension.html`. It is not Markdown, so its sidecar
+gives it an identity in the graph; this mark points at that identity.
 
 **Why it was marked.** It shows opposing spokes pulling evenly on the hub, so a
 new volunteer understands why tension comes first before reading the table.

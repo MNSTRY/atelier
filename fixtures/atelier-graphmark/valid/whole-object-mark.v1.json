@@ -9,8 +9,8 @@
   "madeBy": "A volunteer (invented)",
   "target": {
     "owner": "content",
-    "objectId": "drawings/spoke-tension.html",
-    "revision": "example",
+    "objectId": "content/drawings/spoke-tension.html",
+    "revision": "0000000000000000000000000000000000000000",
     "selector": {
       "type": "whole",
       "version": "1",

@@ -8,7 +8,9 @@ atelier graph --project-config=adapter/atelier.project.json --repo-path=content=
 atelier config check --project adapter/atelier.project.json --explain
 ```
 
-Both `--flag=value` and `--flag value` work. Repeat `--repo-path NAME=PATH`
+Both `--flag=value` and `--flag value` work. `--project` and
+`--project-config` take the project config file or a directory that holds an
+`atelier.project.json`. Repeat `--repo-path NAME=PATH`
 for multiple logical repositories. Names must already be declared in the
 project; an undeclared name adds no repository or read authority. The last
 override for a name wins. The first `--project` or `--project-config` selection

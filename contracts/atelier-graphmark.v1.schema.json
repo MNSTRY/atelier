@@ -24,12 +24,14 @@
     },
     "title": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "\\S"
     },
     "summary": {
       "type": "string",
       "minLength": 1,
-      "description": "Why it was marked, in one or two sentences: the reason is the centre of the record."
+      "description": "Why it was marked, in one or two sentences, and not blank: the reason is the centre of the record. The record body says it in full.",
+      "pattern": "\\S"
     },
     "tags": {
       "type": "array",
@@ -45,7 +47,8 @@
     "markedBy": {
       "type": "string",
       "minLength": 1,
-      "description": "Who singled the thing out."
+      "description": "Who singled the thing out.",
+      "pattern": "\\S"
     },
     "markedOn": {
       "type": "string",
@@ -55,11 +58,19 @@
     "madeBy": {
       "type": "string",
       "minLength": 1,
-      "description": "Who made the marked thing, and the work it builds on."
+      "description": "Who made the marked thing, and the work it builds on.",
+      "pattern": "\\S"
     },
     "target": {
-      "$ref": "#/$defs/evidenceRef",
-      "description": "What was marked, as an exact source reference: owner is the Atelier repository name, objectId the path from the Git repository root, revision the commit that holds the edition, selector the marked part, contentDigest the SHA-256 of the whole object at that revision."
+      "allOf": [
+        {
+          "$ref": "#/$defs/evidenceRef"
+        },
+        {
+          "$ref": "#/$defs/graphmarkTarget"
+        }
+      ],
+      "description": "What was marked, as an exact source reference refined by graphmarkTarget: owner is the Atelier repository name, objectId the one literal path from the Git repository root, revision the full commit id that holds the edition, selector the one marked part, contentDigest the SHA-256 of the whole object at that commit."
     },
     "capturedFrom": {
       "type": "string",
@@ -205,6 +216,72 @@
         "selector",
         "contentDigest"
       ]
+    },
+    "graphmarkTarget": {
+      "description": "GraphMark's refinement of the shared exact source reference, which stays unchanged: a full commit id, one literal path from the Git repository root, and a selector type, version and value the standard defines. atelier graphmark check verifies the rest: that the commit is reachable and holds those bytes at that path, and that the selector names exactly one part of them.",
+      "type": "object",
+      "properties": {
+        "objectId": {
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.\\.?(?:/|$))(?![.][Gg][Ii][Tt](?:/|$)).+$"
+        },
+        "revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "selector": {
+          "properties": {
+            "type": {
+              "enum": [
+                "whole",
+                "lines",
+                "text-quote"
+              ]
+            },
+            "version": {
+              "const": "1"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "whole"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "const": "*"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "lines"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "pattern": "^[1-9][0-9]*(?:-[1-9][0-9]*)?$"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     }
   }
 }

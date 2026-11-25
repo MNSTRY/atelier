@@ -8,13 +8,13 @@ madeBy: "A visiting mechanic (invented), captured by the volunteer lead"
 capturedFrom: "A phone call with a visiting mechanic on 14 January 2026 (invented), written down the same day"
 target:
   owner: "content"
-  objectId: "captures/2026-01-14-brake-check-advice.md"
-  revision: "example"
+  objectId: "content/captures/2026-01-14-brake-check-advice.md"
+  revision: "0000000000000000000000000000000000000000"
   selector:
     type: "text-quote"
     version: "1"
     value: "The mechanic checks pad wear before cable tension, because new tension on a worn pad hides the wear."
-  contentDigest: "sha256:f6a7de850af82ce64f806e11f6b9e3a9d9464843e92542bda7122456a0c5a7d5"
+  contentDigest: "sha256:563e25241050c518c1f1997e36cdaa38afaf6e8a2a059fe7447bc05389f4fded"
 markState: "recorded"
 kg:
   id: "repair-workshop:mark:2026-01-14-pads-before-cable"
@@ -30,8 +30,10 @@ kg:
 # Mark: pads before cable tension
 
 **What was marked.** One sentence of a visiting mechanic's advice, captured
-from a phone call into `captures/2026-01-14-brake-check-advice.md` and
-committed before it was marked, because a call leaves nothing to point at.
+from a phone call into
+`content/captures/2026-01-14-brake-check-advice.md` and committed before it
+was marked, because a call leaves nothing to point at. The mechanic agreed to
+the workshop keeping it before anything was written down.
 
 **Why it was marked.** For the reason, not the rule: checking tension first
 would hide worn pads. It is the same fault-hiding pattern as the wheel checks.

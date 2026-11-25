@@ -9,8 +9,8 @@
   "madeBy": "The workshop's volunteers (invented)",
   "target": {
     "owner": "content",
-    "objectId": "notes/wheel-checks.md",
-    "revision": "example",
+    "objectId": "content/notes/wheel-checks.md",
+    "revision": "0000000000000000000000000000000000000000",
     "contentDigest": "sha256:832bff3fb9182f2ce85b2b09592b770b5bfb62721771a263ceb0972806cfa3b6"
   },
   "markState": "recorded",

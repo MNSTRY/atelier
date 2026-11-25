@@ -115,9 +115,11 @@ test('a mark written without a kg block is not governed and falls back to the pr
 test('each fixture mark names the exact bytes of its object and satisfies the contract', () => {
   const evidenceSchema = JSON.parse(fs.readFileSync(path.join(root, 'contracts', 'atelier-evidence-navigation.v1.schema.json'), 'utf8'))
   const markSchema = JSON.parse(fs.readFileSync(path.join(root, 'contracts', 'atelier-graphmark.v1.schema.json'), 'utf8'))
-  // The target is the evidence-navigation exact source reference, unchanged.
+  // The target is the evidence-navigation exact source reference, unchanged,
+  // refined by GraphMark's own constraints.
   assert.deepEqual(markSchema.$defs.evidenceRef, evidenceSchema.$defs.evidenceRef)
   assert.deepEqual(markSchema.$defs.selector, evidenceSchema.$defs.selector)
+  assert.deepEqual(markSchema.properties.target.allOf, [{ $ref: '#/$defs/evidenceRef' }, { $ref: '#/$defs/graphmarkTarget' }])
 
   const files = markFiles()
   assert.deepEqual(files.sort(), [WHEEL, DRAWING, PADS].sort())
@@ -126,13 +128,38 @@ test('each fixture mark names the exact bytes of its object and satisfies the co
     const result = validateMarkRecord(record)
     assert.equal(result.ok, true, `${name}: ${result.errors.join('; ')}`)
     assert.deepEqual(validateEvidenceDocument('evidenceRef', record.target), { valid: true, reason: null }, `${name} target is an evidenceRef`)
-    const bytes = fs.readFileSync(path.join(fixtureContent, record.target.objectId))
+    // objectId is the path from the Git repository root: the fixture folder.
+    const bytes = fs.readFileSync(path.join(root, 'fixtures', 'graphmark', record.target.objectId))
     assert.equal(digest(bytes), record.target.contentDigest, `${name} edition matches ${record.target.objectId}`)
   }
   assert.equal(validateMarkRecord({ title: 'Mark', summary: 'x', tags: ['graphmark'] }).ok, false)
 })
 
+test('the standalone validator refuses what the check refuses about the target and the reason', () => {
+  const record = readMarkRecord(fs.readFileSync(path.join(fixtureContent, 'marks', WHEEL), 'utf8'))
+  const refused = (edit, pattern) => {
+    const copy = structuredClone(record)
+    edit(copy)
+    const result = validateMarkRecord(copy)
+    assert.equal(result.ok, false)
+    assert.ok(result.errors.some((error) => pattern.test(error)), result.errors.join('\n'))
+  }
+  refused((copy) => { copy.target.revision = 'main' }, /\/target\/revision must match pattern/)
+  refused((copy) => { copy.target.revision = '94f6c9e' }, /\/target\/revision must match pattern/)
+  refused((copy) => { copy.target.selector.type = 'line' }, /\/target\/selector\/type must be equal to one of the allowed values/)
+  refused((copy) => { copy.target.selector.version = '2' }, /\/target\/selector\/version must be equal to constant/)
+  refused((copy) => { copy.target.selector = { type: 'whole', version: '1', value: 'lines 3-5' } }, /\/target\/selector\/value must be equal to constant/)
+  refused((copy) => { copy.target.selector.value = 'three' }, /\/target\/selector\/value must match pattern/)
+  for (const objectId of ['./content/notes/wheel-checks.md', 'content//notes/wheel-checks.md', '/content/notes/wheel-checks.md', 'content/../content/notes/wheel-checks.md', '.git/config']) {
+    refused((copy) => { copy.target.objectId = objectId }, /\/target\/objectId must match pattern/)
+  }
+  refused((copy) => { copy.summary = '   ' }, /\/summary must match pattern/)
+  refused((copy) => { copy.markedBy = ' ' }, /\/markedBy must match pattern/)
+})
+
 // A project copy of the fixture under Git, as a consumer would hold it.
+
+const ZERO = '0'.repeat(40)
 
 function git(dir, args) {
   const result = spawnSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', ...args], { cwd: dir, encoding: 'utf8' })
@@ -160,9 +187,15 @@ function editMark(dir, name, edit) {
 // Record the commit that holds every edition, as a marker would.
 function pinRevisions(dir) {
   const head = git(dir, ['rev-parse', 'HEAD'])
-  for (const name of [WHEEL, DRAWING, PADS]) editMark(dir, name, (text) => text.replace('revision: "example"', `revision: "${head}"`))
+  for (const name of [WHEEL, DRAWING, PADS]) editMark(dir, name, (text) => text.replace(`revision: "${ZERO}"`, `revision: "${head}"`))
   git(dir, ['commit', '-qam', 'pin mark revisions'])
   return head
+}
+
+function pinnedProject() {
+  const dir = projectFromFixture()
+  const head = pinRevisions(dir)
+  return { dir, head }
 }
 
 function commitAll(dir, message) {
@@ -170,30 +203,83 @@ function commitAll(dir, message) {
   git(dir, ['commit', '-qm', message])
 }
 
-function checkProject(dir) {
-  return checkGraphmarks(commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false }))
+function checkProject(dir, options) {
+  return checkGraphmarks(commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false }), options)
 }
 
-test('graphmark check passes the fixture, held at HEAD until the revisions name a real commit', () => {
+// Point a mark at a committed file: its path from the repository root, the
+// digest of its committed bytes and the commit at HEAD.
+function retarget(dir, name, objectId, extra = (text) => text) {
+  const head = git(dir, ['rev-parse', 'HEAD'])
+  editMark(dir, name, (text) => extra(text
+    .replace(/objectId: ".*"/, `objectId: "${objectId}"`)
+    .replace(/revision: ".*"/, `revision: "${head}"`)
+    .replace(/contentDigest: ".*"/, `contentDigest: "${digest(fs.readFileSync(path.join(dir, objectId)))}"`)))
+}
+
+const markOf = (report, suffix) => report.marks.find((mark) => mark.id.endsWith(suffix))
+const has = (list, ...parts) => list.some((line) => parts.every((part) => line.includes(part)))
+
+test('the unpinned fixture is refused with a repair hint, and verifies once each revision names its commit', () => {
   const dir = projectFromFixture()
+  const head = git(dir, ['rev-parse', 'HEAD'])
   const first = checkProject(dir)
-  assert.equal(first.ok, true, first.errors.join('\n'))
-  assert.deepEqual(first.marks.map((mark) => [mark.id, mark.edition, mark.selector]), [
-    ['repair-workshop:mark:2026-01-12-order-of-wheel-checks', 'intact', 'lines'],
-    ['repair-workshop:mark:2026-01-12-spoke-tension-drawing', 'intact', 'whole'],
-    ['repair-workshop:mark:2026-01-14-pads-before-cable', 'intact', 'text-quote'],
-  ])
-  assert.equal(first.warnings.filter((warning) => warning.includes('revision example is not a commit in this repository; the edition is held at HEAD')).length, 3)
+  assert.equal(first.ok, false)
+  assert.deepEqual(first.marks, [], 'a HEAD fallback is never an intact mark')
+  assert.equal(first.errors.filter((error) => error.includes(`the marked edition is not verified: revision ${ZERO} is not a commit id in this repository`)).length, 3, first.errors.join('\n'))
+  assert.equal(first.warnings.filter((warning) => warning.includes(`repair hint: HEAD (${head}) holds the marked bytes`)).length, 3, first.warnings.join('\n'))
 
   pinRevisions(dir)
   const pinned = checkProject(dir)
   assert.equal(pinned.ok, true, pinned.errors.join('\n'))
   assert.deepEqual(pinned.warnings, [])
+  assert.deepEqual(pinned.marks.map((mark) => [mark.id, mark.edition, mark.selector, mark.revision]), [
+    ['repair-workshop:mark:2026-01-12-order-of-wheel-checks', 'intact', 'lines', head],
+    ['repair-workshop:mark:2026-01-12-spoke-tension-drawing', 'intact', 'whole', head],
+    ['repair-workshop:mark:2026-01-14-pads-before-cable', 'intact', 'text-quote', head],
+  ])
+})
+
+test('a full commit id that names no commit is not intact, even when HEAD holds the same bytes', () => {
+  const { dir, head } = pinnedProject()
+  editMark(dir, PADS, (text) => text.replace(`revision: "${head}"`, `revision: "${'f'.repeat(40)}"`).replace('markState: "recorded"', 'markState: "shared"'))
+  commitAll(dir, 'a revision that does not exist')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.equal(markOf(report, 'pads-before-cable'), undefined)
+  assert.ok(has(report.errors, PADS, `revision ${'f'.repeat(40)} is not a commit id in this repository`), report.errors.join('\n'))
+  assert.ok(has(report.warnings, PADS, 'repair hint: HEAD'), report.warnings.join('\n'))
+})
+
+test('a revision given as a branch name or an abbreviation is refused, with the full id as a repair hint', () => {
+  const { dir, head } = pinnedProject()
+  const branch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  editMark(dir, DRAWING, (text) => text.replace(`revision: "${head}"`, `revision: "${branch}"`))
+  editMark(dir, WHEEL, (text) => text.replace(`revision: "${head}"`, `revision: "${head.slice(0, 7)}"`))
+  commitAll(dir, 'names and abbreviations')
+  const now = git(dir, ['rev-parse', 'HEAD'])
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.deepEqual(report.marks.map((mark) => mark.id), ['repair-workshop:mark:2026-01-14-pads-before-cable'])
+  assert.ok(has(report.errors, DRAWING, `target revision "${branch}" is not a full commit id`), report.errors.join('\n'))
+  assert.ok(has(report.errors, WHEEL, `target revision "${head.slice(0, 7)}" is not a full commit id`), report.errors.join('\n'))
+  assert.ok(has(report.warnings, DRAWING, `"${branch}" resolves to ${now}`), report.warnings.join('\n'))
+  assert.ok(has(report.warnings, WHEEL, `"${head.slice(0, 7)}" resolves to ${head}`), report.warnings.join('\n'))
+})
+
+test('a path from the repository entry folder is refused, with the root path as a repair hint', () => {
+  const { dir } = pinnedProject()
+  editMark(dir, WHEEL, (text) => text.replace('objectId: "content/notes/wheel-checks.md"', 'objectId: "notes/wheel-checks.md"'))
+  commitAll(dir, 'a folder-relative path')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.equal(markOf(report, 'order-of-wheel-checks'), undefined)
+  assert.ok(has(report.errors, WHEEL, 'does not hold notes/wheel-checks.md'), report.errors.join('\n'))
+  assert.ok(has(report.warnings, WHEEL, 'objectId is the path from the Git repository root, so record "content/notes/wheel-checks.md"'), report.warnings.join('\n'))
 })
 
 test('a committed change to the marked file is a changed edition, recoverable at its revision', () => {
-  const dir = projectFromFixture()
-  const head = pinRevisions(dir)
+  const { dir, head } = pinnedProject()
   fs.appendFileSync(path.join(dir, 'content', 'notes', 'wheel-checks.md'), '\nA later line.\n')
   const capture = path.join(dir, 'content', 'captures', '2026-01-14-brake-check-advice.md')
   fs.writeFileSync(capture, fs.readFileSync(capture, 'utf8').replace('The mechanic checks pad wear before cable tension', 'The mechanic now checks cable first'))
@@ -201,94 +287,242 @@ test('a committed change to the marked file is a changed edition, recoverable at
 
   const report = checkProject(dir)
   assert.equal(report.ok, true, report.errors.join('\n'))
-  assert.equal(report.marks.find((mark) => mark.id.endsWith('order-of-wheel-checks')).edition, 'changed')
-  assert.ok(report.warnings.some((warning) => warning.includes(`git cat-file blob ${head}:content/notes/wheel-checks.md`)), report.warnings.join('\n'))
-  assert.ok(report.warnings.some((warning) => warning.includes('the marked quote is no longer in the current file')), report.warnings.join('\n'))
+  const wheel = markOf(report, 'order-of-wheel-checks')
+  assert.equal(wheel.edition, 'changed')
+  assert.deepEqual(wheel.recover, ['git', 'cat-file', 'blob', `${head}:content/notes/wheel-checks.md`])
+  assert.ok(has(report.warnings, `git cat-file blob '${head}:content/notes/wheel-checks.md'`), report.warnings.join('\n'))
+  assert.ok(has(report.warnings, 'the marked quote is no longer in the current file'), report.warnings.join('\n'))
 })
 
 test('an edition that exists only in the working tree is refused until it is committed', () => {
-  const dir = projectFromFixture()
-  pinRevisions(dir)
+  const { dir } = pinnedProject()
   const note = path.join(dir, 'content', 'notes', 'wheel-checks.md')
   fs.appendFileSync(note, '\nAn uncommitted line.\n')
   editMark(dir, WHEEL, (text) => text.replace(/contentDigest: ".*"/, `contentDigest: "${digest(fs.readFileSync(note))}"`))
+  git(dir, ['commit', '-qm', 'claim the uncommitted bytes', '--', markPath(dir, WHEEL)])
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('exists only in the working tree')), report.errors.join('\n'))
+  assert.ok(has(report.errors, WHEEL, 'the marked edition is not verified', 'holds different bytes'), report.errors.join('\n'))
+  assert.ok(has(report.warnings, WHEEL, 'exists only in the working tree'), report.warnings.join('\n'))
 })
 
-test('an edition no commit holds is refused as unrecoverable', () => {
-  const dir = projectFromFixture()
+test('an edition no commit holds is refused', () => {
+  const { dir } = pinnedProject()
   editMark(dir, DRAWING, (text) => text.replace(/contentDigest: ".*"/, `contentDigest: "sha256:${'0'.repeat(64)}"`))
   commitAll(dir, 'a digest nothing holds')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('the marked edition is not recoverable')), report.errors.join('\n'))
+  assert.ok(has(report.errors, DRAWING, 'the marked edition is not verified', 'holds different bytes'), report.errors.join('\n'))
 })
 
 test('a selector that names nothing inside the edition is refused', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   editMark(dir, WHEEL, (text) => text.replace('value: "16-21"', 'value: "16-99"'))
   editMark(dir, PADS, (text) => text.replace(/value: "The mechanic.*"/, 'value: "Words the mechanic never said."'))
   commitAll(dir, 'selectors outside the edition')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('selector lines 16-99 fall outside the marked edition (23 lines)')), report.errors.join('\n'))
-  assert.ok(report.errors.some((error) => error.includes('selector text-quote is not in the marked edition')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'selector lines 16-99 fall outside the marked edition (23 lines)'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'selector text-quote is not in the marked edition'), report.errors.join('\n'))
+})
+
+test('an ambiguous quote is an error, and overlapping occurrences count', () => {
+  const { dir } = pinnedProject()
+  editMark(dir, PADS, (text) => text.replace(/value: "The mechanic.*"/, 'value: "the "'))
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'echo.txt'), 'la la la\n')
+  commitAll(dir, 'an ambiguous quote and an echo')
+  retarget(dir, DRAWING, 'content/notes/echo.txt', (text) => text.replace('type: "whole"', 'type: "text-quote"').replace('value: "*"', 'value: "la la"'))
+  commitAll(dir, 'an overlapping quote')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.equal(markOf(report, 'pads-before-cable'), undefined)
+  assert.ok(has(report.errors, PADS, 'selector text-quote occurs', 'a mark names one part'), report.errors.join('\n'))
+  assert.ok(has(report.errors, DRAWING, 'selector text-quote occurs 2 times'), report.errors.join('\n'))
+})
+
+test('text selectors need UTF-8 text, an empty file has no lines, and a binary file can be marked whole', () => {
+  const { dir } = pinnedProject()
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'photo.bin'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0a, 0xff]))
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'latin1.txt'), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]))
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'empty.txt'), '')
+  commitAll(dir, 'binary, invalid UTF-8 and empty files')
+  retarget(dir, DRAWING, 'content/notes/photo.bin', (text) => text.replace('type: "whole"', 'type: "lines"').replace('value: "*"', 'value: "1"'))
+  retarget(dir, PADS, 'content/notes/latin1.txt', (text) => text.replace(/value: "The mechanic.*"/, 'value: "caf"'))
+  retarget(dir, WHEEL, 'content/notes/empty.txt', (text) => text.replace('value: "16-21"', 'value: "1"'))
+  commitAll(dir, 'text selectors on what is not text')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, DRAWING, 'selector lines needs a UTF-8 text edition'), report.errors.join('\n'))
+  assert.ok(has(report.errors, PADS, 'selector text-quote needs a UTF-8 text edition'), report.errors.join('\n'))
+  assert.ok(has(report.errors, WHEEL, 'selector lines 1 fall outside the marked edition (0 lines)'), report.errors.join('\n'))
+
+  retarget(dir, DRAWING, 'content/notes/photo.bin', (text) => text.replace('type: "lines"', 'type: "whole"').replace('value: "1"', 'value: "*"'))
+  commitAll(dir, 'the binary file, whole')
+  const whole = checkProject(dir)
+  assert.equal(markOf(whole, 'spoke-tension-drawing')?.edition, 'intact', whole.errors.join('\n'))
 })
 
 test('a mark more widely visible than what it marks is refused', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   editMark(dir, WHEEL, (text) => text.replace('  audience: "team"', '  audience: "public"'))
   commitAll(dir, 'widen')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('audience "public" is wider than "team"')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'audience "public" is wider than "team"'), report.errors.join('\n'))
+})
+
+test('the audience the marked edition declared is held, even after the file is rewritten wider', () => {
+  const { dir } = pinnedProject()
+  const rewrite = path.join(dir, 'content', 'notes', 'rewrite.md')
+  const note = (audience, body) => `---\ntitle: "Rewrite"\nkg:\n  id: "repair-workshop:notes:rewrite"\n  type: "document"\n  status: "active"\n  audience: "${audience}"\n---\n# Rewrite\n\n${body}\n`
+  fs.writeFileSync(rewrite, note('private', 'A private sentence about one volunteer.'))
+  const sidecar = path.join(dir, 'content', 'drawings', 'spoke-tension.html.kg.json')
+  fs.writeFileSync(sidecar, fs.readFileSync(sidecar, 'utf8').replace('"audience": "team"', '"audience": "private"'))
+  commitAll(dir, 'private editions')
+  retarget(dir, PADS, 'content/notes/rewrite.md', (text) => text
+    .replace(/value: "The mechanic.*"/, 'value: "A private sentence about one volunteer."')
+    .replace('"repair-workshop:captures:2026-01-14-brake-check-advice"', '"repair-workshop:notes:rewrite"'))
+  retarget(dir, DRAWING, 'content/drawings/spoke-tension.html')
+  commitAll(dir, 'team marks of private editions')
+  // The owner widens both to team and drops the private sentence.
+  fs.writeFileSync(rewrite, note('team', 'A sentence anyone in the workshop may read.'))
+  fs.writeFileSync(sidecar, fs.readFileSync(sidecar, 'utf8').replace('"audience": "private"', '"audience": "team"'))
+  commitAll(dir, 'rewritten wider')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, PADS, 'wider than "private" of content/notes/rewrite.md (the audience its marked edition declares)'), report.errors.join('\n'))
+  assert.ok(has(report.errors, DRAWING, 'wider than "private" of content/drawings/spoke-tension.html (the audience its marked edition declares)'), report.errors.join('\n'))
+})
+
+test('an unknown audience in the marked edition is an error, not a pass', () => {
+  const { dir } = pinnedProject()
+  const sidecar = path.join(dir, 'content', 'drawings', 'spoke-tension.html.kg.json')
+  const original = fs.readFileSync(sidecar, 'utf8')
+  fs.writeFileSync(sidecar, original.replace('"audience": "team"', '"audience": "secret"'))
+  git(dir, ['add', '-A'])
+  // The graph would refuse the unknown value at HEAD; commit it, then restore.
+  git(dir, ['commit', '-qm', 'an unknown audience'])
+  retarget(dir, DRAWING, 'content/drawings/spoke-tension.html')
+  fs.writeFileSync(sidecar, original)
+  commitAll(dir, 'restore a known audience')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, DRAWING, 'has the unknown audience "secret"'), report.errors.join('\n'))
+})
+
+test('the committed mark record is what is checked; an uncommitted edit is refused', () => {
+  const { dir } = pinnedProject()
+  editMark(dir, WHEEL, (text) => text.replace('Marked for the order of the checks', 'Marked for a reason nobody committed'))
+  const edited = checkProject(dir)
+  assert.equal(edited.ok, false)
+  assert.equal(markOf(edited, 'order-of-wheel-checks'), undefined)
+  assert.ok(has(edited.errors, WHEEL, 'differs from the one committed at HEAD'), edited.errors.join('\n'))
+
+  git(dir, ['add', '-A'])
+  const staged = checkProject(dir)
+  assert.ok(has(staged.errors, WHEEL, 'differs from the one committed at HEAD'), 'staging is not committing')
+
+  git(dir, ['commit', '-qm', 'commit the reason'])
+  assert.equal(checkProject(dir).ok, true)
+})
+
+test('an untracked or only staged mark record is refused', () => {
+  const { dir } = pinnedProject()
+  fs.copyFileSync(markPath(dir, DRAWING), markPath(dir, '2026-01-16-untracked.md'))
+  editMark(dir, '2026-01-16-untracked.md', (text) => text.replace('repair-workshop:mark:2026-01-12-spoke-tension-drawing', 'repair-workshop:mark:2026-01-16-untracked').replace('    supports:\n      - "repair-workshop:mark:2026-01-12-order-of-wheel-checks"\n', ''))
+  const untracked = checkProject(dir)
+  assert.equal(untracked.ok, false)
+  assert.ok(has(untracked.errors, '2026-01-16-untracked.md: the mark record is not committed at HEAD'), untracked.errors.join('\n'))
+  git(dir, ['add', '-A'])
+  const staged = checkProject(dir)
+  assert.ok(has(staged.errors, '2026-01-16-untracked.md: the mark record is not committed at HEAD'), staged.errors.join('\n'))
+})
+
+test('a blank reason in the summary or the body is refused', () => {
+  const { dir } = pinnedProject()
+  editMark(dir, WHEEL, (text) => text.replace(/summary: ".*"/, 'summary: "   "'))
+  editMark(dir, DRAWING, (text) => `${text.slice(0, text.indexOf('# Mark: the spoke tension drawing'))}# Mark: the spoke tension drawing\n\n`)
+  commitAll(dir, 'blank reasons')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, WHEEL, '/summary must match pattern'), report.errors.join('\n'))
+  assert.ok(has(report.errors, DRAWING, 'the record body is blank'), report.errors.join('\n'))
+})
+
+test('--expect fails a check whose expected mark is missing, and a record that lost its tag is named', () => {
+  const { dir } = pinnedProject()
+  const expected = ['repair-workshop:mark:2026-01-12-order-of-wheel-checks', 'repair-workshop:mark:2026-01-14-pads-before-cable']
+  assert.equal(checkProject(dir, { expect: expected }).ok, true)
+  editMark(dir, PADS, (text) => text.replace('tags: [graphmark]', 'tags: [brakes]'))
+  commitAll(dir, 'drop the tag')
+  const report = checkProject(dir, { expect: [...expected, 'repair-workshop:mark:never-written'] })
+  assert.equal(report.ok, false)
+  assert.equal(markOf(report, 'pads-before-cable'), undefined)
+  assert.ok(has(report.errors, `${PADS}: belongs to the marks index repair-workshop:marks but is not tagged graphmark`), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'expected mark repair-workshop:mark:2026-01-14-pads-before-cable is not a GraphMark record'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'expected mark repair-workshop:mark:never-written was not found'), report.errors.join('\n'))
+  assert.ok(has(checkProject(dir, { expect: ['repair-workshop:marks'] }).errors, 'expected mark repair-workshop:marks is a marks index, not a mark record'))
+
+  const cli = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--expect', 'repair-workshop:mark:never-written', '--expect=repair-workshop:mark:2026-01-12-order-of-wheel-checks'], { cwd: dir, encoding: 'utf8' })
+  assert.equal(cli.status, 1)
+  assert.match(cli.stderr, /expected mark repair-workshop:mark:never-written was not found/)
+  const empty = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--expect'], { cwd: dir, encoding: 'utf8' })
+  assert.equal(empty.status, 2)
+})
+
+test('a parent index of the marks index is not itself a marks index', () => {
+  const { dir } = pinnedProject()
+  fs.writeFileSync(path.join(dir, 'content', 'index.md'), '---\ntitle: "Workshop"\nkg:\n  id: "repair-workshop:index"\n  type: "index"\n  status: "active"\n  audience: "team"\n---\n# Workshop\n\nEverything the workshop keeps.\n')
+  const notes = path.join(dir, 'content', 'notes', 'wheel-checks.md')
+  fs.writeFileSync(notes, fs.readFileSync(notes, 'utf8').replace('  audience: "team"\n', '  audience: "team"\n  relations:\n    belongs_to:\n      - "repair-workshop:index"\n'))
+  const index = path.join(dir, 'content', 'marks', 'README.md')
+  fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace('  audience: "team"\n', '  audience: "team"\n  relations:\n    belongs_to:\n      - "repair-workshop:index"\n'))
+  commitAll(dir, 'a parent index')
+  retarget(dir, WHEEL, 'content/notes/wheel-checks.md')
+  commitAll(dir, 'repin the note')
+  const report = checkProject(dir)
+  assert.equal(report.ok, true, report.errors.join('\n'))
 })
 
 test('a mark whose target another repository owns is refused', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   editMark(dir, WHEEL, (text) => text.replace('owner: "content"', 'owner: "elsewhere"'))
   commitAll(dir, 'foreign owner')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('target owner "elsewhere" is not this repository "content"')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'target owner "elsewhere" is not this repository "content"'), report.errors.join('\n'))
 })
 
 test('a record tagged graphmark that breaks the contract is refused', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   editMark(dir, DRAWING, (text) => text.replace(/contentDigest: ".*"/, 'contentDigest: "unrecorded"'))
   commitAll(dir, 'break the contract')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('atelier-graphmark@v1 /target/contentDigest')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'atelier-graphmark@v1 /target/contentDigest'), report.errors.join('\n'))
 })
 
-test('objectId resolves from the Git repository root when the knowledge folder is inside it', () => {
-  const dir = projectFromFixture()
+test('a file outside the knowledge folder is marked by its path from the repository root', () => {
+  const { dir } = pinnedProject()
   fs.mkdirSync(path.join(dir, 'tools'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'tools', 'checklist.txt'), 'wheel, brakes, chain\n')
   commitAll(dir, 'a file outside the knowledge folder')
-  const head = git(dir, ['rev-parse', 'HEAD'])
-  editMark(dir, WHEEL, (text) => text
-    .replace('objectId: "notes/wheel-checks.md"', 'objectId: "tools/checklist.txt"')
-    .replace(`revision: "example"`, `revision: "${head}"`)
-    .replace('value: "16-21"', 'value: "1"')
-    .replace(/contentDigest: ".*"/, `contentDigest: "${digest(fs.readFileSync(path.join(dir, 'tools', 'checklist.txt')))}"`))
+  retarget(dir, WHEEL, 'tools/checklist.txt', (text) => text.replace('value: "16-21"', 'value: "1"'))
   commitAll(dir, 'mark a file outside the folder')
   const report = checkProject(dir)
   assert.equal(report.ok, true, report.errors.join('\n'))
-  assert.equal(report.marks.find((mark) => mark.id.endsWith('order-of-wheel-checks')).edition, 'intact')
+  assert.equal(markOf(report, 'order-of-wheel-checks').edition, 'intact')
   // Not a graph node, so it is held to the repository's read boundary (team), which the team mark meets.
   assert.deepEqual(report.warnings.filter((warning) => warning.includes('order-of-wheel-checks')), [])
 })
 
-test('atelier graphmark check reports through the CLI and exits non-zero on a refusal', () => {
-  const dir = projectFromFixture()
-  pinRevisions(dir)
+test('atelier graphmark check reports through the CLI, writes nothing and exits non-zero on a refusal', () => {
+  const { dir } = pinnedProject()
   const ok = spawnSync(process.execPath, [binary, 'graphmark', 'check'], { cwd: dir, encoding: 'utf8' })
   assert.equal(ok.status, 0, ok.stderr)
   assert.match(ok.stdout, /graphmark: 3 marks · 3 intact · 0 changed · 0 removed · 0 errors/)
+  assert.equal(fs.existsSync(path.join(dir, '.atelier-local')), false, 'the check creates no local state')
+  assert.equal(git(dir, ['status', '--porcelain']), '')
   const json = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--json'], { cwd: dir, encoding: 'utf8' })
   assert.equal(JSON.parse(json.stdout).ok, true)
   editMark(dir, WHEEL, (text) => text.replace('  audience: "team"', '  audience: "public"'))
@@ -298,8 +532,20 @@ test('atelier graphmark check reports through the CLI and exits non-zero on a re
   assert.match(refused.stderr, /never more widely visible than what it marks/)
 })
 
+test('--project accepts the project directory as well as its atelier.project.json', () => {
+  const { dir } = pinnedProject()
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-cwd-'))
+  for (const args of [['graphmark', 'check', '--project', dir], ['graphmark', 'check', `--project=${dir}`], ['graph', '--project', dir], ['graph', '--check', '--project', dir]]) {
+    const run = spawnSync(process.execPath, [binary, ...args], { cwd: elsewhere, encoding: 'utf8' })
+    assert.equal(run.status, 0, `${args.join(' ')}: ${run.stderr}`)
+  }
+  const missing = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--project', elsewhere], { cwd: elsewhere, encoding: 'utf8' })
+  assert.equal(missing.status, 2)
+  assert.match(missing.stderr, /atelier project config not found: .*atelier\.project\.json/)
+})
 
-// Refusals and warnings from the independent review of this standard.
+
+// Refusals from the earlier independent reviews of this standard.
 
 function addRepository(dir, name, readBoundary, files) {
   const config = JSON.parse(fs.readFileSync(path.join(dir, 'atelier.project.json'), 'utf8'))
@@ -314,138 +560,121 @@ function addRepository(dir, name, readBoundary, files) {
   }
 }
 
-function retarget(dir, name, objectId, file, extra = (text) => text) {
-  editMark(dir, name, (text) => extra(text
-    .replace(/objectId: ".*"/, `objectId: "${objectId}"`)
-    .replace(/contentDigest: ".*"/, `contentDigest: "${digest(fs.readFileSync(file))}"`)))
-}
-
 test('a mark whose target lies in another configured repository is refused', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   addRepository(dir, 'vault', 'private', {
     'diary.md': '---\ntitle: "Diary"\nkg:\n  id: "vault:diary"\n  type: "document"\n  audience: "private"\n---\n# Diary\n\nA private sentence.\n',
   })
   commitAll(dir, 'a private sibling')
-  retarget(dir, PADS, 'vault/diary.md', path.join(dir, 'vault', 'diary.md'), (text) => text.replace(/value: "The mechanic.*"/, 'value: "A private sentence."'))
+  retarget(dir, PADS, 'vault/diary.md', (text) => text.replace(/value: "The mechanic.*"/, 'value: "A private sentence."'))
   commitAll(dir, 'mark the sibling')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('lies in repository "vault", not in "content"')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'lies in repository "vault", not in "content"'), report.errors.join('\n'))
 })
 
 test('a revision in the stash or no longer reachable does not hold an edition', () => {
-  const dir = projectFromFixture()
+  const { dir, head } = pinnedProject()
   const note = path.join(dir, 'content', 'notes', 'wheel-checks.md')
   fs.appendFileSync(note, '\nA stashed line.\n')
   const stashedDigest = digest(fs.readFileSync(note))
   git(dir, ['stash'])
-  editMark(dir, WHEEL, (text) => text.replace('revision: "example"', 'revision: "stash"').replace(/contentDigest: ".*"/, `contentDigest: "${stashedDigest}"`))
+  const stash = git(dir, ['rev-parse', 'stash'])
+  editMark(dir, WHEEL, (text) => text.replace(`revision: "${head}"`, `revision: "${stash}"`).replace(/contentDigest: ".*"/, `contentDigest: "${stashedDigest}"`))
+  editMark(dir, DRAWING, (text) => text.replace(`revision: "${head}"`, 'revision: "stash"'))
   commitAll(dir, 'mark a stashed edition')
   const stashed = checkProject(dir)
   assert.equal(stashed.ok, false)
-  assert.ok(stashed.errors.some((error) => error.includes('not recoverable') && error.includes('revision stash is not a commit')), stashed.errors.join('\n'))
+  assert.ok(has(stashed.errors, WHEEL, `revision ${stash} is not reachable from HEAD or any branch or tag`), stashed.errors.join('\n'))
+  assert.ok(has(stashed.errors, DRAWING, 'target revision "stash" is not a full commit id'), stashed.errors.join('\n'))
 
   const dir2 = projectFromFixture()
+  const head2 = pinRevisions(dir2)
   fs.appendFileSync(path.join(dir2, 'content', 'notes', 'wheel-checks.md'), '\nA line later reset away.\n')
   commitAll(dir2, 'soon unreachable')
   const lost = git(dir2, ['rev-parse', 'HEAD'])
   const lostDigest = digest(fs.readFileSync(path.join(dir2, 'content', 'notes', 'wheel-checks.md')))
   git(dir2, ['reset', '-q', '--hard', 'HEAD~1'])
-  editMark(dir2, WHEEL, (text) => text.replace('revision: "example"', `revision: "${lost}"`).replace(/contentDigest: ".*"/, `contentDigest: "${lostDigest}"`))
+  editMark(dir2, WHEEL, (text) => text.replace(`revision: "${head2}"`, `revision: "${lost}"`).replace(/contentDigest: ".*"/, `contentDigest: "${lostDigest}"`))
   commitAll(dir2, 'mark an unreachable edition')
   const unreachable = checkProject(dir2)
   assert.equal(unreachable.ok, false)
-  assert.ok(unreachable.errors.some((error) => error.includes('is not reachable from HEAD or any branch or tag')), unreachable.errors.join('\n'))
+  assert.ok(has(unreachable.errors, 'is not reachable from HEAD or any branch or tag'), unreachable.errors.join('\n'))
 })
 
-test('a revision given as a name is accepted with a warning to record the commit id', () => {
-  const dir = projectFromFixture()
-  const branch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])
-  editMark(dir, DRAWING, (text) => text.replace('revision: "example"', `revision: "${branch}"`))
-  commitAll(dir, 'name a branch')
-  const report = checkProject(dir)
-  assert.equal(report.ok, true, report.errors.join('\n'))
-  assert.ok(report.warnings.some((warning) => warning.includes(`revision ${branch} is a name or an abbreviation`)), report.warnings.join('\n'))
-})
-
-test('a removed file marked by its folder path is reported removed, with its recovery command', () => {
-  const dir = projectFromFixture()
-  const head = pinRevisions(dir)
+test('a removed file is reported removed, with its recovery command', () => {
+  const { dir, head } = pinnedProject()
   git(dir, ['rm', '-q', 'content/captures/2026-01-14-brake-check-advice.md'])
   editMark(dir, PADS, (text) => text.replace('"repair-workshop:captures:2026-01-14-brake-check-advice"', '"repair-workshop:notes:wheel-checks"'))
   commitAll(dir, 'remove the capture')
   const report = checkProject(dir)
   assert.equal(report.ok, true, report.errors.join('\n'))
-  assert.equal(report.marks.find((mark) => mark.id.endsWith('pads-before-cable')).edition, 'removed')
-  assert.ok(report.warnings.some((warning) => warning.includes(`git cat-file blob ${head}:content/captures/2026-01-14-brake-check-advice.md`)), report.warnings.join('\n'))
+  assert.equal(markOf(report, 'pads-before-cable').edition, 'removed')
+  assert.ok(has(report.warnings, `git cat-file blob '${head}:content/captures/2026-01-14-brake-check-advice.md'`), report.warnings.join('\n'))
 })
 
 test('a selector type, version or whole value the standard does not define is refused', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   editMark(dir, WHEEL, (text) => text.replace('type: "lines"', 'type: "line"'))
   editMark(dir, PADS, (text) => text.replace(/version: "1"/, 'version: "2"'))
   editMark(dir, DRAWING, (text) => text.replace('value: "*"', 'value: "lines 3-5"'))
   commitAll(dir, 'undefined selectors')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('selector type "line" is not one of whole, lines, text-quote')), report.errors.join('\n'))
-  assert.ok(report.errors.some((error) => error.includes('selector text-quote version "2" is not 1')), report.errors.join('\n'))
-  assert.ok(report.errors.some((error) => error.includes('selector whole must have the value "*"')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'selector type "line" is not one of whole, lines, text-quote'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'selector text-quote version "2" is not 1'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'selector whole must have the value "*"'), report.errors.join('\n'))
 })
 
 test('a marked file that is not a graph node is held to the repository read boundary', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   fs.writeFileSync(path.join(dir, 'content', 'notes', 'parts.txt'), 'spokes, nipples, rim tape\n')
   commitAll(dir, 'a plain file')
-  retarget(dir, DRAWING, 'notes/parts.txt', path.join(dir, 'content', 'notes', 'parts.txt'), (text) => text.replace('  audience: "team"', '  audience: "public"'))
+  retarget(dir, DRAWING, 'content/notes/parts.txt', (text) => text.replace('  audience: "team"', '  audience: "public"'))
   commitAll(dir, 'a public mark of a team file')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('wider than "team" of notes/parts.txt (the repository\'s read boundary)')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'wider than "team" of content/notes/parts.txt (the repository\'s read boundary)'), report.errors.join('\n'))
 })
 
 test('a symbolic link, a path into .git and a path out of the repository are refused', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   fs.symlinkSync('wheel-checks.md', path.join(dir, 'content', 'notes', 'link.md'))
   commitAll(dir, 'a link')
-  editMark(dir, WHEEL, (text) => text.replace('objectId: "notes/wheel-checks.md"', 'objectId: "notes/link.md"'))
-  editMark(dir, DRAWING, (text) => text.replace('objectId: "drawings/spoke-tension.html"', 'objectId: ".git/config"'))
+  const head = git(dir, ['rev-parse', 'HEAD'])
+  editMark(dir, WHEEL, (text) => text.replace('objectId: "content/notes/wheel-checks.md"', 'objectId: "content/notes/link.md"').replace(/revision: ".*"/, `revision: "${head}"`))
+  editMark(dir, DRAWING, (text) => text.replace('objectId: "content/drawings/spoke-tension.html"', 'objectId: ".git/config"'))
   editMark(dir, PADS, (text) => text.replace(/objectId: ".*"/, 'objectId: "../outside.md"'))
   commitAll(dir, 'escaping targets')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('notes/link.md') && (error.includes('symbolic link') || error.includes('not recoverable'))), report.errors.join('\n'))
-  assert.ok(report.errors.some((error) => error.includes('points into .git')), report.errors.join('\n'))
-  assert.ok(report.errors.some((error) => error.includes('leaves the repository')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'content/notes/link.md', 'symbolic link'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'points into .git'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'leaves the repository'), report.errors.join('\n'))
 })
 
-test('an ambiguous quote warns, an overclaimed state warns, and belongs_to must name an index', () => {
-  const dir = projectFromFixture()
-  editMark(dir, PADS, (text) => text.replace(/value: "The mechanic.*"/, 'value: "the "').replace('markState: "recorded"', 'markState: "accepted"'))
+test('belongs_to must name a marks index', () => {
+  const { dir } = pinnedProject()
   editMark(dir, DRAWING, (text) => text.replace('      - "repair-workshop:marks"', '      - "repair-workshop:notes:wheel-checks"'))
-  commitAll(dir, 'ambiguity')
+  commitAll(dir, 'not an index')
   const report = checkProject(dir)
-  assert.ok(report.warnings.some((warning) => warning.includes('selector text-quote occurs')), report.warnings.join('\n'))
-  assert.ok(report.warnings.some((warning) => warning.includes('markState "accepted" claims a verified edition')), report.warnings.join('\n'))
-  assert.ok(report.errors.some((error) => error.includes('belongs_to repair-workshop:notes:wheel-checks is not a marks index')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'belongs_to repair-workshop:notes:wheel-checks is not a marks index'), report.errors.join('\n'))
 })
 
 test('a record tagged graphmark without front matter fields is refused, and unknown options exit 2', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   fs.writeFileSync(markPath(dir, '2026-01-15-bare.md'), '---\ntitle: "Bare"\ntags: [graphmark]\nkg:\n  id: "repair-workshop:mark:2026-01-15-bare"\n  type: "evidence"\n  audience: "team"\n  relations:\n    belongs_to:\n      - "repair-workshop:marks"\n---\n# Bare\n')
   commitAll(dir, 'a bare mark')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('2026-01-15-bare.md: atelier-graphmark@v1')), report.errors.join('\n'))
+  assert.ok(has(report.errors, '2026-01-15-bare.md: atelier-graphmark@v1'), report.errors.join('\n'))
   const unknown = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--jsn'], { cwd: dir, encoding: 'utf8' })
   assert.equal(unknown.status, 2)
   assert.match(unknown.stderr, /unknown option: --jsn/)
 })
 
-// Findings from the follow-up review.
-
 test('a marked file outside the graph keeps its own narrower audience', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   fs.mkdirSync(path.join(dir, 'content', 'uploads'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'content', 'uploads', 'call.md'), '# A call\n\nA private sentence.\n')
   fs.mkdirSync(path.join(dir, 'content', 'drafts'), { recursive: true })
@@ -455,49 +684,39 @@ test('a marked file outside the graph keeps its own narrower audience', () => {
   fs.writeFileSync(path.join(dir, 'atelier.project.json'), `${JSON.stringify(config, null, 2)}\n`)
   commitAll(dir, 'material outside the graph')
   const quote = (text) => text.replace(/value: "The mechanic.*"/, 'value: "A private sentence."').replace('"repair-workshop:captures:2026-01-14-brake-check-advice"', '"repair-workshop:notes:wheel-checks"')
-  retarget(dir, PADS, 'uploads/call.md', path.join(dir, 'content', 'uploads', 'call.md'), quote)
+  retarget(dir, PADS, 'content/uploads/call.md', quote)
   commitAll(dir, 'mark an undeclared upload')
   const upload = checkProject(dir)
   assert.equal(upload.ok, false)
-  assert.ok(upload.errors.some((error) => error.includes('wider than "private" of uploads/call.md (its declared audience)')), upload.errors.join('\n'))
+  assert.ok(has(upload.errors, 'wider than "private" of content/uploads/call.md (the audience its marked edition declares)'), upload.errors.join('\n'))
 
-  retarget(dir, PADS, 'drafts/diary.md', path.join(dir, 'content', 'drafts', 'diary.md'))
+  retarget(dir, PADS, 'content/drafts/diary.md')
   commitAll(dir, 'mark an excluded private draft')
   const draft = checkProject(dir)
   assert.equal(draft.ok, false)
-  assert.ok(draft.errors.some((error) => error.includes('wider than "private" of drafts/diary.md (its declared audience)')), draft.errors.join('\n'))
-})
-
-test('an untracked mark record is refused', () => {
-  const dir = projectFromFixture()
-  fs.copyFileSync(markPath(dir, DRAWING), markPath(dir, '2026-01-16-untracked.md'))
-  editMark(dir, '2026-01-16-untracked.md', (text) => text.replace('repair-workshop:mark:2026-01-12-spoke-tension-drawing', 'repair-workshop:mark:2026-01-16-untracked').replace('    supports:\n      - "repair-workshop:mark:2026-01-12-order-of-wheel-checks"\n', ''))
-  const report = checkProject(dir)
-  assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('2026-01-16-untracked.md: the mark record is not tracked')), report.errors.join('\n'))
+  assert.ok(has(draft.errors, 'wider than "private" of content/drafts/diary.md (the audience its marked edition declares)'), draft.errors.join('\n'))
 })
 
 test('an index tagged graphmark that carries a target is checked, not skipped', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   editMark(dir, DRAWING, (text) => text.replace('  type: "evidence"', '  type: "index"'))
   commitAll(dir, 'a mark disguised as an index')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes(`${DRAWING}: atelier-graphmark@v1 /kg/type`)), report.errors.join('\n'))
+  assert.ok(has(report.errors, `${DRAWING}: atelier-graphmark@v1 /kg/type`), report.errors.join('\n'))
 })
 
 test('evidences must name the marked node', () => {
-  const dir = projectFromFixture()
+  const { dir } = pinnedProject()
   editMark(dir, WHEEL, (text) => text.replace('      - "repair-workshop:notes:wheel-checks"', '      - "repair-workshop:drawings:spoke-tension"'))
   commitAll(dir, 'evidence of something else')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(report.errors.some((error) => error.includes('evidences must name the marked node repair-workshop:notes:wheel-checks')), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'evidences must name the marked node repair-workshop:notes:wheel-checks'), report.errors.join('\n'))
 })
 
 test('a local replace ref cannot make a commit appear to hold an edition', () => {
-  const dir = projectFromFixture()
-  const head = pinRevisions(dir)
+  const { dir, head } = pinnedProject()
   const note = path.join(dir, 'content', 'notes', 'wheel-checks.md')
   fs.appendFileSync(note, '\nA line only a replacement holds.\n')
   const forged = digest(fs.readFileSync(note))
@@ -510,5 +729,5 @@ test('a local replace ref cannot make a commit appear to hold an edition', () =>
   git(dir, ['add', '-A'])
   git(dir, ['commit', '-qm', 'claim the replaced bytes'])
   const report = checkProject(dir)
-  assert.ok(report.errors.some((error) => error.includes('order-of-wheel-checks') && error.includes('not recoverable')), report.errors.join('\n') || JSON.stringify(report.marks))
+  assert.ok(has(report.errors, 'order-of-wheel-checks', 'not verified'), report.errors.join('\n') || JSON.stringify(report.marks))
 })

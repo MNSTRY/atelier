@@ -31,13 +31,13 @@ carries the workflow for agents.
 
 ## The steps
 
+Nothing is written until step 5 has settled custody: not a capture, not a
+mark record, not an index entry.
+
 1. **Find exactly what was marked.** Resolve the selection, passage, file or
    reference, and read it through its own tool. Note the part that was meant:
    a few lines, an exact sentence, or the whole object. If the target is
    unclear, recover what is available and ask only for the missing piece.
-   If the material is not yet in the owning repository (a passage from a
-   conversation, a call, a file elsewhere), capture it there first as a
-   source file, commit it, and note where it came from for `capturedFrom`.
 2. **Say why it was marked.** Write the marker's reason plainly, in their
    meaning. If it was not given and cannot be recovered, ask one question.
 3. **Establish provenance.** Who made it, who marked it, when, which source
@@ -47,31 +47,50 @@ carries the workflow for agents.
    earlier marks. If it is already a node, the mark points at that node rather
    than creating another. If the mark replaces an earlier one, say so with
    `supersedes`. Recency alone never makes a mark authoritative.
-5. **Decide custody and audience before placement.** Confirm the owner, the
-   consent that covers the material and its audience (`public`, `team`,
-   `operator`, `staff`, `private` or `sensitive`). A mark's audience is never
-   wider than the marked material's. Titles, paths and relations can reveal as
-   much as content does. When unsure, keep the mark private and name the
-   decision that is needed.
-6. **Preserve the edition.** Make sure the marked material is committed, then
-   record the target: the repository, the object's path from the repository
-   root, the commit that holds it, the selector for the marked part, and the
-   SHA-256 of the whole object's bytes at that commit. Leave the original
+5. **Settle custody before writing anything.** Establish who owns the material
+   and the repository it would be placed in, what retention the owner and the
+   people in the material permit, who can actually read that repository, and
+   what the reason, title, paths, quoted selector and attribution would tell
+   those readers. Git repository access is the read boundary
+   ([repo boundary guard](../reference/repo-boundary-guard.md)); `kg.audience`
+   (`public`, `team`, `operator`, `staff`, `private` or `sensitive`) records
+   who the material is for, and labelling a record `private` inside a
+   team-readable repository does not hide it from the team. A request to mark
+   is not consent to keep, share or send. If any of this is unclear, write
+   nothing: pause and name the decision that is needed, or place the material
+   somewhere already authorized for it, such as the person's private
+   repository. A mark's audience is never wider than the marked material's.
+6. **Capture, if the material is not in a repository yet.** A passage from a
+   conversation, a call or a file elsewhere is captured where step 5 placed it,
+   as a source file, and committed. Note where it came from for
+   `capturedFrom`.
+7. **Preserve the edition.** Make sure the marked material is committed on a
+   branch that is kept, then record the target: the repository, the object's
+   path from the Git repository root, the full commit id that holds it
+   (`git rev-parse HEAD` right after committing it), the selector for the
+   marked part, and the SHA-256 of the whole object's bytes at that commit. A
+   branch name or a short id is not an edition. Choose a selector that names
+   one part: a quote that occurs once, or a line range. Leave the original
    unchanged. If it changes later, the mark still names what was marked, and
    Git can return it.
-7. **Write the record and join it to the graph.** Use the record shape below.
+8. **Write the record and join it to the graph.** Use the record shape below.
    A non-Markdown object is reached through its `<file>.kg.json` sidecar. If
    it has none, its owner adds one; for `.html`, `.pdf` and `.docx` files,
    `atelier enroll documents` writes the smallest sidecar the census accepts,
-   at the `private` audience unless told otherwise. Use the existing relation types: `evidences`
-   to the marked node, `belongs_to` to the marks index, and `depends_on`,
-   `supports`, `contradicts` or `related` only for relationships the evidence
-   shows. An open interpretation stays in the record's text, labelled as a
-   candidate, and does not become an edge. Never edit a generated graph.
-8. **Build, check and read back.** Run `atelier graph`,
-   `atelier graph --check` and `atelier graphmark check`, then find the mark's
-   id and edges in the built graph. Report what was marked and why, where the record lives, its audience,
-   and the furthest state actually reached.
+   at the `private` audience unless told otherwise. Use the existing relation
+   types: `evidences` to the marked node, `belongs_to` to the marks index, and
+   `depends_on`, `supports`, `contradicts` or `related` only for relationships
+   the evidence shows. An open interpretation stays in the record's text,
+   labelled as a candidate, and does not become an edge. Never edit a
+   generated graph.
+9. **Commit, build, check and read back.** Run the repository's boundary
+   check on the staged record (`atelier boundary check --staged`, or the
+   installed hook) and commit it: the check verifies the committed record and
+   refuses an uncommitted edit. Then run `atelier graph`,
+   `atelier graph --check` and `atelier graphmark check --expect <the mark's id>`,
+   and find the mark's id and edges in the built graph. Report what was marked
+   and why, where the record lives, its audience, and the furthest state
+   actually reached.
 
 ## The record
 
@@ -90,8 +109,8 @@ markedOn: "2026-01-12"
 madeBy: "The workshop's volunteers"
 target:
   owner: "content"
-  objectId: "notes/wheel-checks.md"
-  revision: "<the commit that holds the edition>"
+  objectId: "content/notes/wheel-checks.md"
+  revision: "<the full commit id that holds the edition>"
   selector:
     type: "lines"
     version: "1"
@@ -111,12 +130,15 @@ kg:
 ---
 ```
 
-`target` is the shared exact source reference from evidence navigation. The
-selector is `whole` (value `*`), `lines` (`N` or `N-M`) or `text-quote` (the
-exact sentence). Captured material adds `capturedFrom`.
+`target` is the shared exact source reference from evidence navigation, with
+a full commit id and the path from the Git repository root. The selector is
+`whole` (value `*`), `lines` (`N` or `N-M`) or `text-quote` (an exact sentence
+that occurs once). A `lines` or `text-quote` selector needs a UTF-8 text file;
+mark a binary file whole. Captured material adds `capturedFrom`.
 
 The body says, in plain sentences: what was marked, why, its provenance, what
-the mark does not do, and any open interpretation labelled as a candidate.
+the mark does not do, and any open interpretation labelled as a candidate. The
+summary and the body must both say why; the check refuses either when blank.
 
 The graph reads `title`, `summary`, `tags` and the `kg` block. The other front
 matter fields (`markedBy`, `markedOn`, `madeBy`, `target`, `capturedFrom`,
@@ -149,41 +171,47 @@ the whole drawing, and one sentence of the call by quote. Copy the folder,
 commit it (`git init`, `git add -A`, `git commit`), then:
 
 ```sh
-atelier graph --project ./atelier.project.json
-atelier graph --check --project ./atelier.project.json
-atelier graphmark check --project ./atelier.project.json
+atelier graph --project .
+atelier graph --check --project .
+atelier graphmark check --project .
 ```
 
-The graph builds with no diagnostics, and the check reports three marks, all
-intact. Their `revision` is the placeholder `example` and their state
-`recorded`, so the check also says each edition is held at `HEAD`; set each
-`revision` to your full commit id and the warnings go. Commit a change to the note and the check reports the wheel
-checks mark as changed, with the command that returns the marked edition.
-Widen that mark's audience to `public` and the check refuses it. Point a
-mark's `evidences` at an id that does not exist and the build is refused
+The graph builds with no diagnostics. The check refuses all three marks: their
+`revision` is the placeholder `0000000000000000000000000000000000000000`,
+which names no commit, and for each one it gives a repair hint that `HEAD`
+holds the marked bytes, with its full commit id. Set each `revision` to that
+id, commit, and the check reports three marks, all intact. Commit a change to
+the note and the check reports the wheel checks mark as changed, with the
+command that returns the marked edition. Widen that mark's audience to
+`public` and the check refuses it. Point a mark's `evidences` at an id that
+does not exist and the build is refused
 (`declared evidences target ... was not found`). Delete the drawing and the
 build is refused twice: the sidecar becomes an orphan and the drawing's mark no
-longer resolves.
-`test/graphmark.test.mjs` pins these behaviours.
+longer resolves. `test/graphmark.test.mjs` pins these behaviours.
 
 ## Limits
 
 - The graph reads every file Git does not ignore, so a mark record can be
   built into the graph before it is committed. `atelier graphmark check`
-  refuses a record that is not tracked; commit the record, rebuild, and
-  confirm its id is in the built graph. A record in a Git-ignored path is not
-  read at all.
-- `atelier graphmark check` compares a mark's audience with the marked file's
-  node, the nodes it `evidences`, and, for a file that is not a graph node, the
-  repository's read boundary and the audience the file declares itself. Consent and custody (step 5) remain the agent's
-  and reviewer's responsibility.
+  verifies the record committed at `HEAD` and refuses an untracked, only
+  staged or edited record; commit the record, rebuild, and confirm its id is
+  in the built graph. A record in a Git-ignored path is not read at all. Use
+  `--expect <id>` so a mark that went missing fails the check instead of
+  disappearing from the count.
+- `atelier graphmark check` compares a mark's audience with the audience the
+  marked edition declared at its commit, the marked file's current node or,
+  for a file that is not a graph node, the repository's read boundary and what
+  the file declares now, and the nodes it `evidences`. Custody (step 5) remains
+  the agent's and reviewer's responsibility.
 - A changed edition is a warning, not an error: the mark still names the bytes
-  that were marked, and Git returns them. An edition no commit holds is an
-  error.
+  that were marked, and Git returns them. An edition the named commit does not
+  hold is an error.
 - A history rewrite that drops the marked commit (a squash merge, a rebase or
-  a force push) leaves the edition recoverable only if a reachable commit still
-  holds the same bytes, and the check says so. Mark material once it is on a
-  branch that is kept, and record the full commit id.
+  a force push) leaves the mark unverified, even when a kept commit holds the
+  same bytes; the check names such a commit as a repair hint. Mark material
+  once it is on a branch that is kept, and record the full commit id.
+  Reachability is judged from your clone's refs, which does not prove that
+  every reader's copy keeps the commit.
 - A mark is local, Git-backed source material. It grants no export, runtime
   visibility or publication. Export audience rules apply unchanged.
 

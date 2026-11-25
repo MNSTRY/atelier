@@ -238,6 +238,14 @@ export function remoteHost(url) {
   return parsed ? parsed[1].toLowerCase() : null
 }
 
+function isDirectoryPath(value) {
+  try {
+    return fs.statSync(value).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 function fallbackRoot(env, fallback) {
   const config = typeof fallback === 'string' ? { value: fallback } : asObject(fallback)
   return firstString(config.value, config.env ? env[config.env] : null)
@@ -268,6 +276,8 @@ export function resolveProjectConfig({
 
   if (requestedPath) {
     configPath = resolvePathValue(requestedPath, cwd)
+    // A project directory selects the atelier.project.json it holds.
+    if (configPath && isDirectoryPath(configPath)) configPath = path.join(configPath, 'atelier.project.json')
     if (configPath && fs.existsSync(configPath)) {
       config = readProjectConfig(configPath)
       configDir = path.dirname(configPath)

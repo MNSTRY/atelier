@@ -11,8 +11,10 @@ kg:
 # Captured: a visiting mechanic's advice on brake checks
 
 Captured on 14 January 2026 from a phone call with a visiting mechanic
-(invented). The volunteer lead wrote it down the same day, in the mechanic's
-words where they were clear.
+(invented). Before writing anything down, the volunteer lead asked whether the
+advice and the reason for keeping it could be kept in the workshop's
+repository, which every volunteer can read; the mechanic agreed. The lead wrote
+it down the same day, in the mechanic's words where they were clear.
 
 The mechanic checks pad wear before cable tension, because new tension on a worn pad hides the wear.
 
