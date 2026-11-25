@@ -195,13 +195,16 @@ longer resolves. `test/graphmark.test.mjs` pins these behaviours.
 ## Limits
 
 - `atelier graphmark check` verifies the committed tree at `HEAD`, not the
-  working tree: it builds the graph from a private snapshot of the committed
-  files, config and read boundaries, so an uncommitted edit can neither pass
-  nor fail a mark. It refuses an untracked, only staged or edited mark record,
-  and warns about uncommitted changes to what a mark depends on. A record in a
-  Git-ignored path is not read at all. Use `--expect <id>` so a mark that went
-  missing fails the check instead of disappearing from the count. A mark with
-  any error is reported as `refused`.
+  working tree: it reads the project config and read policy from committed
+  blobs and builds the graph from a private snapshot of the committed files,
+  so an uncommitted edit can neither pass nor fail a mark, and a sparse
+  checkout works. It refuses a pending mark record (new, staged or a tracked
+  file turned into a mark), and warns about uncommitted changes to what a
+  mark depends on and about an uncommitted marks index change. A failed
+  `git status` makes the result indeterminate. A record in a Git-ignored path
+  is not read at all. Use `--expect <id>` so a mark that went missing fails
+  the check instead of disappearing from the count. A mark with any error is
+  reported as `refused`.
 - `atelier graphmark check` compares a mark's audience with the audience the
   marked edition declared at its commit, the marked file's committed node or,
   for a file that is not a graph node, the committed read boundary and what

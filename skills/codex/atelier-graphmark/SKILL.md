@@ -77,9 +77,10 @@ edit a generated graph.
 
 Run the boundary check on the staged record (`atelier boundary check --staged`
 or the installed hook) and commit it: the check verifies the committed tree at
-`HEAD`, not your working tree, refuses an untracked, staged-only or edited
-record, and only warns about uncommitted changes to what the mark depends on,
-so commit those too. A record in a Git-ignored path is skipped without an
+`HEAD`, not your working tree. It refuses a pending record (new, staged, or a
+tracked file turned into a mark) and only warns about uncommitted changes to
+what the mark depends on, so commit those too. A failed `git status` makes the
+result indeterminate. A record in a Git-ignored path is skipped without an
 error. Run `atelier graph`,
 `atelier graph --check` and `atelier graphmark check --expect <the mark's id>`,
 then find the mark's id and edges in the built graph. The check refuses a

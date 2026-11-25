@@ -260,6 +260,9 @@ export function resolveProjectConfig({
   configEnv = PROJECT_CONFIG_ENV,
   writeLocalState = true,
   defaults = {},
+  // A config document read from elsewhere (a committed blob) for the file at
+  // the selected path, which then need not exist on disk.
+  configDocument = undefined,
 } = {}) {
   const argPath = projectConfigArg(argv, configArgPrefix)
   const envPath = firstString(env[configEnv])
@@ -278,7 +281,10 @@ export function resolveProjectConfig({
     configPath = resolvePathValue(requestedPath, cwd)
     // A project directory selects the atelier.project.json it holds.
     if (configPath && isDirectoryPath(configPath)) configPath = path.join(configPath, 'atelier.project.json')
-    if (configPath && fs.existsSync(configPath)) {
+    if (configPath && configDocument !== undefined) {
+      config = configDocument
+      configDir = path.dirname(configPath)
+    } else if (configPath && fs.existsSync(configPath)) {
       config = readProjectConfig(configPath)
       configDir = path.dirname(configPath)
     } else if (defaultRepoOpsRoot || defaultWorkspaceRoot) {
