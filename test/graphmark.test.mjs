@@ -1824,10 +1824,10 @@ test('a Git repository at a managed folder cannot hide what the enclosing reposi
   const hidden = cliCheck(dir)
   assert.equal(hidden.status, 1)
   assert.equal(hidden.report.ok, false)
-  // The command runs in `dir`, so it spells it as the host's real path
-  // (/private/var on macOS for /var).
-  const here = fs.realpathSync.native(dir)
-  assert.ok(has(hidden.report.errors, `${path.join(here, 'content')}: is a Git repository where the enclosing repository ${here} holds committed files at content in its HEAD`), hidden.report.errors.join('\n'))
+  // Hosts spell the temporary folder differently (/private/var on macOS,
+  // 8.3 short names on Windows), so match the message, not the prefix.
+  const nested = `${path.sep}content: is a Git repository where the enclosing repository `
+  assert.ok(hidden.report.errors.some((e) => e.includes(nested) && e.includes(' holds committed files at content in its HEAD')), hidden.report.errors.join('\n'))
 })
 
 test('a nested repository the enclosing one records as a submodule exactly there is read as its own', () => {
