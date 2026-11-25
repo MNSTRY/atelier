@@ -1447,3 +1447,94 @@ test('external repositories are never probed while the committed project is reso
   assert.ok(calls.length > 0, 'the wrapper traced the check')
   assert.equal(calls.split('\n').filter((line) => line.includes('remote get-url')).length, 0, calls)
 })
+
+// Finding from the confirmation review of 69613bd.
+
+// Emulate a case-insensitive, Unicode-normalising volume for the snapshot: a
+// path inside a GraphMark snapshot that does not exist opens a sibling with
+// the same name up to case and normalisation, as such a volume would.
+function onFoldingVolume(run) {
+  const real = { existsSync: fs.existsSync, readFileSync: fs.readFileSync, statSync: fs.statSync }
+  const fold = (name) => name.normalize('NFC').toLowerCase()
+  const resolve = (target) => {
+    if (typeof target !== 'string' || !target.includes(SNAPSHOT_PREFIX) || real.existsSync(target)) return target
+    const parts = path.resolve(target).split(path.sep)
+    let current = parts[0] === '' ? path.sep : `${parts[0]}${path.sep}`
+    for (const part of parts.slice(1)) {
+      const next = path.join(current, part)
+      if (real.existsSync(next)) {
+        current = next
+        continue
+      }
+      let names = []
+      try {
+        names = fs.readdirSync(current)
+      } catch {
+        return target
+      }
+      const match = names.find((name) => fold(name) === fold(part))
+      if (!match) return target
+      current = path.join(current, match)
+    }
+    return current
+  }
+  fs.existsSync = (target, ...rest) => real.existsSync(resolve(target), ...rest)
+  fs.readFileSync = (target, ...rest) => real.readFileSync(resolve(target), ...rest)
+  fs.statSync = (target, ...rest) => real.statSync(resolve(target), ...rest)
+  try {
+    return run()
+  } finally {
+    Object.assign(fs, real)
+  }
+}
+
+test('no committed file can stand in for the policy or a derived path on a case-insensitive volume', () => {
+  const wide = `${JSON.stringify({ schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'public', repos: { content: { readBoundary: 'public' } } })}\n`
+  // The configured policy is absent; another spelling of it is committed.
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'content/policy/repo-access.json' })
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'parts.txt'), 'spokes, nipples, rim tape\n')
+  fs.writeFileSync(path.join(dir, 'content', 'notes', 'open.md'), '---\ntitle: "Open"\nkg:\n  id: "repair-workshop:notes:open"\n  type: "document"\n  status: "active"\n  audience: "public"\n---\n# Open\n\nAnyone may read this.\n')
+  commitAll(dir, 'an absent policy, a plain file and a public note')
+  // Under the committed policy (absent, so the repository's team boundary)
+  // a public mark of the plain file is refused; only a stand-in policy that
+  // widens the boundary would let it pass.
+  retarget(dir, DRAWING, 'content/notes/parts.txt', (text) => text.replace('  audience: "team"', '  audience: "public"').replace('"repair-workshop:drawings:spoke-tension"', '"repair-workshop:notes:open"'))
+  commitAll(dir, 'a public mark of a team file')
+  const committed = checkProject(dir)
+  assert.ok(has(committed.errors, DRAWING, 'wider than "team" of content/notes/parts.txt (the repository\'s read boundary)'), committed.errors.join('\n'))
+  commitObjects(dir, [{ path: 'content/policy/Repo-Access.json', content: wide }], 'another spelling of the policy')
+  const policy = onFoldingVolume(() => checkProject(dir))
+  assert.equal(policy.ok, false)
+  assert.ok(has(policy.errors, 'content/policy/Repo-Access.json would stand in for the absent repository access file content/policy/repo-access.json'), policy.errors.join('\n'))
+
+  // A sidecar spelled differently from the name the graph probes for.
+  const { dir: drawings } = pinnedProject()
+  commitObjects(drawings, [
+    { path: 'content/drawings/plan.svg', content: '<svg xmlns="http://www.w3.org/2000/svg"/>\n' },
+    { path: 'content/drawings/Plan.svg.kg.json', content: sidecarFor('plan.svg', 'repair-workshop:drawings:plan', 'public') },
+  ], 'a sidecar under another spelling')
+  const sidecar = onFoldingVolume(() => checkProject(drawings))
+  assert.equal(sidecar.ok, false)
+  assert.ok(has(sidecar.errors, 'content/drawings/Plan.svg.kg.json would stand in for content/drawings/plan.svg.kg.json'), sidecar.errors.join('\n'))
+
+  // With the policy committed exactly, the graph reads its verified bytes from
+  // the snapshot's own policy file, never from the copied tree.
+  const { dir: exact } = pinnedProject()
+  const reads = []
+  const readFileSync = fs.readFileSync
+  fs.readFileSync = (target, ...rest) => {
+    reads.push(String(target))
+    return readFileSync(target, ...rest)
+  }
+  let report
+  try {
+    report = checkProject(exact)
+  } finally {
+    fs.readFileSync = readFileSync
+  }
+  assert.equal(report.ok, true, report.errors.join('\n'))
+  const inSnapshot = reads.filter((name) => name.includes(SNAPSHOT_PREFIX))
+  assert.ok(inSnapshot.some((name) => name.endsWith(`${path.sep}policy${path.sep}repo-access.json`)), inSnapshot.join('\n'))
+  assert.equal(inSnapshot.some((name) => name.endsWith('repo-access.v1.json')), false, inSnapshot.join('\n'))
+})

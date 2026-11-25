@@ -455,7 +455,23 @@ export function reclaimAbandonedSnapshots(dir = os.tmpdir(), { uid = typeof proc
 // Paths a checkout of this tree could not hold faithfully: not valid UTF-8,
 // a segment Git refuses, the same path twice, or two paths that one
 // case-insensitive or Unicode-normalising filesystem would merge.
-function pathProblems(entries) {
+const foldKey = (name) => name.normalize('NFC').toLowerCase()
+
+// What the knowledge graph will open by a name it derives rather than reads
+// from a folder listing: each non-Markdown file's sidecar, each sidecar's
+// source, and each repository folder's manifest.
+function derivedProbes(entries, prefixes) {
+  const probes = new Set()
+  for (const entry of entries) {
+    if (entry.path === null || !(entry.type === 'blob')) continue
+    if (/\.kg\.json$/i.test(entry.path)) probes.add(entry.path.replace(/\.kg\.json$/i, ''))
+    else if (!/\.md$/i.test(entry.path)) probes.add(`${entry.path}.kg.json`)
+  }
+  for (const prefix of prefixes) probes.add(prefix ? `${prefix}/atelier.manifest.json` : 'atelier.manifest.json')
+  return probes
+}
+
+function pathProblems(entries, probes = new Set()) {
   const problems = []
   const folded = new Map()
   const exact = new Set()
@@ -473,13 +489,40 @@ function pathProblems(entries) {
     exact.add(entry.path)
     for (let depth = 1; depth <= segments.length; depth += 1) {
       const name = segments.slice(0, depth).join('/')
-      const key = name.normalize('NFC').toLowerCase()
+      const key = foldKey(name)
       const prior = folded.get(key)
       if (prior === undefined) folded.set(key, name)
       else if (prior !== name) problems.push(`${name} and ${prior} name one file on a case-insensitive or Unicode-normalising filesystem`)
     }
   }
+  // A name the graph derives must be in the tree exactly, or have no
+  // case-folded or normalised stand-in that such a filesystem would open.
+  for (const probe of probes) {
+    const stand = folded.get(foldKey(probe))
+    if (stand !== undefined && stand !== probe) problems.push(`${stand} would stand in for ${probe}, which the committed tree does not hold, on a case-insensitive or Unicode-normalising filesystem`)
+  }
   return [...new Set(problems)]
+}
+
+// A committed path that a case-insensitive or Unicode-normalising
+// filesystem would open in place of `objectPath`, which is absent: the first
+// spelling found by walking the committed tree one folder at a time, or null.
+function foldVariantOf(root, commit, objectPath) {
+  const segments = objectPath.split('/')
+  let prefix = ''
+  for (const segment of segments) {
+    const listed = git(root, ['ls-tree', '-z', '--end-of-options', commit, ...(prefix ? ['--', `${prefix}/`] : [])])
+    if (listed === null) return { failed: true }
+    const names = treeEntries(listed).filter((entry) => entry.path !== null)
+    const wanted = prefix ? `${prefix}/${segment}` : segment
+    if (names.some((entry) => entry.path === wanted)) {
+      prefix = wanted
+      continue
+    }
+    const variant = names.find((entry) => foldKey(entry.path) === foldKey(wanted))
+    return variant ? { path: variant.path } : null
+  }
+  return null
 }
 
 // Stream the blobs of `items` from Git into files under `destination` with
@@ -565,7 +608,15 @@ function materialise(root, commit, prefixes, destination, base) {
     return recorded
   }
   const entries = treeEntries(listing)
-  recorded.problems = pathProblems(entries)
+  recorded.problems = pathProblems(entries, derivedProbes(entries, prefixes))
+  for (const prefix of prefixes) {
+    // A managed folder that the tree does not hold exactly, but holds under
+    // another spelling, would be walked in its place.
+    if (!prefix || entries.some((entry) => entry.path?.startsWith(`${prefix}/`))) continue
+    const variant = foldVariantOf(root, commit, prefix)
+    if (variant?.failed) recorded.problems.push(`${prefix} could not be looked up`)
+    else if (variant) recorded.problems.push(`${variant.path} would stand in for the repository folder ${prefix}, which the committed tree does not hold, on a case-insensitive or Unicode-normalising filesystem`)
+  }
   if (recorded.problems.length) return recorded
   const regular = []
   for (const entry of entries) {
@@ -644,7 +695,7 @@ function buildSnapshot(base, request) {
       const status = workingStatus(root)
       if (!head) errors.push(`${root}: has no commit at HEAD, so nothing committed can be verified`)
       if (!status.available) errors.push(`${root}: git status failed, so uncommitted mark records cannot be ruled out; the result is indeterminate`)
-      roots.set(root, { root, head, status, mirror: mirror(root), prefixes: new Set(), extra: [] })
+      roots.set(root, { root, head, status, mirror: mirror(root), prefixes: new Set() })
     }
     return roots.get(root)
   }
@@ -675,7 +726,6 @@ function buildSnapshot(base, request) {
   }
   for (const problem of validateProjectConfigDoc(document)) errors.push(`${configRel} (committed at HEAD): ${problem}`)
   if (errors.length) return snapshot
-  configOwner.extra.push({ rel: configRel, bytes: committedConfig.bytes })
   const configChange = configOwner.status.changes.get(configRel)
   if (configChange) warnings.push(`${configRel}: has uncommitted changes (${configChange.kind}), which this check does not use; it reads the project config committed at HEAD`)
 
@@ -721,11 +771,27 @@ function buildSnapshot(base, request) {
     // repository.
     for (const problem of accessPolicyProblems(committedAccess.bytes, managed.map((repo) => repo.name), externalNames, accessRel)) errors.push(problem)
     if (errors.length) return snapshot
-    accessOwner.extra.push({ rel: accessRel, bytes: committedAccess.bytes })
   } else if (committedAccess.kind !== 'absent') {
     errors.push(`${accessRel}: the committed repository access file ${describeLookup(committedAccess)}; the check does not fall back to defaults`)
     return snapshot
+  } else {
+    // Absent, so the defaults apply; but not if another spelling of it is
+    // committed, which a case-insensitive checkout would read as the policy.
+    const variant = foldVariantOf(accessOwner.root, accessOwner.head.commit, accessRel)
+    if (variant) {
+      errors.push(variant.failed
+        ? `${accessRel}: whether another spelling of the repository access file is committed could not be checked`
+        : `${variant.path} would stand in for the absent repository access file ${accessRel} on a case-insensitive or Unicode-normalising filesystem; rename one of them, so the policy is the same on every checkout`)
+      return snapshot
+    }
   }
+  // The graph reads the policy from a file of its own, outside the copied
+  // tree, holding exactly the verified committed bytes, or from nowhere when
+  // the policy is absent. No file in the tree can stand in for it.
+  const policyDir = path.join(base, 'policy')
+  fs.mkdirSync(policyDir)
+  const policyFile = path.join(policyDir, 'repo-access.json')
+  if (committedAccess.kind === 'file') fs.writeFileSync(policyFile, committedAccess.bytes, { flag: 'wx' })
   const accessChange = accessOwner.status.changes.get(accessRel)
   if (accessChange) warnings.push(`${accessRel}: has uncommitted changes (${accessChange.kind}), which this check does not use; it reads the repository access file committed at HEAD${committedAccess.kind === 'absent' ? ' (there is none, so defaults apply)' : ''}`)
 
@@ -736,16 +802,6 @@ function buildSnapshot(base, request) {
     entry.recorded = recorded
     if (recorded.unreadable) errors.push(`${entry.root}: HEAD's tree cannot be read without fetching objects this clone lacks`)
     for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be written faithfully: ${problem}; the check refuses rather than lose or merge a file`)
-    for (const { rel, bytes } of entry.extra) {
-      if (recorded.written.has(rel)) continue
-      const file = path.join(entry.mirror, ...rel.split('/'))
-      try {
-        fs.mkdirSync(path.dirname(file), { recursive: true })
-        fs.writeFileSync(file, bytes, { flag: 'wx' })
-      } catch (error) {
-        errors.push(`${entry.root}: ${rel} could not be written into the snapshot faithfully (${error.code ?? error.message}); the check refuses rather than read another file`)
-      }
-    }
   }
   if (errors.length) return snapshot
 
@@ -770,7 +826,7 @@ function buildSnapshot(base, request) {
     configDir: mirror(resolved.configDir),
     workspaceRoot: mirror(resolved.workspaceRoot),
     repoOpsRoot: mirror(resolved.repoOpsRoot),
-    repoAccessPath: mirror(accessPath),
+    repoAccessPath: policyFile,
     repos: managed.map((repo) => ({ ...repo, path: mirror(repo.path) })),
   }
   return snapshot

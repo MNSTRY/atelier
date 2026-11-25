@@ -179,7 +179,11 @@ the committed tree at `HEAD`.
    validated as written, before any defaults are filled in: it must use a
    supported format (`mnstry.atelier-repo-access@v1` or
    `mnstry.repo-access@v1`), name a valid default, and give every managed
-   repository a valid read boundary.
+   repository a valid read boundary. The graph then reads the policy from a
+   file of the snapshot's own, outside the copied tree, holding exactly those
+   verified bytes, or from nowhere when the policy is absent; an absent policy
+   is refused when another spelling of it is committed, since a
+   case-insensitive or Unicode-normalising checkout would read that one.
 3. **The committed files.** It streams the regular files committed under
    each managed repository folder into a private snapshot, with bounded
    memory and with no checkout (so no line-ending conversion or checkout
@@ -187,8 +191,11 @@ the committed tree at `HEAD`.
    written. A tree that a checkout could not hold faithfully is refused before
    anything is written: a path that is not valid UTF-8, the same path twice,
    or two paths one case-insensitive or Unicode-normalising filesystem would
-   merge. Names are kept as Git's bytes, a leading U+FEFF included, and
-   compared as bytes. A partial clone that lacks a file there is refused.
+   merge. So is a committed file that such a filesystem would open in place of
+   a name the graph derives but the tree does not hold: a file's sidecar, a
+   sidecar's source, a repository folder's manifest or the folder itself.
+   Names are kept as Git's bytes, a leading U+FEFF included, and compared as
+   bytes. A partial clone that lacks a file there is refused.
 4. **The committed graph.** It builds the knowledge graph from the snapshot,
    with no repository discovery and no remote probes (external repositories
    are not read), and checks every mark against it.
