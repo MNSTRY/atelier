@@ -1222,18 +1222,12 @@ test('a promisor remote spelled with another true value still keeps the check fr
 })
 
 test('paths a checkout could not hold faithfully are refused before anything is written', () => {
-  const cases = [
-    ['a case-insensitive collision', [{ path: 'content/notes/Parts.md', content: '# Parts\n' }, { path: 'content/notes/parts.md', content: '# parts\n' }], 'name one file on a case-insensitive or Unicode-normalising filesystem'],
-    ['a normalisation collision', [{ path: 'content/notes/caf\u00e9.md', content: '# NFC\n' }, { path: 'content/notes/cafe\u0301.md', content: '# NFD\n' }], 'name one file on a case-insensitive or Unicode-normalising filesystem'],
-    ['a name that is not UTF-8', [{ path: Buffer.concat([Buffer.from('content/notes/caf'), Buffer.from([0xe9]), Buffer.from('.txt')]), content: 'latin-1 name\n' }], 'a path that is not valid UTF-8'],
-  ]
-  for (const [label, entries, message] of cases) {
-    const { dir } = pinnedProject()
-    commitObjects(dir, entries, label)
-    const report = checkProject(dir)
-    assert.equal(report.ok, false, label)
-    assert.ok(has(report.errors, 'cannot be written faithfully', message), `${label}: ${report.errors.join('\n')}`)
-  }
+  // Bytes no checkout can hold as given are refused on every volume.
+  const { dir } = pinnedProject()
+  commitObjects(dir, [{ path: Buffer.concat([Buffer.from('content/notes/caf'), Buffer.from([0xe9]), Buffer.from('.txt')]), content: 'latin-1 name\n' }], 'a name that is not UTF-8')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, 'cannot be written faithfully', 'a path that is not valid UTF-8'), report.errors.join('\n'))
 })
 
 test('a marked file that became a directory or a submodule at HEAD is refused, not removed', () => {
@@ -1448,39 +1442,42 @@ test('external repositories are never probed while the committed project is reso
   assert.equal(calls.split('\n').filter((line) => line.includes('remote get-url')).length, 0, calls)
 })
 
-// Finding from the confirmation review of 69613bd.
+// Findings from the confirmation reviews of 69613bd and cc43715: whether two
+// names are one file is asked of the volume, never modelled.
 
-// Emulate a case-insensitive, Unicode-normalising volume for the snapshot: a
-// path inside a GraphMark snapshot that does not exist opens a sibling with
-// the same name up to case and normalisation, as such a volume would.
-function onFoldingVolume(run) {
-  const real = { existsSync: fs.existsSync, readFileSync: fs.readFileSync, statSync: fs.statSync }
-  const fold = (name) => name.normalize('NFC').toLowerCase()
+// Emulate a volume that folds names, as NTFS does by upper-casing (so ς, σ
+// and Σ are one letter) and as normalising volumes do: every call on a path
+// inside a GraphMark snapshot resolves each component to the stored entry
+// with the same folded name. The check itself folds nothing; it asks this.
+function onFoldingVolume(run, fold = (name) => name.normalize('NFC').toUpperCase()) {
+  const methods = ['existsSync', 'statSync', 'lstatSync', 'readFileSync', 'openSync', 'mkdirSync', 'readdirSync', 'writeFileSync', 'accessSync', 'realpathSync']
+  const real = Object.fromEntries(methods.map((method) => [method, fs[method]]))
   const resolve = (target) => {
-    if (typeof target !== 'string' || !target.includes(SNAPSHOT_PREFIX) || real.existsSync(target)) return target
+    if (typeof target !== 'string' || !target.includes(SNAPSHOT_PREFIX)) return target
+    // Fold only inside the snapshot: its own folder is named exactly.
     const parts = path.resolve(target).split(path.sep)
-    let current = parts[0] === '' ? path.sep : `${parts[0]}${path.sep}`
-    for (const part of parts.slice(1)) {
-      const next = path.join(current, part)
-      if (real.existsSync(next)) {
-        current = next
-        continue
-      }
-      let names = []
+    const at = parts.findIndex((part) => part.startsWith(SNAPSHOT_PREFIX))
+    let current = parts.slice(0, at + 1).join(path.sep) || path.sep
+    for (const part of parts.slice(at + 1)) {
+      let names = null
       try {
-        names = fs.readdirSync(current)
+        names = real.readdirSync(current)
       } catch {
-        return target
+        names = null
       }
-      const match = names.find((name) => fold(name) === fold(part))
-      if (!match) return target
-      current = path.join(current, match)
+      const stored = names?.includes(part) ? part : names?.find((name) => fold(name) === fold(part))
+      current = path.join(current, stored ?? part)
     }
     return current
   }
-  fs.existsSync = (target, ...rest) => real.existsSync(resolve(target), ...rest)
-  fs.readFileSync = (target, ...rest) => real.readFileSync(resolve(target), ...rest)
-  fs.statSync = (target, ...rest) => real.statSync(resolve(target), ...rest)
+  for (const method of methods) {
+    const original = real[method]
+    const folded = function (target, ...rest) {
+      return original.call(this, resolve(target), ...rest)
+    }
+    if (method === 'realpathSync') folded.native = (target, ...rest) => original.native(resolve(target), ...rest)
+    fs[method] = folded
+  }
   try {
     return run()
   } finally {
@@ -1488,53 +1485,69 @@ function onFoldingVolume(run) {
   }
 }
 
-test('no committed file can stand in for the policy or a derived path on a case-insensitive volume', () => {
+test('two committed names one volume holds as one file are refused, Greek sigma included', () => {
+  for (const [label, names] of [
+    ['case', ['content/notes/Parts.txt', 'content/notes/parts.txt']],
+    ['normalisation', ['content/notes/caf\u00e9.txt', 'content/notes/cafe\u0301.txt']],
+    ['Greek sigma, which lower-casing tells apart', ['content/notes/\u039f\u03a3-1.txt', 'content/notes/\u03bf\u03c3-1.txt']],
+  ]) {
+    const { dir } = pinnedProject()
+    commitObjects(dir, names.map((name) => ({ path: name, content: `# ${label}\n` })), label)
+    assert.equal(checkProject(dir).ok, true, `${label}: a volume that keeps them apart holds both`)
+    const folded = onFoldingVolume(() => checkProject(dir))
+    assert.equal(folded.ok, false, label)
+    assert.ok(has(folded.errors, names[0], names[1], 'are one file on this filesystem'), `${label}: ${folded.errors.join('\n')}`)
+  }
+})
+
+test('a name the graph derives is refused when the volume opens another committed file for it', () => {
+  const cases = [
+    ['a sidecar spelled otherwise', [{ path: 'content/drawings/plan.svg', content: '<svg xmlns="http://www.w3.org/2000/svg"/>\n' }, { path: 'content/drawings/PLAN.svg.kg.json', content: sidecarFor('plan.svg', 'repair-workshop:drawings:plan', 'public') }]],
+    ['a .KG.JSON file whose own sidecar name aliases a committed one', [{ path: 'content/drawings/sample.KG.JSON', content: '{}\n' }, { path: 'content/drawings/sample.kg.json.kg.json', content: sidecarFor('sample.kg.json', 'repair-workshop:drawings:sample', 'public') }]],
+    ['a Greek-sigma spelling of a sidecar', [{ path: 'content/drawings/\u03bf\u03c3.svg', content: '<svg xmlns="http://www.w3.org/2000/svg"/>\n' }, { path: 'content/drawings/\u039f\u03a3.svg.kg.json', content: sidecarFor('\u039f\u03a3.svg', 'repair-workshop:drawings:os', 'public') }]],
+  ]
+  for (const [label, entries] of cases) {
+    const { dir } = pinnedProject()
+    commitObjects(dir, entries, label)
+    const report = onFoldingVolume(() => checkProject(dir))
+    assert.equal(report.ok, false, label)
+    assert.ok(has(report.errors, 'the knowledge graph opened', 'this filesystem gave it'), `${label}: ${report.errors.join('\n')}`)
+  }
+})
+
+test('an absent policy is refused when the volume would read another committed file as it, and only then', () => {
   const wide = `${JSON.stringify({ schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'public', repos: { content: { readBoundary: 'public' } } })}\n`
-  // The configured policy is absent; another spelling of it is committed.
+  // Inside a managed folder, under a Greek-sigma spelling.
   const { dir } = pinnedProject()
-  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'content/policy/repo-access.json' })
-  fs.writeFileSync(path.join(dir, 'content', 'notes', 'parts.txt'), 'spokes, nipples, rim tape\n')
-  fs.writeFileSync(path.join(dir, 'content', 'notes', 'open.md'), '---\ntitle: "Open"\nkg:\n  id: "repair-workshop:notes:open"\n  type: "document"\n  status: "active"\n  audience: "public"\n---\n# Open\n\nAnyone may read this.\n')
-  commitAll(dir, 'an absent policy, a plain file and a public note')
-  // Under the committed policy (absent, so the repository's team boundary)
-  // a public mark of the plain file is refused; only a stand-in policy that
-  // widens the boundary would let it pass.
-  retarget(dir, DRAWING, 'content/notes/parts.txt', (text) => text.replace('  audience: "team"', '  audience: "public"').replace('"repair-workshop:drawings:spoke-tension"', '"repair-workshop:notes:open"'))
-  commitAll(dir, 'a public mark of a team file')
-  const committed = checkProject(dir)
-  assert.ok(has(committed.errors, DRAWING, 'wider than "team" of content/notes/parts.txt (the repository\'s read boundary)'), committed.errors.join('\n'))
-  commitObjects(dir, [{ path: 'content/policy/Repo-Access.json', content: wide }], 'another spelling of the policy')
-  const policy = onFoldingVolume(() => checkProject(dir))
-  assert.equal(policy.ok, false)
-  assert.ok(has(policy.errors, 'content/policy/Repo-Access.json would stand in for the absent repository access file content/policy/repo-access.json'), policy.errors.join('\n'))
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'content/policy/\u039f\u03a3.json' })
+  commitAll(dir, 'a policy name nothing holds exactly')
+  commitObjects(dir, [{ path: 'content/policy/\u03bf\u03c3.json', content: wide }], 'another spelling of it')
+  assert.equal(checkProject(dir).ok, true, 'a volume that keeps them apart reads no policy, so the defaults apply')
+  const folded = onFoldingVolume(() => checkProject(dir))
+  assert.equal(folded.ok, false)
+  assert.ok(has(folded.errors, 'content/policy/\u03bf\u03c3.json would be read as the absent repository access file content/policy/\u039f\u03a3.json'), folded.errors.join('\n'))
 
-  // A sidecar spelled differently from the name the graph probes for.
-  const { dir: drawings } = pinnedProject()
-  commitObjects(drawings, [
-    { path: 'content/drawings/plan.svg', content: '<svg xmlns="http://www.w3.org/2000/svg"/>\n' },
-    { path: 'content/drawings/Plan.svg.kg.json', content: sidecarFor('plan.svg', 'repair-workshop:drawings:plan', 'public') },
-  ], 'a sidecar under another spelling')
-  const sidecar = onFoldingVolume(() => checkProject(drawings))
-  assert.equal(sidecar.ok, false)
-  assert.ok(has(sidecar.errors, 'content/drawings/Plan.svg.kg.json would stand in for content/drawings/plan.svg.kg.json'), sidecar.errors.join('\n'))
+  // Outside every managed folder, at the repository root.
+  const { dir: rooted } = pinnedProject()
+  git(rooted, ['rm', '-q', 'repo-access.v1.json'])
+  git(rooted, ['commit', '-qm', 'the policy file is gone'])
+  commitObjects(rooted, [{ path: 'REPO-ACCESS.V1.JSON', content: wide }], 'a policy under another spelling at the root')
+  const root = onFoldingVolume(() => checkProject(rooted))
+  assert.equal(root.ok, false)
+  assert.ok(has(root.errors, 'REPO-ACCESS.V1.JSON would be read as the absent repository access file repo-access.v1.json'), root.errors.join('\n'))
 
-  // With the policy committed exactly, the graph reads its verified bytes from
-  // the snapshot's own policy file, never from the copied tree.
-  const { dir: exact } = pinnedProject()
-  const reads = []
-  const readFileSync = fs.readFileSync
-  fs.readFileSync = (target, ...rest) => {
-    reads.push(String(target))
-    return readFileSync(target, ...rest)
-  }
-  let report
-  try {
-    report = checkProject(exact)
-  } finally {
-    fs.readFileSync = readFileSync
-  }
-  assert.equal(report.ok, true, report.errors.join('\n'))
-  const inSnapshot = reads.filter((name) => name.includes(SNAPSHOT_PREFIX))
-  assert.ok(inSnapshot.some((name) => name.endsWith(`${path.sep}policy${path.sep}repo-access.json`)), inSnapshot.join('\n'))
-  assert.equal(inSnapshot.some((name) => name.endsWith('repo-access.v1.json')), false, inSnapshot.join('\n'))
+  // A folder that resolves to another spelling, with no file under it, is just absent.
+  const { dir: leaf } = pinnedProject()
+  editJson(path.join(leaf, 'atelier.project.json'), (doc) => { doc.graph.repoAccessPath = 'CONTENT/absent-folder/repo-access.json' })
+  commitAll(leaf, 'a policy whose folder exists under another spelling but whose file does not')
+  const absent = onFoldingVolume(() => checkProject(leaf))
+  assert.equal(absent.ok, true, absent.errors.join('\n'))
+})
+
+test('a pending Markdown file whose name is not UTF-8 makes the result indeterminate', { skip: process.platform !== 'linux' && 'needs a filesystem that accepts names that are not UTF-8' }, () => {
+  const { dir } = pinnedProject()
+  fs.writeFileSync(Buffer.concat([Buffer.from(path.join(dir, 'content', 'notes', 'draft-')), Buffer.from([0xff]), Buffer.from('.md')]), '---\ntitle: "Draft"\ntags: [graphmark]\n---\n# Draft\n')
+  const report = checkProject(dir)
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, 'a pending Markdown file whose name is not UTF-8', 'indeterminate'), report.errors.join('\n'))
 })

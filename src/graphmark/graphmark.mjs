@@ -291,8 +291,40 @@ const describeLookup = (found) => DESCRIBE_LOOKUP[found.kind](found)
 function workingStatus(root) {
   const result = gitRun(root, ['-c', 'core.fsmonitor=false', '-c', 'status.relativePaths=false', 'status', '--porcelain=v2', '-z', '--untracked-files=all', '--no-renames', '--ignore-submodules=all'], { maxBuffer: 512 * 1024 * 1024 })
   const changes = new Map()
-  if (result.status !== 0) return { available: false, changes }
-  for (const entry of result.stdout.toString('utf8').split('\0')) {
+  const undecodable = []
+  if (result.status !== 0) return { available: false, changes, undecodable }
+  // Records are split as bytes, and each path decoded on its own, exactly
+  // (fatal, keeping a leading U+FEFF); a path that is not UTF-8 is kept as
+  // bytes rather than replaced by a lossy spelling.
+  const raw = result.stdout
+  const records = []
+  for (let start = 0; start < raw.length;) {
+    let end = raw.indexOf(0, start)
+    if (end < 0) end = raw.length
+    if (end > start) records.push(raw.subarray(start, end))
+    start = end + 1
+  }
+  const fieldsBefore = { '?': 1, 1: 8, u: 10 }
+  const decode = (bytes) => {
+    try {
+      return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+    } catch {
+      return null
+    }
+  }
+  const entries = []
+  for (const record of records) {
+    const skip = fieldsBefore[String.fromCharCode(record[0])]
+    if (skip === undefined) continue
+    let at = 0
+    for (let seen = 0; seen < skip && at >= 0; seen += 1) at = record.indexOf(0x20, at) + 1 || -1
+    if (at <= 0) continue
+    const header = record.subarray(0, at - 1).toString('latin1')
+    const name = decode(record.subarray(at))
+    if (name === null) undecodable.push({ kind: record[0] === 0x3f ? 'untracked' : 'changed', bytes: Buffer.from(record.subarray(at)) })
+    else entries.push(`${header} ${name}`)
+  }
+  for (const entry of entries) {
     if (entry.startsWith('? ')) changes.set(entry.slice(2), { kind: 'untracked', index: null, working: true })
     else if (entry.startsWith('1 ')) {
       const fields = entry.split(' ')
@@ -307,7 +339,7 @@ function workingStatus(root) {
       changes.set(fields.slice(10).join(' '), { kind: 'unmerged', index: null, stages, working: true })
     }
   }
-  return { available: true, changes }
+  return { available: true, changes, undecodable }
 }
 
 // The start of a regular working-tree file inside `base`, never through a
@@ -392,8 +424,15 @@ function releaseSignals() {
   process.off('SIGTERM', onSnapshotSignal)
 }
 
+// Abandoned snapshots are swept once per process: they come from runs that
+// have already ended, and a large temporary folder is slow to list.
+let swept = false
+
 export function withPrivateSnapshot(body) {
-  reclaimAbandonedSnapshots()
+  if (!swept) {
+    swept = true
+    reclaimAbandonedSnapshots()
+  }
   holdSignals()
   let base = null
   try {
@@ -455,25 +494,12 @@ export function reclaimAbandonedSnapshots(dir = os.tmpdir(), { uid = typeof proc
 // Paths a checkout of this tree could not hold faithfully: not valid UTF-8,
 // a segment Git refuses, the same path twice, or two paths that one
 // case-insensitive or Unicode-normalising filesystem would merge.
-const foldKey = (name) => name.normalize('NFC').toLowerCase()
-
-// What the knowledge graph will open by a name it derives rather than reads
-// from a folder listing: each non-Markdown file's sidecar, each sidecar's
-// source, and each repository folder's manifest.
-function derivedProbes(entries, prefixes) {
-  const probes = new Set()
-  for (const entry of entries) {
-    if (entry.path === null || !(entry.type === 'blob')) continue
-    if (/\.kg\.json$/i.test(entry.path)) probes.add(entry.path.replace(/\.kg\.json$/i, ''))
-    else if (!/\.md$/i.test(entry.path)) probes.add(`${entry.path}.kg.json`)
-  }
-  for (const prefix of prefixes) probes.add(prefix ? `${prefix}/atelier.manifest.json` : 'atelier.manifest.json')
-  return probes
-}
-
-function pathProblems(entries, probes = new Set()) {
+// Paths Git can hold but a checkout cannot write as given: not valid UTF-8, a
+// segment Git refuses, or the same path twice. Whether two different names
+// are one file on this volume is not modelled here: the volume answers it,
+// through exclusive creation and file identities (below).
+function pathProblems(entries) {
   const problems = []
-  const folded = new Map()
   const exact = new Set()
   for (const entry of entries) {
     if (entry.path === null) {
@@ -487,42 +513,94 @@ function pathProblems(entries, probes = new Set()) {
     }
     if (exact.has(entry.path)) problems.push(`${entry.path} appears twice`)
     exact.add(entry.path)
-    for (let depth = 1; depth <= segments.length; depth += 1) {
-      const name = segments.slice(0, depth).join('/')
-      const key = foldKey(name)
-      const prior = folded.get(key)
-      if (prior === undefined) folded.set(key, name)
-      else if (prior !== name) problems.push(`${name} and ${prior} name one file on a case-insensitive or Unicode-normalising filesystem`)
-    }
-  }
-  // A name the graph derives must be in the tree exactly, or have no
-  // case-folded or normalised stand-in that such a filesystem would open.
-  for (const probe of probes) {
-    const stand = folded.get(foldKey(probe))
-    if (stand !== undefined && stand !== probe) problems.push(`${stand} would stand in for ${probe}, which the committed tree does not hold, on a case-insensitive or Unicode-normalising filesystem`)
   }
   return [...new Set(problems)]
 }
 
-// A committed path that a case-insensitive or Unicode-normalising
-// filesystem would open in place of `objectPath`, which is absent: the first
-// spelling found by walking the committed tree one folder at a time, or null.
-function foldVariantOf(root, commit, objectPath) {
-  const segments = objectPath.split('/')
-  let prefix = ''
-  for (const segment of segments) {
-    const listed = git(root, ['ls-tree', '-z', '--end-of-options', commit, ...(prefix ? ['--', `${prefix}/`] : [])])
-    if (listed === null) return { failed: true }
-    const names = treeEntries(listed).filter((entry) => entry.path !== null)
-    const wanted = prefix ? `${prefix}/${segment}` : segment
-    if (names.some((entry) => entry.path === wanted)) {
-      prefix = wanted
-      continue
-    }
-    const variant = names.find((entry) => foldKey(entry.path) === foldKey(wanted))
-    return variant ? { path: variant.path } : null
+// Which file on this volume a snapshot path is: its device and inode.
+const identityOf = (stat) => `${stat.dev}:${stat.ino}`
+
+// The record of what the snapshot of one repository holds: for each committed
+// path written, the identity of the file or folder this volume made for it,
+// and for each identity the committed path it belongs to.
+function newHoldings() {
+  return { byPath: new Map(), byIdentity: new Map(), problems: [] }
+}
+
+function hold(holdings, rel, stat) {
+  const key = identityOf(stat)
+  const owner = holdings.byIdentity.get(key)
+  if (owner !== undefined && owner !== rel) {
+    holdings.problems.push(`${owner} and ${rel} are one ${stat.isDirectory() ? 'folder' : 'file'} on this filesystem`)
+    return false
   }
-  return null
+  holdings.byIdentity.set(key, rel)
+  holdings.byPath.set(rel, key)
+  return true
+}
+
+// What this volume finds at the snapshot path for `rel`, a committed path or
+// not: `absent`, `exact` (the file or folder written for `rel` itself), or
+// `alias` (one written for another committed path). Asked of the volume, not
+// modelled: whatever case or normalisation rules it has, it applies them.
+function onVolume(holdings, mirror, rel) {
+  let stat
+  try {
+    stat = fs.lstatSync(rel ? path.join(mirror, ...rel.split('/')) : mirror)
+  } catch (error) {
+    return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? { kind: 'absent' } : { kind: 'failed', code: error?.code }
+  }
+  const owner = holdings.byIdentity.get(identityOf(stat))
+  if (owner === rel) return { kind: 'exact' }
+  return owner === undefined ? { kind: 'unknown' } : { kind: 'alias', owner }
+}
+
+// Lay down, as empty placeholders and folders, the committed names of the
+// folder `committedDir`, inside the snapshot folder the volume resolves
+// `realDir` to, so the volume can answer for a path outside the copied files.
+// Names already written keep their bytes; placeholders are never read.
+function scaffold(root, commit, committedDir, realDir, holdings) {
+  const listed = git(root, ['ls-tree', '-z', '--end-of-options', commit, ...(committedDir ? ['--', `${committedDir}/`] : [])])
+  if (listed === null) return false
+  fs.mkdirSync(realDir, { recursive: true })
+  for (const entry of treeEntries(listed)) {
+    if (entry.path === null || holdings.byPath.has(entry.path)) continue
+    const target = path.join(realDir, path.posix.basename(entry.path))
+    try {
+      if (entry.type === 'tree') fs.mkdirSync(target)
+      else fs.closeSync(fs.openSync(target, 'wx'))
+    } catch (error) {
+      if (error?.code !== 'EEXIST') return false
+    }
+    hold(holdings, entry.path, fs.lstatSync(target))
+  }
+  return true
+}
+
+// Whether a path the committed tree does not hold would still open a
+// committed file on this volume: walk it one folder at a time, laying down
+// each committed folder's names as the volume resolves it.
+function aliasOnVolume(root, commit, mirror, rel, holdings) {
+  const segments = rel.split('/')
+  let committedDir = ''
+  let realDir = mirror
+  for (let index = 0; index < segments.length; index += 1) {
+    if (!scaffold(root, commit, committedDir, realDir, holdings)) return { kind: 'failed' }
+    const candidate = path.join(realDir, segments[index])
+    let stat
+    try {
+      stat = fs.lstatSync(candidate)
+    } catch (error) {
+      return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? { kind: 'absent' } : { kind: 'failed' }
+    }
+    const owner = holdings.byIdentity.get(identityOf(stat))
+    if (owner === undefined) return { kind: 'failed' }
+    if (index === segments.length - 1) return owner === rel ? { kind: 'exact' } : { kind: 'alias', owner }
+    if (!stat.isDirectory()) return { kind: 'absent' }
+    committedDir = owner
+    realDir = candidate
+  }
+  return { kind: 'absent' }
 }
 
 // Stream the blobs of `items` from Git into files under `destination` with
@@ -570,7 +648,17 @@ function streamBlobs(root, items, destination, base, recorded) {
       const file = path.join(destination, ...item.path.split('/'))
       if (!inside(destination, file)) throw new Error(`refusing to write outside the snapshot: ${item.path}`)
       fs.mkdirSync(path.dirname(file), { recursive: true })
-      const target = fs.openSync(file, 'wx')
+      let target
+      try {
+        target = fs.openSync(file, 'wx')
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+        // Exclusive creation found a file already there: this volume makes
+        // two committed names one file.
+        const owner = recorded.holdings.byIdentity.get(identityOf(fs.lstatSync(file)))
+        recorded.problems.push(`${owner ?? 'another committed path'} and ${item.path} are one file on this filesystem`)
+        return
+      }
       try {
         for (let remaining = Number(sizeText); remaining > 0;) {
           const read = fs.readSync(reader, chunk, 0, Math.min(chunk.length, remaining), offset)
@@ -584,6 +672,7 @@ function streamBlobs(root, items, destination, base, recorded) {
           offset += read
           remaining -= read
         }
+        hold(recorded.holdings, item.path, fs.fstatSync(target))
       } finally {
         fs.closeSync(target)
       }
@@ -599,7 +688,7 @@ function streamBlobs(root, items, destination, base, recorded) {
 // Write the committed regular files under `prefixes` of `root` at HEAD into
 // `destination`, after checking that every path can be held faithfully.
 function materialise(root, commit, prefixes, destination, base) {
-  const recorded = { links: [], gitlinks: [], missing: [], unreadable: false, problems: [], written: new Set() }
+  const recorded = { links: [], gitlinks: [], missing: [], unreadable: false, problems: [], written: new Set(), holdings: newHoldings() }
   const view = missingAt(root, commit)
   const scope = prefixes.includes('') ? [] : ['--', ...prefixes]
   const listing = view && !view.treesMissing ? git(root, ['ls-tree', '-r', '-z', '--full-tree', commit, ...scope], { maxBuffer: 512 * 1024 * 1024 }) : null
@@ -608,15 +697,7 @@ function materialise(root, commit, prefixes, destination, base) {
     return recorded
   }
   const entries = treeEntries(listing)
-  recorded.problems = pathProblems(entries, derivedProbes(entries, prefixes))
-  for (const prefix of prefixes) {
-    // A managed folder that the tree does not hold exactly, but holds under
-    // another spelling, would be walked in its place.
-    if (!prefix || entries.some((entry) => entry.path?.startsWith(`${prefix}/`))) continue
-    const variant = foldVariantOf(root, commit, prefix)
-    if (variant?.failed) recorded.problems.push(`${prefix} could not be looked up`)
-    else if (variant) recorded.problems.push(`${variant.path} would stand in for the repository folder ${prefix}, which the committed tree does not hold, on a case-insensitive or Unicode-normalising filesystem`)
-  }
+  recorded.problems = pathProblems(entries)
   if (recorded.problems.length) return recorded
   const regular = []
   for (const entry of entries) {
@@ -628,11 +709,27 @@ function materialise(root, commit, prefixes, destination, base) {
     }
   }
   try {
+    fs.mkdirSync(destination, { recursive: true })
+    hold(recorded.holdings, '', fs.lstatSync(destination))
     streamBlobs(root, regular, destination, base, recorded)
   } catch (error) {
     recorded.problems.push(`a file could not be written into the snapshot (${error.message})`)
   }
-  for (const item of regular) recorded.written.add(item.path)
+  // Each committed folder must be its own folder on this volume too.
+  const folders = new Set()
+  for (const item of regular) {
+    recorded.written.add(item.path)
+    const parts = item.path.split('/')
+    for (let depth = 1; depth < parts.length; depth += 1) folders.add(parts.slice(0, depth).join('/'))
+  }
+  for (const folder of [...folders].sort()) {
+    try {
+      hold(recorded.holdings, folder, fs.lstatSync(path.join(destination, ...folder.split('/'))))
+    } catch {
+      recorded.problems.push(`${folder} could not be found in the snapshot after it was written`)
+    }
+  }
+  recorded.problems.push(...recorded.holdings.problems)
   return recorded
 }
 
@@ -756,7 +853,20 @@ function buildSnapshot(base, request) {
   }
   if (errors.length) return snapshot
 
-  // 3. The effective read policy, bound to the committed tree that holds it.
+  // 3. The committed files of each managed folder, each written once and
+  // held by the identity this volume gave it.
+  for (const entry of roots.values()) {
+    const prefixes = [...entry.prefixes]
+    const recorded = prefixes.length
+      ? materialise(entry.root, entry.head.commit, prefixes, entry.mirror, base)
+      : { links: [], gitlinks: [], missing: [], unreadable: false, problems: [], written: new Set(), holdings: newHoldings() }
+    entry.recorded = recorded
+    if (recorded.unreadable) errors.push(`${entry.root}: HEAD's tree cannot be read without fetching objects this clone lacks`)
+    for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be written faithfully: ${problem}; the check refuses rather than lose or merge a file`)
+  }
+  if (errors.length) return snapshot
+
+  // 4. The effective read policy, bound to the committed tree that holds it.
   const accessPath = path.resolve(resolved.repoAccessPath)
   const accessOwner = [...roots.values()].filter((entry) => inside(entry.root, accessPath)).sort((a, b) => b.root.length - a.root.length)[0]
   if (!accessOwner) {
@@ -775,15 +885,19 @@ function buildSnapshot(base, request) {
     errors.push(`${accessRel}: the committed repository access file ${describeLookup(committedAccess)}; the check does not fall back to defaults`)
     return snapshot
   } else {
-    // Absent, so the defaults apply; but not if another spelling of it is
-    // committed, which a case-insensitive checkout would read as the policy.
-    const variant = foldVariantOf(accessOwner.root, accessOwner.head.commit, accessRel)
-    if (variant) {
-      errors.push(variant.failed
-        ? `${accessRel}: whether another spelling of the repository access file is committed could not be checked`
-        : `${variant.path} would stand in for the absent repository access file ${accessRel} on a case-insensitive or Unicode-normalising filesystem; rename one of them, so the policy is the same on every checkout`)
+    // Absent from the committed tree, so the defaults apply, unless this
+    // volume would open a committed file under that name: ask it.
+    const found = aliasOnVolume(accessOwner.root, accessOwner.head.commit, accessOwner.mirror, accessRel, accessOwner.recorded.holdings)
+    if (found.kind === 'alias') {
+      errors.push(`${found.owner} would be read as the absent repository access file ${accessRel} on this filesystem; rename one of them, so the policy is the same on every checkout`)
       return snapshot
     }
+    if (found.kind === 'failed' || found.kind === 'exact') {
+      errors.push(`${accessRel}: whether this filesystem would read another committed file as the repository access file could not be settled`)
+      return snapshot
+    }
+    errors.push(...accessOwner.recorded.holdings.problems.splice(0).map((problem) => `${accessOwner.root}: HEAD's tree cannot be written faithfully: ${problem}`))
+    if (errors.length) return snapshot
   }
   // The graph reads the policy from a file of its own, outside the copied
   // tree, holding exactly the verified committed bytes, or from nowhere when
@@ -795,31 +909,37 @@ function buildSnapshot(base, request) {
   const accessChange = accessOwner.status.changes.get(accessRel)
   if (accessChange) warnings.push(`${accessRel}: has uncommitted changes (${accessChange.kind}), which this check does not use; it reads the repository access file committed at HEAD${committedAccess.kind === 'absent' ? ' (there is none, so defaults apply)' : ''}`)
 
-  // 4. The committed files of each managed folder.
-  for (const entry of roots.values()) {
-    const prefixes = [...entry.prefixes]
-    const recorded = prefixes.length ? materialise(entry.root, entry.head.commit, prefixes, entry.mirror, base) : { links: [], gitlinks: [], missing: [], unreadable: false, problems: [], written: new Set() }
-    entry.recorded = recorded
-    if (recorded.unreadable) errors.push(`${entry.root}: HEAD's tree cannot be read without fetching objects this clone lacks`)
-    for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be written faithfully: ${problem}; the check refuses rather than lose or merge a file`)
-  }
-  if (errors.length) return snapshot
-
   for (const repo of managed) {
     const owner = roots.get(gitRoot(repo.path))
     const folder = mirror(repo.path)
-    snapshot.repositories.set(repo.name, { folder, realFolder: path.resolve(repo.path), root: owner.root, mirror: owner.mirror, head: owner.head, status: owner.status })
+    snapshot.repositories.set(repo.name, { folder, realFolder: path.resolve(repo.path), root: owner.root, mirror: owner.mirror, head: owner.head, status: owner.status, holdings: owner.recorded.holdings })
     const prefix = toPosix(path.relative(owner.root, repo.path))
     const within = (objectPath) => prefix === '' || objectPath === prefix || objectPath.startsWith(`${prefix}/`)
+    // A managed folder the committed tree does not hold may still be opened
+    // under another committed name on this volume; ask it.
+    if (prefix && !owner.recorded.holdings.byPath.has(prefix)) {
+      const found = aliasOnVolume(owner.root, owner.head.commit, owner.mirror, prefix, owner.recorded.holdings)
+      if (found.kind === 'alias') errors.push(`repository ${repo.name}: ${found.owner} would be read as its folder ${prefix}, which the committed tree does not hold, on this filesystem`)
+      else if (found.kind === 'failed') errors.push(`repository ${repo.name}: whether this filesystem would read another committed folder as ${prefix} could not be settled`)
+    }
     const missing = owner.recorded.missing.filter(within)
     if (missing.length) errors.push(`repository ${repo.name}: HEAD names ${missing.length} file(s) this clone lacks (${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', …' : ''}); the committed graph cannot be built without them`)
     for (const link of owner.recorded.links.filter(within).filter((objectPath) => /\.(md|kg\.json)$/i.test(objectPath))) {
       warnings.push(`${link}: is a symbolic link at HEAD; the check does not follow links, so it is not part of the committed graph`)
     }
   }
+  if (errors.length) return snapshot
   // The committed project, mapped onto the snapshot. External repositories
   // are not read, so they are left out: no discovery, no remote probes.
-  for (const dir of [resolved.configDir, resolved.workspaceRoot, resolved.repoOpsRoot]) fs.mkdirSync(mirror(dir), { recursive: true })
+  for (const dir of [resolved.configDir, resolved.workspaceRoot, resolved.repoOpsRoot]) {
+    fs.mkdirSync(mirror(dir), { recursive: true })
+    // A folder made for the project's own paths is known to the snapshot too.
+    const owner = [...roots.values()].filter((entry) => inside(entry.root, path.resolve(dir))).sort((a, b) => b.root.length - a.root.length)[0]
+    const rel = owner ? toPosix(path.relative(owner.root, path.resolve(dir))) : null
+    if (owner && !owner.recorded.holdings.byPath.has(rel)) hold(owner.recorded.holdings, rel, fs.lstatSync(mirror(dir)))
+  }
+  snapshot.tree = path.join(base, 'tree')
+  snapshot.holdings = [...roots.values()].map((entry) => [entry.mirror, entry.recorded.holdings])
   snapshot.project = {
     ...resolved,
     configPath: mirror(configPath),
@@ -1000,6 +1120,13 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
     const key = `${context.root}\0${context.realFolder}`
     if (scanned.has(key)) continue
     scanned.add(key)
+    const folderBytes = Buffer.from(toPosix(path.relative(context.root, context.realFolder)))
+    for (const { kind, bytes } of context.status.undecodable ?? []) {
+      const inFolder = folderBytes.length === 0 || (bytes.subarray(0, folderBytes.length).equals(folderBytes) && bytes[folderBytes.length] === 0x2f)
+      if (inFolder && /\.md$/i.test(bytes.toString('latin1'))) {
+        errors.push(`${name}: a pending Markdown file whose name is not UTF-8 (bytes ${bytes.toString('hex')}, ${kind}) cannot be classified; the result is indeterminate`)
+      }
+    }
     for (const [objectPath, change] of context.status.changes) {
       if (!/\.md$/i.test(objectPath)) continue
       const file = path.join(context.root, ...objectPath.split('/'))
@@ -1308,6 +1435,60 @@ function checkRequest(input) {
   return { configPath, overrides: [...repoPaths].flatMap(([name, value]) => ['--repo-path', `${name}=${path.resolve(cwd, value)}`]), cwd, env }
 }
 
+// Every path the knowledge graph opens in the snapshot, by whatever rule it
+// derives it (a sidecar name, a manifest, a folder): recorded while the graph
+// is built from this synchronous call, so the walker's own rules are the ones
+// checked, never a copy of them.
+const TRACED_FS = ['existsSync', 'statSync', 'lstatSync', 'readFileSync', 'openSync', 'readdirSync', 'accessSync', 'realpathSync']
+function traceSnapshotOpens(tree, build) {
+  const opened = new Set()
+  const prefix = tree + path.sep
+  const note = (target) => {
+    const name = typeof target === 'string' ? target : Buffer.isBuffer(target) ? target.toString('utf8') : target instanceof URL ? target.pathname : null
+    if (name && (name === tree || name.startsWith(prefix))) opened.add(path.resolve(name))
+  }
+  const saved = Object.fromEntries(TRACED_FS.map((method) => [method, fs[method]]))
+  for (const method of TRACED_FS) {
+    const original = saved[method]
+    const traced = function (target, ...rest) {
+      note(target)
+      return original.call(this, target, ...rest)
+    }
+    if (typeof original.native === 'function') {
+      traced.native = function (target, ...rest) {
+        note(target)
+        return original.native.call(this, target, ...rest)
+      }
+    }
+    fs[method] = traced
+  }
+  try {
+    return { result: build(), opened }
+  } finally {
+    Object.assign(fs, saved)
+  }
+}
+
+// What the graph opened must be what the committed tree holds, exactly: a
+// committed path must be the file or folder written for it, and a name the
+// tree does not hold must be absent on this volume. Anything else means the
+// volume let one name stand for another, and the graph used it.
+function aliasedOpens(opened, holdings) {
+  const problems = []
+  for (const name of [...opened].sort()) {
+    const owner = holdings.filter(([mirror]) => inside(mirror, name)).sort((a, b) => b[0].length - a[0].length)[0]
+    if (!owner) continue
+    const [mirror, held] = owner
+    const rel = toPosix(path.relative(mirror, name))
+    const found = onVolume(held, mirror, rel)
+    if (found.kind === 'absent' || found.kind === 'exact') continue
+    problems.push(found.kind === 'alias'
+      ? `the knowledge graph opened ${rel}, which the committed tree does not hold under that name, and this filesystem gave it ${found.owner}; the check refuses rather than take graph facts from another file`
+      : `the knowledge graph opened ${rel}, which is not a file or folder the snapshot wrote for the committed tree; the check refuses rather than take graph facts from it`)
+  }
+  return problems
+}
+
 // Verify the project's marks against its committed tree: read the committed
 // config, stream the committed files into a private snapshot, build the graph
 // there, check, and remove the snapshot. `input` is a resolved project or the
@@ -1320,7 +1501,9 @@ export function checkGraphmarks(input, options = {}) {
   return withPrivateSnapshot((base) => {
     const snapshot = buildSnapshot(base, request)
     if (snapshot.errors.length) return { ok: false, marks: [], errors: snapshot.errors, warnings: snapshot.warnings }
-    const graph = hermeticGit(base, () => buildGraph(snapshot.project))
+    const { result: built, opened } = traceSnapshotOpens(snapshot.tree, () => hermeticGit(base, () => buildGraph(snapshot.project)))
+    const aliased = aliasedOpens(opened, snapshot.holdings)
+    const graph = aliased.length ? { ...built, errors: [...(built.errors ?? []), ...aliased] } : built
     const report = checkGraphmarksInGraph(graph, snapshot.repositories, options)
     return { ...report, warnings: [...snapshot.warnings, ...report.warnings] }
   })

@@ -181,24 +181,32 @@ the committed tree at `HEAD`.
    `mnstry.repo-access@v1`), name a valid default, and give every managed
    repository a valid read boundary. The graph then reads the policy from a
    file of the snapshot's own, outside the copied tree, holding exactly those
-   verified bytes, or from nowhere when the policy is absent; an absent policy
-   is refused when another spelling of it is committed, since a
-   case-insensitive or Unicode-normalising checkout would read that one.
+   verified bytes, or from nowhere when the policy is absent. Before an absent
+   policy leaves the defaults, the check asks this volume whether it would
+   open a committed file under that name (laying down the committed names of
+   each folder on the way), and refuses if it would.
 3. **The committed files.** It streams the regular files committed under
    each managed repository folder into a private snapshot, with bounded
    memory and with no checkout (so no line-ending conversion or checkout
    filter applies). Symbolic links and submodules are recorded and not
-   written. A tree that a checkout could not hold faithfully is refused before
-   anything is written: a path that is not valid UTF-8, the same path twice,
-   or two paths one case-insensitive or Unicode-normalising filesystem would
-   merge. So is a committed file that such a filesystem would open in place of
-   a name the graph derives but the tree does not hold: a file's sidecar, a
-   sidecar's source, a repository folder's manifest or the folder itself.
-   Names are kept as Git's bytes, a leading U+FEFF included, and compared as
-   bytes. A partial clone that lacks a file there is refused.
+   written. A path that is not valid UTF-8, a segment Git refuses, and the
+   same path twice are refused before anything is written. Names are kept as
+   Git's bytes, a leading U+FEFF included, and compared as bytes. Whether two
+   different names are one file is not modelled but asked of the volume the
+   snapshot is on, whatever its case and normalisation rules: every file is
+   created exclusively, so two committed names it holds as one file are
+   refused, naming both, and each committed file and folder is recorded by
+   the identity (device and inode) the volume gave it. A partial clone that lacks a file there is refused.
 4. **The committed graph.** It builds the knowledge graph from the snapshot,
    with no repository discovery and no remote probes (external repositories
-   are not read), and checks every mark against it.
+   are not read), and records every path the graph opens there, by whatever
+   rule the graph derives it (a file's sidecar, a sidecar's source, a
+   folder's manifest, the folder itself). Each must be what the committed
+   tree holds: a committed path must open the very file written for it, and a
+   name the tree does not hold must be absent on this volume. Otherwise the
+   graph took its facts from another file, and every mark is refused. A
+   managed folder the tree does not hold is asked about the same way. Then it
+   checks every mark against the graph.
 
 Then, for every Markdown node tagged `graphmark` other than a marks index
 (`kg.type: index`) without a `target`, it:
@@ -267,9 +275,11 @@ copy:
   the project config or the effective access file are reported as warnings,
   naming the committed path;
 - a file whose front matter cannot be read (no permission, a failed read) or
-  does not end within 256 KiB, and a `git status` that fails, make the result
-  indeterminate: an error, never a success. A link or a folder in the working
-  tree is known not to be a mark record.
+  does not end within 256 KiB, a pending Markdown file whose name is not
+  UTF-8, and a `git status` that fails, make the result indeterminate: an
+  error, never a success. A link or a folder in the working tree is known not
+  to be a mark record. Status output is split and decoded as bytes, so names
+  keep their identity.
 
 Every mark record the committed graph holds appears in the summary and in the
 `--json` `marks` list; one with any error has the state `refused`, whatever
