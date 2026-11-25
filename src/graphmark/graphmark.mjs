@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import { buildGraph } from '../graph/graph.mjs'
@@ -338,35 +339,45 @@ function workingStatus(root) {
   return { available: true, changes, undecodable }
 }
 
-// The start of a regular working-tree file inside `base`, never through a
-// symbolic link: { bytes, complete }; { nonregular } for a link, a folder or
-// anything else that is known not to be a regular file; null when it cannot
-// be read (no permission, a failed read), which is never a known answer.
+// The start of a regular working-tree file inside `base`: { bytes, complete };
+// { nonregular } for a link, a folder or anything else known not to be a
+// regular file; null when it cannot be read or held still (no permission, a
+// failed read, or the path changed while it was read), which is never a
+// known answer. The file is examined with lstat, opened without following a
+// final link, and the opened descriptor must be the same regular file, by
+// device and inode, before and after the read, and still inside `base`.
+const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino
 function workingHead(base, file) {
-  let stat
+  let before
   try {
-    stat = fs.lstatSync(file)
+    before = fs.lstatSync(file, { bigint: true })
   } catch (error) {
     return error?.code === 'ENOENT' ? { nonregular: true } : null
   }
-  if (!stat.isFile()) return { nonregular: true }
+  if (!before.isFile()) return { nonregular: true }
+  let fd = null
   try {
-    if (!inside(fs.realpathSync(base), fs.realpathSync(file))) return { nonregular: true }
-    const fd = fs.openSync(file, 'r')
-    try {
-      const buffer = Buffer.alloc(Math.min(stat.size, FRONT_MATTER_LIMIT))
-      let read = 0
-      while (read < buffer.length) {
-        const got = fs.readSync(fd, buffer, read, buffer.length - read, read)
-        if (got <= 0) break
-        read += got
-      }
-      return { bytes: buffer.subarray(0, read), complete: stat.size <= FRONT_MATTER_LIMIT && read === stat.size }
-    } finally {
-      fs.closeSync(fd)
+    const realBase = fs.realpathSync(base)
+    if (!inside(realBase, fs.realpathSync(file))) return { nonregular: true }
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const opened = fs.fstatSync(fd, { bigint: true })
+    if (!opened.isFile() || !sameFile(opened, before)) return null
+    const size = Number(opened.size)
+    const buffer = Buffer.alloc(Math.min(size, FRONT_MATTER_LIMIT))
+    let read = 0
+    while (read < buffer.length) {
+      const got = fs.readSync(fd, buffer, read, buffer.length - read, read)
+      if (got <= 0) break
+      read += got
     }
+    const after = fs.lstatSync(file, { bigint: true })
+    if (!after.isFile() || !sameFile(after, opened) || !inside(realBase, fs.realpathSync(file))) return null
+    if (read < buffer.length) return null
+    return { bytes: buffer.subarray(0, read), complete: size <= FRONT_MATTER_LIMIT }
   } catch {
     return null
+  } finally {
+    if (fd !== null) fs.closeSync(fd)
   }
 }
 
@@ -432,10 +443,11 @@ function pathProblems(entries) {
 // object id by exact path, with links, submodules and the objects a partial
 // clone lacks recorded.
 function committedFiles(root, commit, prefixes) {
-  const recorded = { files: new Map(), links: [], gitlinks: [], missing: [], unreadable: false, problems: [] }
+  const recorded = { files: new Map(), trees: [], links: [], gitlinks: [], missing: [], unreadable: false, problems: [] }
   const view = missingAt(root, commit)
   const scope = prefixes.includes('') ? [] : ['--', ...prefixes]
-  const listing = view && !view.treesMissing ? git(root, ['ls-tree', '-r', '-z', '--full-tree', commit, ...scope], { maxBuffer: 512 * 1024 * 1024 }) : null
+  // -t lists the trees too: the folders a checkout has are exactly these.
+  const listing = view && !view.treesMissing ? git(root, ['ls-tree', '-r', '-t', '-z', '--full-tree', commit, ...scope], { maxBuffer: 512 * 1024 * 1024 }) : null
   if (listing === null) {
     recorded.unreadable = true
     return recorded
@@ -444,7 +456,8 @@ function committedFiles(root, commit, prefixes) {
   recorded.problems = pathProblems(entries)
   if (recorded.problems.length) return recorded
   for (const entry of entries) {
-    if (entry.mode === '120000') recorded.links.push(entry.path)
+    if (entry.type === 'tree') recorded.trees.push(entry.path)
+    else if (entry.mode === '120000') recorded.links.push(entry.path)
     else if (entry.mode === '160000') recorded.gitlinks.push(entry.path)
     else if (entry.type === 'blob' && (entry.mode === '100644' || entry.mode === '100755')) {
       if (view.missing.has(entry.oid)) recorded.missing.push(entry.path)
@@ -468,10 +481,18 @@ const kindTest = (kind) => ({
 // The committed tree as the knowledge graph will see it: folders, regular
 // files (read from their Git objects on demand) and links (listed, never
 // followed). Submodules are not part of it.
+const READER_CACHE_BYTES = 64 * 1024 * 1024
+
 export function committedReader(base) {
   const entries = new Map([[base, { kind: 'dir', children: new Map() }]])
   const cache = new Map()
+  let cached = 0
+  const sizes = new Map()
   const violations = []
+  // Each repository has its own virtual root; a path in no root (and not the
+  // policy file) belongs to no committed tree, and is refused.
+  const roots = new Set()
+  const owned = (name) => [...roots].some((root) => inside(root, name))
   const addDir = (dir) => {
     if (entries.has(dir)) return
     const parent = path.dirname(dir)
@@ -486,7 +507,16 @@ export function committedReader(base) {
     entries.set(name, { kind, ...source })
     entries.get(parent).children.set(path.basename(name), kind)
   }
-  const at = (target) => entries.get(path.resolve(String(target))) ?? null
+  const at = (target) => {
+    const name = path.resolve(pathArgument(target) ?? String(target))
+    const entry = entries.get(name)
+    if (entry) return entry
+    if (!owned(name)) {
+      violations.push(`the knowledge graph reached ${name}, which is in no committed tree`)
+      throw fsError('EPERM', 'resolve', name)
+    }
+    return null
+  }
   const bytesOf = (entry, target) => {
     if (entry.bytes) return entry.bytes
     if (!cache.has(entry.oid)) {
@@ -495,16 +525,36 @@ export function committedReader(base) {
         violations.push(`${target} could not be read from Git`)
         throw fsError('EIO', 'read', target)
       }
+      // Bounded: the oldest blobs are dropped, and read again if needed.
       cache.set(entry.oid, read.stdout)
+      cached += read.stdout.length
+      for (const [oid, bytes] of cache) {
+        if (cached <= READER_CACHE_BYTES || oid === entry.oid) break
+        cache.delete(oid)
+        cached -= bytes.length
+      }
+      return read.stdout
     }
     return cache.get(entry.oid)
+  }
+  const sizeOf = (entry, target) => {
+    if (entry.bytes) return entry.bytes.length
+    if (!sizes.has(entry.oid)) {
+      const size = Number(git(entry.root, ['cat-file', '-s', entry.oid])?.toString('utf8').trim())
+      if (!Number.isFinite(size)) {
+        violations.push(`${target} could not be read from Git`)
+        throw fsError('EIO', 'stat', target)
+      }
+      sizes.set(entry.oid, size)
+    }
+    return sizes.get(entry.oid)
   }
   const statOf = (entry, target, follow, options) => {
     if (!entry || (follow && entry.kind === 'link')) {
       if (options?.throwIfNoEntry === false) return undefined
       throw fsError('ENOENT', follow ? 'stat' : 'lstat', target)
     }
-    return { ...kindTest(entry.kind), size: entry.kind === 'file' ? bytesOf(entry, target).length : 0, mode: entry.kind === 'dir' ? 0o40755 : 0o100644, mtimeMs: 0, mtime: new Date(0), dev: 0, ino: 0 }
+    return { ...kindTest(entry.kind), size: entry.kind === 'file' ? sizeOf(entry, target) : 0, mode: entry.kind === 'dir' ? 0o40755 : 0o100644, mtimeMs: 0, mtime: new Date(0), dev: 0, ino: 0 }
   }
   const implementation = {
     existsSync: (target) => {
@@ -527,23 +577,39 @@ export function committedReader(base) {
       if (entry.kind !== 'dir') throw fsError('ENOTDIR', 'scandir', target)
       const names = [...entry.children.keys()].sort()
       if (!options?.withFileTypes) return names
-      const parent = path.resolve(String(target))
+      const parent = path.resolve(pathArgument(target) ?? String(target))
       return names.map((name) => ({ name, parentPath: parent, path: parent, ...kindTest(entry.children.get(name)) }))
     },
     realpathSync: (target) => {
       const entry = at(target)
       if (!entry || entry.kind === 'link') throw fsError('ENOENT', 'realpath', target)
-      return path.resolve(String(target))
+      return path.resolve(pathArgument(target) ?? String(target))
     },
     accessSync: (target) => {
       const entry = at(target)
       if (!entry || entry.kind === 'link') throw fsError('ENOENT', 'access', target)
     },
   }
-  return { base, add, addDir, implementation, violations }
+  // A repository's own root: a committed tree, whatever it holds.
+  const addRoot = (root) => {
+    roots.add(root)
+    addDir(root)
+  }
+  return { base, add, addDir, addRoot, implementation, violations }
 }
 
-const pathArgument = (target) => (typeof target === 'string' ? target : Buffer.isBuffer(target) ? target.toString('utf8') : target instanceof URL ? (target.protocol === 'file:' ? decodeURIComponent(target.pathname) : null) : null)
+const pathArgument = (target) => {
+  if (typeof target === 'string') return target
+  if (Buffer.isBuffer(target)) return target.toString('utf8')
+  if (target instanceof URL && target.protocol === 'file:') {
+    try {
+      return fileURLToPath(target)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
 
 // Run `build` with `fs` answering for the reader's virtual root from Git
 // objects. A path elsewhere goes to the real `fs`, untouched. Any `fs` call on
@@ -577,9 +643,9 @@ export function withCommittedReader(reader, build) {
     owner[name] = wrapped
     restore.push(() => { owner[name] = original })
   }
-  for (const name of Object.keys(fs)) wrap(fs, name)
-  for (const name of Object.keys(fs.promises ?? {})) wrap(fs.promises, name)
   try {
+    for (const name of Object.keys(fs)) wrap(fs, name)
+    for (const name of Object.keys(fs.promises ?? {})) wrap(fs.promises, name)
     return build()
   } finally {
     for (const undo of restore.reverse()) undo()
@@ -605,6 +671,14 @@ function accessPolicyProblems(bytes, managedNames, externalNames, label) {
   return problems.map((problem) => `${problem} (in the committed repository access file); the check does not fill in defaults`)
 }
 
+// The virtual root for the n-th Git root: an opaque `repo-<n>` folder (with
+// the repository's basename, so the graph keeps its names), never derived
+// from the rest of the host path, so no two repositories can share one or
+// nest inside each other, whatever the host's drive, share or case rules.
+export function virtualRootFor(base, index, root, pathModule = path) {
+  return pathModule.join(base, `repo-${index}`, pathModule.basename(root) || 'root')
+}
+
 // The committed project, verified from Git:
 // 1. find the config's repository and read the config from its HEAD blob (it
 //    need not be checked out, and an unfinished edit does not matter);
@@ -618,11 +692,12 @@ function accessPolicyProblems(bytes, managedNames, externalNames, label) {
 //    resolution, so the graph reads exactly those objects.
 function buildCommitted(request) {
   const base = path.join(os.tmpdir(), `.atelier-graphmark-committed-${process.pid}-${crypto.randomBytes(12).toString('hex')}`)
-  const mirror = (abs) => path.join(base, 'tree', path.resolve(abs).replace(/^([A-Za-z]):/, '$1'))
   const errors = []
   const warnings = []
   const reader = committedReader(base)
   const committed = { errors, warnings, repositories: new Map(), project: null, reader }
+  // Each Git root gets its own virtual root, named by its order, never by any
+  // transformation of the host path: two repositories can never share one.
   const roots = new Map()
   const take = (root) => {
     if (!roots.has(root)) {
@@ -630,9 +705,22 @@ function buildCommitted(request) {
       const status = workingStatus(root)
       if (!head) errors.push(`${root}: has no commit at HEAD, so nothing committed can be verified`)
       if (!status.available) errors.push(`${root}: git status failed, so uncommitted mark records cannot be ruled out; the result is indeterminate`)
-      roots.set(root, { root, head, status, mirror: mirror(root), prefixes: new Set() })
+      roots.set(root, { root, head, status, mirror: virtualRootFor(base, roots.size, root), prefixes: new Set() })
     }
     return roots.get(root)
+  }
+  // A host path inside a known repository maps into that repository's root;
+  // any other path maps to a name that is in no committed tree.
+  let outside = 0
+  const mirror = (abs) => {
+    const resolvedPath = path.resolve(abs)
+    const owner = [...roots.values()].filter((entry) => inside(entry.root, resolvedPath)).sort((a, b) => b.root.length - a.root.length)[0]
+    if (owner) {
+      const rel = toPosix(path.relative(owner.root, resolvedPath))
+      return rel ? path.join(owner.mirror, ...rel.split('/')) : owner.mirror
+    }
+    outside += 1
+    return path.join(base, `outside-${outside}`, path.basename(resolvedPath))
   }
 
   // 1. The committed config.
@@ -691,15 +779,20 @@ function buildCommitted(request) {
   }
   if (errors.length) return committed
 
-  // 3. The committed files of each managed folder, by exact path.
+  // 3. The committed tree of each managed folder, by exact path: its
+  // folders, regular files and links, and its submodules as the empty
+  // folders a clean checkout holds. Nothing else is in the reader.
   for (const entry of roots.values()) {
     const prefixes = [...entry.prefixes]
-    const recorded = prefixes.length ? committedFiles(entry.root, entry.head.commit, prefixes) : { files: new Map(), links: [], gitlinks: [], missing: [], unreadable: false, problems: [] }
+    const recorded = prefixes.length ? committedFiles(entry.root, entry.head.commit, prefixes) : { files: new Map(), trees: [], links: [], gitlinks: [], missing: [], unreadable: false, problems: [] }
     entry.recorded = recorded
     if (recorded.unreadable) errors.push(`${entry.root}: HEAD's tree cannot be read without fetching objects this clone lacks`)
     for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be read exactly: ${problem}; the check refuses rather than read a different file`)
-    for (const [rel, oid] of recorded.files) reader.add(path.join(entry.mirror, ...rel.split('/')), 'file', { root: entry.root, oid })
-    for (const rel of recorded.links) reader.add(path.join(entry.mirror, ...rel.split('/')), 'link', {})
+    const at = (rel) => path.join(entry.mirror, ...rel.split('/'))
+    reader.addRoot(entry.mirror)
+    for (const rel of [...recorded.trees, ...recorded.gitlinks]) reader.addDir(at(rel))
+    for (const [rel, oid] of recorded.files) reader.add(at(rel), 'file', { root: entry.root, oid })
+    for (const rel of recorded.links) reader.add(at(rel), 'link', {})
   }
   if (errors.length) return committed
 
@@ -725,8 +818,8 @@ function buildCommitted(request) {
   // The graph reads the policy from its own virtual file: the verified bytes,
   // or nothing when the committed policy is absent.
   const policyFile = path.join(base, 'policy', 'repo-access.json')
+  reader.addRoot(path.dirname(policyFile))
   if (committedAccess.kind === 'file') reader.add(policyFile, 'file', { bytes: committedAccess.bytes })
-  else reader.addDir(path.dirname(policyFile))
   const accessChange = accessOwner.status.changes.get(accessRel)
   if (accessChange) warnings.push(`${accessRel}: has uncommitted changes (${accessChange.kind}), which this check does not use; it reads the repository access file committed at HEAD${committedAccess.kind === 'absent' ? ' (there is none, so defaults apply)' : ''}`)
 
@@ -743,9 +836,10 @@ function buildCommitted(request) {
     }
   }
   if (errors.length) return committed
-  // The committed project, mapped onto the virtual root. External
+  // The committed project, mapped onto the virtual roots. Its own folders
+  // (config, workspace, operations) are only names: no folder is made for
+  // them, so none can stand in for a missing committed path. External
   // repositories are not read, so they are left out: no remote probes.
-  for (const dir of [resolved.configDir, resolved.workspaceRoot, resolved.repoOpsRoot]) reader.addDir(mirror(dir))
   committed.project = {
     ...resolved,
     configPath: mirror(configPath),

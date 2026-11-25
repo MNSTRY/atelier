@@ -6,10 +6,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
 import { REPO_ACCESS_SCHEMA, buildKnowledgeGraph } from '../src/graph/knowledge-graph.mjs'
-import { buildCommittedGraph, checkGraphmarks, committedReader, isPromisorRepository, readMarkRecord, validateMarkRecord, withCommittedReader } from '../src/graphmark/graphmark.mjs'
+import { buildCommittedGraph, checkGraphmarks, committedReader, isPromisorRepository, readMarkRecord, validateMarkRecord, virtualRootFor, withCommittedReader } from '../src/graphmark/graphmark.mjs'
 import { buildGraph } from '../src/graph/graph.mjs'
 import { commandProject } from '../src/project/config.mjs'
 
@@ -229,16 +229,16 @@ function retarget(dir, name, objectId, extra = (text) => text) {
 
 // Add a file to the index and commit it through Git's own objects, so the
 // tree holds exactly these names whatever the host filesystem would merge.
-function commitObjects(dir, entries, message) {
+function commitObjects(dir, entries, message, gitConfig = []) {
   const lines = []
   for (const { path: name, content = '', mode = '100644' } of entries) {
     const hashed = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: dir, input: content })
     assert.equal(hashed.status, 0, String(hashed.stderr))
     lines.push(Buffer.concat([Buffer.from(`${mode} ${String(hashed.stdout).trim()}\t`), Buffer.isBuffer(name) ? name : Buffer.from(name), Buffer.from([0])]))
   }
-  const updated = spawnSync('git', ['update-index', '-z', '--add', '--index-info'], { cwd: dir, input: Buffer.concat(lines) })
+  const updated = spawnSync('git', [...gitConfig, 'update-index', '-z', '--add', '--index-info'], { cwd: dir, input: Buffer.concat(lines) })
   assert.equal(updated.status, 0, String(updated.stderr))
-  git(dir, ['commit', '-qm', message])
+  git(dir, [...gitConfig, 'commit', '-qm', message])
 }
 
 const markOf = (report, suffix) => report.marks.find((mark) => mark.id.endsWith(suffix))
@@ -1398,19 +1398,23 @@ function recordFs(run) {
   }
 }
 
-test('the check reads the committed tree from Git objects alone: nothing in the repository is read from disk, nothing is written', () => {
+test('the check reads the committed tree from Git objects alone: nothing in the repository is read from disk but a location overlay, nothing is written', () => {
   const { dir } = pinnedProject()
+  // A machine-local overlay, a documented location input, is the one file read.
+  const overlay = path.join(dir, 'atelier.local.json')
+  fs.writeFileSync(overlay, `${JSON.stringify({ schema: 'mnstry.atelier-local-overlay@v1', repoPaths: { content: 'content' } })}\n`)
   const project = commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false })
   const { result, calls } = recordFs(() => checkGraphmarks(project))
   assert.equal(result.ok, true, result.errors.join('\n'))
   assert.deepEqual(result.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
-  assert.deepEqual(calls.reads.filter((name) => name.startsWith(dir)), [], 'no file under the repository was opened')
+  assert.deepEqual([...new Set(calls.reads.filter((name) => name.startsWith(dir)))], [overlay], 'no file under the repository but the overlay was opened')
   assert.deepEqual(calls.writes, [], 'nothing was written anywhere')
 })
 
 test('a filesystem call the committed reader does not serve is refused, never passed to the disk', async () => {
   const base = path.join(os.tmpdir(), `.atelier-graphmark-reader-test-${process.pid}`)
   const reader = committedReader(base)
+  reader.addRoot(path.join(base, 'tree'))
   reader.add(path.join(base, 'tree', 'note.md'), 'file', { bytes: Buffer.from('# Note\n') })
   reader.add(path.join(base, 'tree', 'link.md'), 'link', {})
   const note = path.join(base, 'tree', 'note.md')
@@ -1457,9 +1461,17 @@ test('nothing the check does can enter the graph: a sidecar whose source is a co
   assert.ok(has(report.errors, 'content/drawings/ghost.svg.kg.json'), report.errors.join('\n'))
 })
 
-test('a committed name this host would not keep as one literal path is refused', () => {
+test('a committed name this host would not keep as one literal path is refused', (t) => {
   const { dir } = pinnedProject()
-  commitObjects(dir, [{ path: 'content/notes/a\\b.txt', content: 'a backslash in one name\n' }], 'a backslash in a name')
+  // Git on Windows refuses such a name in its own index unless told not to;
+  // a tree made elsewhere can still hold one.
+  try {
+    commitObjects(dir, [{ path: 'content/notes/a\\b.txt', content: 'a backslash in one name\n' }], 'a backslash in a name', ['-c', 'core.protectNTFS=false'])
+  } catch (error) {
+    if (process.platform !== 'win32') throw error
+    t.skip('Git on this host refuses to index the name at all')
+    return
+  }
   const report = checkProject(dir)
   if (process.platform === 'win32') {
     assert.equal(report.ok, false)
@@ -1496,4 +1508,109 @@ test('the committed graph equals the graph built from a clean checkout', () => {
   assert.ok(real.errors.length >= 2)
   const committed = buildCommittedGraph({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {} })
   assert.deepEqual(facts(committed.graph), facts(real))
+})
+
+// Findings from the confirmation review of 6b64c9b.
+
+const graphFacts = (dir) => {
+  const project = commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false })
+  const real = buildGraph(project)
+  const committed = buildCommittedGraph({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {} })
+  return { real, committed: committed.graph, errors: committed.errors }
+}
+
+test('a configured folder never stands in for a committed one: an orphan sidecar and a missing repository still surface', () => {
+  // The operations folder is configured at the path of the sidecar's missing source.
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.roots.repoOps = 'content/drawings/ghost.svg' })
+  fs.writeFileSync(path.join(dir, 'content', 'drawings', 'ghost.svg.kg.json'), sidecarFor('ghost.svg', 'repair-workshop:drawings:ghost'))
+  commitAll(dir, 'an orphan sidecar and an operations folder named like its source')
+  const orphan = graphFacts(dir)
+  assert.ok(orphan.committed, orphan.errors.join('\n'))
+  assert.ok(orphan.committed.errors.some((error) => error.includes('ghost.svg.kg.json')), orphan.committed.errors.join('\n'))
+  assert.deepEqual(orphan.committed.errors, orphan.real.errors)
+  assert.equal(checkProject(dir).ok, false)
+
+  // The workspace folder is configured at the path of a managed folder nothing commits.
+  const { dir: absent } = pinnedProject()
+  editJson(path.join(absent, 'atelier.project.json'), (doc) => {
+    doc.roots.workspace = 'extra'
+    doc.repos.push({ name: 'extra', path: 'extra', readBoundary: 'team' })
+  })
+  editJson(path.join(absent, 'repo-access.v1.json'), (doc) => { doc.repos.extra = { readBoundary: 'team' } })
+  commitAll(absent, 'a managed folder that is not committed')
+  const missing = graphFacts(absent)
+  assert.ok(missing.committed, missing.errors.join('\n'))
+  assert.ok(missing.committed.errors.some((error) => error.includes('extra')), missing.committed.errors.join('\n'))
+  assert.deepEqual(missing.committed.errors, missing.real.errors)
+})
+
+test('every repository has its own virtual root, whatever the host spells its path', () => {
+  const win = path.win32
+  const roots = ['C:\\work\\repo', '\\\\C\\work\\repo', 'C:\\work\\repo\\inner', '\\\\server\\share\\repo', 'D:\\work\\repo']
+  const virtual = roots.map((root, index) => virtualRootFor('C:\\tmp\\.atelier-graphmark-committed', index, root, win))
+  assert.equal(new Set(virtual).size, roots.length, virtual.join('\n'))
+  for (const [index, one] of virtual.entries()) {
+    for (const other of virtual.slice(index + 1)) {
+      assert.equal(one.startsWith(other + win.sep) || other.startsWith(one + win.sep), false, `${one} and ${other} nest`)
+    }
+  }
+  assert.deepEqual(virtual.map((one) => win.basename(one)), roots.map((root) => win.basename(root)))
+})
+
+test('a repository nested in another is read from its own HEAD only', () => {
+  const { dir } = pinnedProject()
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'content/inner/\n')
+  const inner = path.join(dir, 'content', 'inner')
+  fs.mkdirSync(inner)
+  git(inner, ['init', '-q'])
+  fs.writeFileSync(path.join(inner, 'note.md'), '---\ntitle: "Inner"\nkg:\n  id: "inner:note"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n# Inner\n\nA note of the inner repository.\n')
+  commitAll(inner, 'the inner repository')
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.repos.push({ name: 'inner', path: 'content/inner', readBoundary: 'team' }) })
+  editJson(path.join(dir, 'repo-access.v1.json'), (doc) => { doc.repos.inner = { readBoundary: 'team' } })
+  commitAll(dir, 'enrol the inner repository')
+  const { real, committed, errors } = graphFacts(dir)
+  assert.ok(committed, errors.join('\n'))
+  assert.deepEqual(committed.nodes.filter((node) => node.id === 'inner:note').map((node) => node.repo), ['inner'], 'the outer repository does not see the inner one')
+  assert.deepEqual(committed.nodes, real.nodes)
+  assert.deepEqual(committed.errors, real.errors)
+})
+
+test('a pending Markdown file swapped while it is read makes the result indeterminate', { skip: process.platform === 'win32' && 'renames over an open path differ on Windows' }, () => {
+  const { dir } = pinnedProject()
+  const pending = markPath(dir, '2026-01-18-swapped.md')
+  fs.copyFileSync(markPath(dir, DRAWING), pending)
+  const decoy = path.join(dir, 'decoy.md')
+  fs.writeFileSync(decoy, '---\ntitle: "Decoy"\n---\n# Decoy\n')
+  const openSync = fs.openSync
+  let swapped = false
+  fs.openSync = function (target, ...rest) {
+    if (!swapped && String(target) === pending) {
+      swapped = true
+      fs.renameSync(decoy, pending)
+    }
+    return openSync.call(this, target, ...rest)
+  }
+  let report
+  try {
+    report = checkProject(dir)
+  } finally {
+    fs.openSync = openSync
+  }
+  assert.equal(swapped, true, 'the read opened the pending file')
+  assert.equal(report.ok, false)
+  assert.ok(has(report.errors, '2026-01-18-swapped.md: cannot tell whether the version in the working tree is a mark record'), report.errors.join('\n'))
+})
+
+test('the committed reader serves file URLs and refuses paths in no committed tree', () => {
+  const base = path.join(os.tmpdir(), `.atelier-graphmark-reader-url-${process.pid}`)
+  const reader = committedReader(base)
+  const root = path.join(base, 'repo-0', 'repo')
+  reader.addRoot(root)
+  reader.add(path.join(root, 'note.md'), 'file', { bytes: Buffer.from('# Note\n') })
+  withCommittedReader(reader, () => {
+    assert.equal(fs.readFileSync(pathToFileURL(path.join(root, 'note.md')), 'utf8'), '# Note\n')
+    assert.throws(() => fs.existsSync(path.join(base, 'elsewhere', 'note.md')), { code: 'EPERM' })
+  })
+  assert.equal(reader.violations.length, 1, reader.violations.join('\n'))
 })

@@ -161,10 +161,13 @@ A passing check proves structure, not meaning.
 other [project options](project-options.md)) verifies what readers receive:
 the committed tree at `HEAD`, read from Git objects alone. It makes no copy of
 the tree on any filesystem and writes nothing, so the host's case and
-normalisation rules, links and path grammar cannot change what it reads. It
-reads the working tree's bytes only through `git status` and, for Markdown
-that status reports as changed, that file's front matter, to tell a pending
-mark record (below).
+normalisation rules, links and path grammar cannot change what it reads. From
+the checkout it reads only: `git status`; the start (at most 256 KiB) of each
+Markdown file that status reports as changed, to tell a pending mark record
+(below), opened without following a link and held to the same file before
+and after the read; and the location inputs that tell it where each
+repository is, a machine-local overlay such as `atelier.local.json` included.
+None of these supplies a verified fact.
 
 1. **The committed config.** It finds the Git repository that holds the
    project config and reads the config from its `HEAD` blob, so the config
@@ -186,9 +189,15 @@ mark record (below).
    `mnstry.repo-access@v1`), name a valid default, and give every managed
    repository a valid read boundary. The graph receives exactly those
    verified bytes, or no policy when it is absent.
-3. **The committed files.** It lists the regular files committed under each
-   managed repository folder by exact path. Symbolic links are listed and
-   never followed; submodules are not part of it. A path that is not valid
+3. **The committed files.** It lists the committed tree under each managed
+   repository folder by exact path: its folders, its regular files, its
+   symbolic links (listed, never followed) and its submodules (the empty
+   folders a clean checkout holds). Each Git repository has its own root in
+   that listing, named by an opaque number, so two repositories, a nested one
+   included, never share a path whatever the host's drive or share rules. The
+   project's own folders (config, workspace, operations) are only names
+   there: nothing is added for them, so none can stand in for a missing
+   committed file or folder. A path that is not valid
    UTF-8, a segment Git refuses, the same path twice, and a name this host's
    path rules would not keep as one literal path (on Windows, a `\` inside a
    name) are refused. Names are Git's bytes, a leading U+FEFF included, and
