@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title">
+  <title id="title">Spoke tension: pairs of spokes pulling evenly on a hub</title>
+  <circle cx="60" cy="60" r="54" fill="none" stroke="currentColor" stroke-width="3"/>
+  <circle cx="60" cy="60" r="8" fill="none" stroke="currentColor" stroke-width="3"/>
+  <path d="M60 52 L60 6 M60 68 L60 114 M52 60 L6 60 M68 60 L114 60" stroke="currentColor" stroke-width="1.5"/>
+</svg>
