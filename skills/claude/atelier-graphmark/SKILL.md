@@ -77,10 +77,11 @@ edit a generated graph.
 
 Run the boundary check on the staged record (`atelier boundary check --staged`
 or the installed hook) and commit it: the check verifies the committed tree at
-`HEAD`, not your working tree. It refuses a pending record (new, staged, or a
-tracked file turned into a mark) and only warns about uncommitted changes to
-what the mark depends on, so commit those too. A failed `git status` makes the
-result indeterminate. A record in a Git-ignored path is skipped without an
+`HEAD` and never reads your working tree. It refuses a pending change to
+Markdown in a folder that holds marks and a staged mark record anywhere, and
+only warns about new Markdown elsewhere and uncommitted changes to what the
+mark depends on, so commit those too. A failed `git status` makes the result
+indeterminate. A record in a Git-ignored path is skipped without an
 error, and one outside the project's census scope (`setup.include`,
 `setup.exclude`) is named in a warning and not checked; the check fails when
 none is in the census but some lie outside it. Run `atelier graph`,

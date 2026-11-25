@@ -161,17 +161,11 @@ A passing check proves structure, not meaning.
 other [project options](project-options.md)) verifies what readers receive:
 the committed tree at `HEAD`, read from Git objects alone. It makes no copy of
 the tree on any filesystem and writes nothing, so the host's case and
-normalisation rules, links and path grammar cannot change what it reads. From
-the checkout it reads only: `git status`; the start (at most 256 KiB) of each
-Markdown file that status reports as changed, to tell a pending mark record
-(below); and the location inputs that tell it where each repository is, a
-machine-local overlay such as `atelier.local.json` included. None of these
-supplies a verified fact. A changed file is read only when every folder from
-its repository's root down to it is a plain folder (no link), the same folder
-by device and inode before the open and after the read, and the opened file
-(never through a final link) is the same file as its path before and after,
-unchanged in size, modification and change time; anything else makes the
-result indeterminate.
+normalisation rules, links and path grammar cannot change what it reads. It
+never reads a working-tree file. From the checkout it takes only `git status`
+(paths and status codes) and the location inputs that tell it where each
+repository is, a machine-local overlay such as `atelier.local.json` included.
+None of these supplies a verified fact.
 
 1. **The committed config.** It finds the Git repository that holds the
    project config and reads the config from its `HEAD` blob, so the config
@@ -204,9 +198,12 @@ result indeterminate.
    repositories with no folder in common (two Windows drives or shares) are
    refused. A repository inside another one's folder is read as its own
    repository only, since a checkout of the outer one holds none of its
-   files; one where the outer repository's committed tree holds files, or
-   anything but a submodule, is refused, as are two repositories naming one
-   folder. The project's own folders (config, workspace, operations) are only
+   files. Every Git repository that encloses a repository serving a managed
+   folder, part of the project or not, is asked what its `HEAD` holds there:
+   anything but nothing, or the submodule that records it (at that place or
+   above it), is refused, so a repository at a managed folder can never hide
+   what the enclosing commit holds there. Two repositories naming one folder
+   and two declarations that resolve to one folder are refused. The project's own folders (config, workspace, operations) are only
    names there: nothing is added for them, so none can stand in for a missing
    committed file or folder. A path that is not valid
    UTF-8, a segment Git refuses, the same path twice, and a name this host's
@@ -216,20 +213,26 @@ result indeterminate.
    lacks a file there is refused.
 4. **The committed graph.** It builds the knowledge graph with the graph's
    own, unchanged code, which reads through an in-memory reader. While it
-   builds, every filesystem call that names a path (a string, a buffer or a
-   file URL), synchronous or not, is either one the reader implements on a
-   path in a committed tree, answered from Git objects by exact path at the
-   moment of the read, or refused and recorded as an error: a path outside
-   every committed tree (a real file, or a folder the layout made only to
-   hold a repository) and any other kind of call are refused, so a later
-   change to the graph cannot read past it. A sidecar belongs to its source
+   builds, the functions of Node's shared `fs` and `fs.promises` objects are
+   replaced, so every call through them that names a path (a string, a
+   buffer or a file URL), synchronous or not, is either one the reader
+   implements on a path in a committed tree, answered from Git objects by
+   exact path at the moment of the read, or refused and recorded as an
+   error: a path outside every committed tree (a real file, or a folder the
+   layout made only to hold a repository) and any other kind of call are
+   refused. This covers the graph's reads, which all go through those
+   objects, as the tests pin; a function reference taken before the build
+   (a destructured import, or Node's internal loaders) is outside it. A sidecar belongs to its source
    only when `<source>.kg.json` is committed under exactly that name. Then it
    checks every mark against that graph, and lists each committed mark record
    in a managed folder that the census does not count (outside the project's
    census scope, or in a folder the census skips) as a warning, since it is
-   not checked; when the census holds no mark record at all but the
-   committed tree holds such records outside it, the check fails rather than
-   pass with nothing verified.
+   not checked, and each one whose front matter does not end within 256 KiB
+   (with any line endings) as one it cannot classify; when the census holds
+   no mark record at all but the committed tree holds such records outside
+   it, the check fails rather than pass with nothing verified. These records
+   are classified from Git in batches of bounded size, keeping only what each
+   one is.
 
 Then, for every Markdown node tagged `graphmark` other than a marks index
 (`kg.type: index`) without a `target`, it:
@@ -284,26 +287,29 @@ Then, for every Markdown node tagged `graphmark` other than a marks index
   not a node in the graph are errors, since the comparison would otherwise be
   skipped or wrong.
 
-It also reads the working tree, only through `git status` and the front
-matter of changed Markdown in the managed folders, classifying each changed
-file's index version, each stage of an unresolved conflict, and its working
-copy:
+It learns what is pending only from `git status` (each changed or untracked
+path in a managed folder, and its status code) and from the versions Git
+itself holds for it (the index, and each stage of an unresolved conflict); it
+never opens the working-tree file:
 
-- a pending mark record (new, staged, staged and then deleted, or a tracked
-  file turned into a mark) is refused;
-- a pending marks index change (a new, renamed or edited index) is reported
-  as a warning, and the committed index is what counts;
+- a pending mark record is refused: one whose index or conflict version is a
+  mark record, and any pending Markdown change (new, edited, deleted or
+  renamed) in a folder that holds a committed mark record or marks index,
+  which says to commit it to verify;
+- new Markdown elsewhere in a managed folder (untracked or only staged) is
+  reported as a warning, uncommitted and not verified; so is a tracked file
+  turned into a mark in its working copy only, through the warning about a
+  changed dependency below, until it is staged. Use `--expect` to make a
+  mark that is not yet committed fail the check;
 - uncommitted changes to a file a mark depends on (the marked file and its
   sidecar, the files behind its `evidences` nodes and its marks index) or to
   the project config or the effective access file are reported as warnings,
   naming the committed path;
-- a file whose front matter cannot be read (no permission, a failed read, a
-  link in a folder on the way, or a change while it is read) or does not end
+- a version Git holds that cannot be read or whose front matter does not end
   within 256 KiB, a pending Markdown file whose name is not UTF-8, and a
   `git status` that fails, make the result indeterminate: an error, never a
-  success. A file that is itself a link or a folder in the working tree, or
-  that is gone, is known not to be a mark record. Status output is split and decoded as bytes, so names
-  keep their identity.
+  success. Status output is split and decoded as bytes, so names keep their
+  identity.
 
 Every mark record the committed graph holds appears in the summary and in the
 `--json` `marks` list; one with any error has the state `refused`, whatever

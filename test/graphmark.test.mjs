@@ -9,7 +9,7 @@ import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
 import { REPO_ACCESS_SCHEMA, buildKnowledgeGraph } from '../src/graph/knowledge-graph.mjs'
-import { buildCommittedGraph, checkGraphmarks, committedReader, isPromisorRepository, projectLayout, readMarkRecord, validateMarkRecord, withCommittedReader } from '../src/graphmark/graphmark.mjs'
+import { buildCommittedGraph, checkGraphmarks, classifyBlobs, committedReader, isPromisorRepository, projectLayout, readMarkRecord, validateMarkRecord, withCommittedReader } from '../src/graphmark/graphmark.mjs'
 import { buildGraph } from '../src/graph/graph.mjs'
 import { commandProject } from '../src/project/config.mjs'
 
@@ -480,10 +480,10 @@ test('an untracked or only staged mark record is refused', () => {
   editMark(dir, '2026-01-16-untracked.md', (text) => text.replace('repair-workshop:mark:2026-01-12-spoke-tension-drawing', 'repair-workshop:mark:2026-01-16-untracked').replace('    supports:\n      - "repair-workshop:mark:2026-01-12-order-of-wheel-checks"\n', ''))
   const untracked = checkProject(dir)
   assert.equal(untracked.ok, false)
-  assert.ok(has(untracked.errors, '2026-01-16-untracked.md: the mark record is not committed at HEAD'), untracked.errors.join('\n'))
+  assert.ok(has(untracked.errors, '2026-01-16-untracked.md: pending mark: an uncommitted change (untracked) in a folder that holds marks'), untracked.errors.join('\n'))
   git(dir, ['add', '-A'])
   const staged = checkProject(dir)
-  assert.ok(has(staged.errors, '2026-01-16-untracked.md: the mark record is not committed at HEAD'), staged.errors.join('\n'))
+  assert.ok(has(staged.errors, '2026-01-16-untracked.md: pending mark: the record is in the index'), staged.errors.join('\n'))
 })
 
 test('a blank reason in the summary or the body is refused', () => {
@@ -848,7 +848,7 @@ test('an untracked marks index cannot hold a mark', () => {
   git(dir, ['commit', '-qm', 'the index leaves Git but stays on disk'])
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(has(report.warnings, 'content/marks/README.md: an uncommitted marks index change (untracked)'), report.warnings.join('\n'))
+  assert.ok(has(report.errors, 'content/marks/README.md: pending mark: an uncommitted change (untracked) in a folder that holds marks'), report.errors.join('\n'))
   assert.equal(report.errors.filter((error) => error.includes('declared belongs_to target "repair-workshop:marks" was not found')).length, 3, report.errors.join('\n'))
   assert.deepEqual(report.marks.map((mark) => mark.edition), ['refused', 'refused', 'refused'])
 })
@@ -1083,45 +1083,59 @@ test('the read policy comes from the committed access file the committed config 
   assert.equal(checkProject(absent).ok, true)
 })
 
-test('pending mark records are refused wherever they are, and pending index changes only warn', () => {
+test('pending mark records are refused by what Git holds or by where they are, and new Markdown elsewhere only warns', () => {
   const draft = (dir, name) => {
     fs.copyFileSync(markPath(dir, DRAWING), markPath(dir, name))
     editMark(dir, name, (text) => text.replace('repair-workshop:mark:2026-01-12-spoke-tension-drawing', `repair-workshop:mark:${name.replace(/\.md$/, '')}`).replace('    supports:\n      - "repair-workshop:mark:2026-01-12-order-of-wheel-checks"\n', ''))
   }
-  // Staged, then deleted from the working tree (AD).
+  // Staged, then deleted from the working tree (AD): the index holds a mark.
   const { dir } = pinnedProject()
   draft(dir, '2026-01-17-staged.md')
   git(dir, ['add', '--', markPath(dir, '2026-01-17-staged.md')])
   fs.rmSync(markPath(dir, '2026-01-17-staged.md'))
   const staged = checkProject(dir)
   assert.equal(staged.ok, false)
-  assert.ok(has(staged.errors, '2026-01-17-staged.md: the mark record is not committed at HEAD (it is in the index)'), staged.errors.join('\n'))
+  assert.ok(has(staged.errors, '2026-01-17-staged.md: pending mark: the record is in the index'), staged.errors.join('\n'))
 
-  // An untracked mark larger than the old classification cap.
+  // Untracked in the marks folder, however large: refused by where it is.
   const { dir: large } = pinnedProject()
   draft(large, '2026-01-17-large.md')
   fs.appendFileSync(markPath(large, '2026-01-17-large.md'), `\n${'A long body. '.repeat(200000)}\n`)
   const big = checkProject(large)
   assert.equal(big.ok, false)
-  assert.ok(has(big.errors, '2026-01-17-large.md: the mark record is not committed at HEAD (it is in the working tree)'), big.errors.join('\n'))
+  assert.ok(has(big.errors, '2026-01-17-large.md: pending mark: an uncommitted change (untracked) in a folder that holds marks'), big.errors.join('\n'))
 
-  // A tracked note turned into a mark without committing.
+  // A tracked note turned into a mark: its working copy is never read, so it
+  // is the dependency warning until it is staged, and refused once it is.
   const { dir: turned } = pinnedProject()
   const note = path.join(turned, 'content', 'notes', 'wheel-checks.md')
   fs.writeFileSync(note, fs.readFileSync(note, 'utf8').replace('tags: [repair, wheels]', 'tags: [repair, wheels, graphmark]'))
+  const unstaged = checkProject(turned)
+  assert.equal(unstaged.ok, true, unstaged.errors.join('\n'))
+  assert.ok(has(unstaged.warnings, 'notes/wheel-checks.md has uncommitted changes'), unstaged.warnings.join('\n'))
+  git(turned, ['add', '--', note])
   const pending = checkProject(turned)
   assert.equal(pending.ok, false)
-  assert.ok(has(pending.errors, 'notes/wheel-checks.md: the mark record is not committed at HEAD (it is in the working tree)'), pending.errors.join('\n'))
+  assert.ok(has(pending.errors, 'notes/wheel-checks.md: pending mark: the record is in the index'), pending.errors.join('\n'))
 
-  // Renaming the marks index, unstaged or staged, warns and verifies the committed marks.
+  // New Markdown in a folder without marks is reported as not verified.
+  const { dir: fresh } = pinnedProject()
+  fs.writeFileSync(path.join(fresh, 'content', 'notes', 'brakes.md'), '---\ntitle: "Brakes"\n---\n# Brakes\n')
+  const elsewhere = checkProject(fresh)
+  assert.equal(elsewhere.ok, true, elsewhere.errors.join('\n'))
+  assert.ok(has(elsewhere.warnings, 'content/notes/brakes.md: uncommitted Markdown (untracked); not verified'), elsewhere.warnings.join('\n'))
+
+  // Renaming the marks index, unstaged or staged, is a pending change in the
+  // marks folder; the committed marks are still verified.
   for (const stage of [false, true]) {
     const { dir: renamed } = pinnedProject()
     if (stage) git(renamed, ['mv', 'content/marks/README.md', 'content/marks/INDEX.md'])
     else fs.renameSync(path.join(renamed, 'content', 'marks', 'README.md'), path.join(renamed, 'content', 'marks', 'INDEX.md'))
     const report = checkProject(renamed)
-    assert.equal(report.ok, true, `${stage ? 'staged' : 'unstaged'}: ${report.errors.join('\n')}`)
+    assert.equal(report.ok, false, stage ? 'staged' : 'unstaged')
     assert.deepEqual(report.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
-    assert.ok(has(report.warnings, 'content/marks/INDEX.md: an uncommitted marks index change'), report.warnings.join('\n'))
+    assert.ok(has(report.errors, 'content/marks/INDEX.md: pending mark'), report.errors.join('\n'))
+    assert.ok(has(report.errors, 'content/marks/README.md: pending mark'), report.errors.join('\n'))
   }
 })
 
@@ -1316,15 +1330,15 @@ test('a committed access file is validated as written, before any defaults are f
 })
 
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
-test('a pending Markdown file the check cannot read makes the result indeterminate', { skip: (process.platform === 'win32' || isRoot) && 'needs POSIX permissions that bind this user' }, () => {
+test('a pending Markdown file the check cannot read changes nothing: the check never opens it', { skip: (process.platform === 'win32' || isRoot) && 'needs POSIX permissions that bind this user' }, () => {
   const { dir } = pinnedProject()
   const unreadable = path.join(dir, 'content', 'notes', 'closed.md')
   fs.writeFileSync(unreadable, '---\ntitle: "Closed"\n---\n# Closed\n')
   fs.chmodSync(unreadable, 0o000)
   try {
     const report = checkProject(dir)
-    assert.equal(report.ok, false)
-    assert.ok(has(report.errors, 'notes/closed.md: cannot tell whether the version in the working tree is a mark record', 'indeterminate'), report.errors.join('\n'))
+    assert.equal(report.ok, true, report.errors.join('\n'))
+    assert.ok(has(report.warnings, 'content/notes/closed.md: uncommitted Markdown (untracked); not verified'), report.warnings.join('\n'))
   } finally {
     fs.chmodSync(unreadable, 0o644)
   }
@@ -1344,7 +1358,7 @@ test('an unresolved conflict is classified by each of its index stages', () => {
   assert.notEqual(merge.status, 0, 'the merge conflicts')
   const report = checkProject(dir)
   assert.equal(report.ok, false)
-  assert.ok(has(report.errors, 'notes/wheel-checks.md: the mark record is not committed at HEAD (it is in the index (an unresolved conflict)'), report.errors.join('\n'))
+  assert.ok(has(report.errors, 'notes/wheel-checks.md: pending mark: the record is in the index (an unresolved conflict)'), report.errors.join('\n'))
 })
 
 test('a Git name that begins with U+FEFF keeps its identity', () => {
@@ -1433,6 +1447,31 @@ test('the check reads the committed tree from Git objects alone: nothing in the 
   assert.deepEqual(result.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
   assert.deepEqual([...new Set(calls.reads.filter((name) => name.startsWith(dir)))], [overlay], 'no file under the repository but the overlay was opened')
   assert.deepEqual(calls.writes, [], 'nothing was written anywhere')
+})
+
+test('the check never opens a working-tree file, pending ones included: what is pending comes from git status and Git objects', () => {
+  const { dir } = pinnedProject()
+  const overlay = path.join(dir, 'atelier.local.json')
+  fs.writeFileSync(overlay, `${JSON.stringify({ schema: 'mnstry.atelier-local-overlay@v1', repoPaths: { content: 'content' } })}\n`)
+  // New in the marks folder, new elsewhere, edited, and staged.
+  const pendingMark = markPath(dir, '2026-01-21-pending.md')
+  fs.copyFileSync(markPath(dir, DRAWING), pendingMark)
+  const newNote = path.join(dir, 'content', 'notes', 'brakes.md')
+  fs.writeFileSync(newNote, '---\ntitle: "Brakes"\ntags: [graphmark]\n---\n# Brakes\n')
+  const edited = path.join(dir, 'content', 'notes', 'wheel-checks.md')
+  fs.appendFileSync(edited, '\nAn uncommitted line.\n')
+  const stagedNote = path.join(dir, 'content', 'captures', 'staged.md')
+  fs.writeFileSync(stagedNote, '---\ntitle: "Staged"\n---\n# Staged\n')
+  git(dir, ['add', '--', stagedNote])
+  const project = commandProject({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {}, writeLocalState: false })
+  const { result, calls } = recordFs(() => checkGraphmarks(project))
+  assert.deepEqual([...new Set(calls.reads.filter((name) => name.startsWith(dir)))], [overlay], 'no file under the repository but the overlay was opened')
+  assert.deepEqual(calls.writes, [], 'nothing was written anywhere')
+  assert.equal(result.ok, false)
+  assert.ok(has(result.errors, 'content/marks/2026-01-21-pending.md: pending mark'), result.errors.join('\n'))
+  assert.ok(has(result.warnings, 'content/notes/brakes.md: uncommitted Markdown (untracked); not verified'), result.warnings.join('\n'))
+  assert.ok(has(result.warnings, 'content/captures/staged.md: uncommitted Markdown (added); not verified'), result.warnings.join('\n'))
+  assert.ok(has(result.warnings, 'notes/wheel-checks.md has uncommitted changes'), result.warnings.join('\n'))
 })
 
 test('a filesystem call the committed reader does not serve is refused, never passed to the disk', async () => {
@@ -1605,32 +1644,6 @@ test('a repository nested in another is read from its own HEAD only', () => {
   assert.deepEqual(committed.errors, real.errors)
 })
 
-test('a pending Markdown file swapped while it is read makes the result indeterminate', { skip: process.platform === 'win32' && 'renames over an open path differ on Windows' }, () => {
-  const { dir } = pinnedProject()
-  const pending = markPath(dir, '2026-01-18-swapped.md')
-  fs.copyFileSync(markPath(dir, DRAWING), pending)
-  const decoy = path.join(dir, 'decoy.md')
-  fs.writeFileSync(decoy, '---\ntitle: "Decoy"\n---\n# Decoy\n')
-  const openSync = fs.openSync
-  let swapped = false
-  fs.openSync = function (target, ...rest) {
-    if (!swapped && String(target) === pending) {
-      swapped = true
-      fs.renameSync(decoy, pending)
-    }
-    return openSync.call(this, target, ...rest)
-  }
-  let report
-  try {
-    report = checkProject(dir)
-  } finally {
-    fs.openSync = openSync
-  }
-  assert.equal(swapped, true, 'the read opened the pending file')
-  assert.equal(report.ok, false)
-  assert.ok(has(report.errors, '2026-01-18-swapped.md: cannot tell whether the version in the working tree is a mark record'), report.errors.join('\n'))
-})
-
 test('the committed reader serves file URLs and refuses paths in no committed tree', () => {
   const base = path.join(os.tmpdir(), `.atelier-graphmark-reader-url-${process.pid}`)
   const reader = committedReader(base)
@@ -1737,87 +1750,7 @@ test('a repository where another repository commits files is refused', () => {
   commitAll(dir, 'enrol the inner repository')
   const result = buildCommittedGraph({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {} })
   assert.equal(result.graph, null)
-  assert.ok(has(result.errors, `${inner}: is a repository where the committed tree of ${dir} holds content/inner`), result.errors.join('\n'))
-})
-
-// Run the check with one `fs` function hooked: the first time it is called
-// on `target`, `onCall(call)` runs in its place (`call` makes the real call).
-function checkWithHook(dir, name, target, onCall) {
-  const original = fs[name]
-  let hooked = false
-  fs[name] = function (one, ...rest) {
-    if (!hooked && String(one) === target) {
-      hooked = true
-      return onCall(() => original.call(this, one, ...rest))
-    }
-    return original.call(this, one, ...rest)
-  }
-  try {
-    return { report: checkProject(dir), hooked }
-  } finally {
-    fs[name] = original
-  }
-}
-
-test('a folder above a pending Markdown file replaced by a link while it is read makes the result indeterminate', { skip: process.platform === 'win32' && 'symbolic links' }, () => {
-  // Replaced before the file is examined and left, or replaced for the open
-  // and put back.
-  for (const [name, restore] of [['lstatSync', false], ['openSync', true]]) {
-    const { dir } = pinnedProject()
-    const folder = path.join(dir, 'content', 'pending')
-    fs.mkdirSync(folder)
-    const pending = path.join(folder, '2026-01-19-pending.md')
-    fs.copyFileSync(markPath(dir, DRAWING), pending)
-    // Elsewhere, a file of the same name that is no mark record.
-    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-elsewhere-'))
-    fs.writeFileSync(path.join(elsewhere, '2026-01-19-pending.md'), '---\ntitle: "A plain note"\n---\n# A plain note\n')
-    const { report, hooked } = checkWithHook(dir, name, pending, (call) => {
-      fs.renameSync(folder, `${folder}-moved`)
-      fs.symlinkSync(elsewhere, folder)
-      try {
-        return call()
-      } finally {
-        if (restore) {
-          fs.unlinkSync(folder)
-          fs.renameSync(`${folder}-moved`, folder)
-        }
-      }
-    })
-    assert.equal(hooked, true, `the check reached the pending file through fs.${name}`)
-    assert.equal(report.ok, false, name)
-    assert.ok(has(report.errors, 'pending/2026-01-19-pending.md: cannot tell whether the version in the working tree is a mark record'), `${name}: ${report.errors.join('\n')}`)
-  }
-})
-
-test('a pending Markdown file edited in place while it is read makes the result indeterminate', () => {
-  for (const sameSize of [false, true]) {
-    const { dir } = pinnedProject()
-    const pending = markPath(dir, '2026-01-20-edited.md')
-    const plain = '---\ntitle: "A plain note that is long enough"\n---\n# A plain note\n'
-    fs.writeFileSync(pending, plain)
-    const old = new Date(Date.now() - 3600 * 1000)
-    fs.utimesSync(pending, old, old)
-    const record = fs.readFileSync(markPath(dir, DRAWING), 'utf8')
-    const readSync = fs.readSync
-    let edited = false
-    fs.readSync = function (fd, ...rest) {
-      if (!edited) {
-        edited = true
-        // The same file, its bytes changed: the same length, or not.
-        fs.writeFileSync(pending, sameSize ? plain.replace('A plain note that is long enough', 'A plain note that is long ENOUGH') : record)
-      }
-      return readSync.call(this, fd, ...rest)
-    }
-    let report
-    try {
-      report = checkProject(dir)
-    } finally {
-      fs.readSync = readSync
-    }
-    assert.equal(edited, true)
-    assert.equal(report.ok, false, `same size ${sameSize}`)
-    assert.ok(has(report.errors, 'marks/2026-01-20-edited.md: cannot tell whether the version in the working tree is a mark record'), report.errors.join('\n'))
-  }
+  assert.ok(has(result.errors, `${inner}: is a Git repository where the enclosing repository ${dir} holds committed files at content/inner in its HEAD`), result.errors.join('\n'))
 })
 
 test('the committed reader keeps no blob larger than its budget, and still serves it', () => {
@@ -1864,4 +1797,103 @@ test('while the graph builds, every path it names is served from Git objects or 
   assert.equal(reader.violations.length, 6, reader.violations.join('\n'))
   // Restored afterwards.
   assert.equal(fs.existsSync(real), true)
+})
+
+// Findings from the confirmation review of ae8bafa.
+
+const cliCheck = (cwd, ...args) => {
+  const result = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--json', '--project', 'atelier.project.json', ...args], { cwd, encoding: 'utf8' })
+  return { status: result.status, report: JSON.parse(result.stdout) }
+}
+
+test('a Git repository at a managed folder cannot hide what the enclosing repository commits there', () => {
+  // The control: the config repository holds the workshop and its marks.
+  const { dir } = pinnedProject()
+  const control = cliCheck(dir)
+  assert.equal(control.status, 0, control.report.errors.join('\n'))
+  assert.equal(control.report.marks.length, 3)
+  // The same HEAD, with its content out of the checkout and another
+  // repository at the managed folder: the outer marks are still committed.
+  git(dir, ['sparse-checkout', 'set', '--no-cone', '/atelier.project.json', '/repo-access.v1.json'])
+  const inner = path.join(dir, 'content')
+  fs.mkdirSync(inner, { recursive: true })
+  git(inner, ['init', '-q'])
+  fs.writeFileSync(path.join(inner, 'note.md'), '---\ntitle: "Inner"\n---\n# Inner\n')
+  git(inner, ['add', 'note.md'])
+  git(inner, ['commit', '-qm', 'another repository at the managed folder'])
+  const hidden = cliCheck(dir)
+  assert.equal(hidden.status, 1)
+  assert.equal(hidden.report.ok, false)
+  assert.ok(has(hidden.report.errors, `${inner}: is a Git repository where the enclosing repository ${dir} holds committed files at content in its HEAD`), hidden.report.errors.join('\n'))
+})
+
+test('a nested repository the enclosing one records as a submodule exactly there is read as its own', () => {
+  const { dir } = pinnedProject()
+  const inner = path.join(dir, 'content', 'inner')
+  fs.mkdirSync(inner)
+  git(inner, ['init', '-q'])
+  fs.writeFileSync(path.join(inner, 'note.md'), '---\ntitle: "Inner"\nkg:\n  id: "inner:note"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n# Inner\n\nA note of the inner repository.\n')
+  git(inner, ['add', 'note.md'])
+  git(inner, ['commit', '-qm', 'the inner repository'])
+  git(dir, ['update-index', '--add', '--cacheinfo', `160000,${git(inner, ['rev-parse', 'HEAD'])},content/inner`])
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.repos.push({ name: 'inner', path: 'content/inner', readBoundary: 'team' }) })
+  editJson(path.join(dir, 'repo-access.v1.json'), (doc) => { doc.repos.inner = { readBoundary: 'team' } })
+  git(dir, ['add', 'atelier.project.json', 'repo-access.v1.json'])
+  git(dir, ['commit', '-qm', 'record the inner repository as a submodule and enrol it'])
+  const { real, committed, errors } = graphFacts(dir)
+  assert.ok(committed, errors.join('\n'))
+  assert.deepEqual(committed.nodes.filter((node) => node.id === 'inner:note').map((node) => node.repo), ['inner'])
+  const report = checkProject(dir)
+  assert.equal(report.ok, true, report.errors.join('\n'))
+  assert.deepEqual(report.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+  assert.ok(real)
+})
+
+test('two repository declarations that resolve to one folder are refused', () => {
+  const { project, shelf } = twoRootProject('knowledge/shelf', {}, { docs: true })
+  const folder = path.join(shelf, 'content')
+  const result = buildCommittedGraph({ argv: ['--project', path.join(project, 'atelier.project.json'), '--repo-path', `docs=${folder}`, '--repo-path', `content=${folder}`], cwd: project, env: {} })
+  assert.equal(result.graph, null)
+  assert.ok(has(result.errors, `repositories docs and content: both resolve to ${folder}`), result.errors.join('\n'))
+  const run = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--project', 'atelier.project.json', '--repo-path', `docs=${folder}`, '--repo-path', `content=${folder}`], { cwd: project, encoding: 'utf8' })
+  assert.equal(run.status, 1)
+})
+
+test('a committed record outside the census with long front matter is indeterminate whatever its line endings', () => {
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.setup = { exclude: 'content/drafts' } })
+  const record = fs.readFileSync(markPath(dir, WHEEL), 'utf8').replace('---\n', `---\n# ${'a'.repeat(256 * 1024)}\n`)
+  assert.equal(validateMarkRecord(readMarkRecord(record)).ok, true)
+  commitAll(dir, 'the census leaves drafts out')
+  // Through Git's objects, so each record keeps its exact line endings.
+  commitObjects(dir, [['LF', '\n'], ['CRLF', '\r\n'], ['CR', '\r']].map(([style, eol]) => ({ path: `content/drafts/${style}.md`, content: record.replaceAll('\n', eol) })), 'long records in a folder the census leaves out')
+  git(dir, ['checkout', 'HEAD', '--', 'content/drafts'])
+  const report = checkProject(dir)
+  assert.deepEqual(report.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+  for (const style of ['LF', 'CRLF', 'CR']) {
+    assert.ok(has(report.warnings, `content/drafts/${style}.md: is outside the knowledge graph's census, and the check cannot tell whether it is a mark record`), `${style}: ${report.warnings.join('\n')}`)
+  }
+})
+
+test('the out-of-census scan reads Git in bounded batches and keeps only what each blob is', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-scan-'))
+  git(repo, ['init', '-q'])
+  const hash = (content) => String(spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo, input: content }).stdout).trim()
+  const record = fs.readFileSync(path.join(fixtureContent, 'marks', WHEEL), 'utf8')
+  const oids = {
+    mark: hash(record),
+    cr: hash(record.replaceAll('\n', '\r')),
+    plain: hash('---\ntitle: "Plain"\n---\n# Plain\n'),
+    long: hash(record.replace('---\n', `---\n# ${'a'.repeat(300 * 1024)}\n`)),
+    missing: 'f'.repeat(40),
+  }
+  const expected = { mark: 'mark', cr: 'mark', plain: 'other', long: 'indeterminate' }
+  const batches = []
+  const kinds = classifyBlobs(repo, Object.values(oids), { batchBytes: 1, onBatch: (bytes) => batches.push(bytes) })
+  for (const [name, kind] of Object.entries(expected)) assert.equal(kinds.get(oids[name]), kind, name)
+  assert.equal(kinds.has(oids.missing), false)
+  // One blob per batch at this budget, and nothing larger than the limit.
+  assert.equal(batches.length, 4)
+  for (const bytes of batches) assert.ok(bytes <= 256 * 1024 + 128, String(bytes))
+  assert.deepEqual(classifyBlobs(repo, Object.values(oids)), kinds)
 })

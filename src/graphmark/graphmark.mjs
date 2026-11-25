@@ -232,7 +232,7 @@ function missingAt(root, commit) {
 // `unavailable` (a partial clone lacks it) or `failed` (Git could not say).
 // Only `absent` means there is nothing there, and only when every folder on
 // the way is a plain tree. Paths are compared as bytes.
-function lookup(root, commit, objectPath, limit = MAX_OBJECT_BYTES) {
+function lookup(root, commit, objectPath, limit = MAX_OBJECT_BYTES, { content = true } = {}) {
   const view = missingAt(root, commit)
   if (!view) return { kind: 'failed' }
   if (view.treesMissing) return { kind: 'unavailable' }
@@ -258,6 +258,7 @@ function lookup(root, commit, objectPath, limit = MAX_OBJECT_BYTES) {
   if (entry.mode === '160000') return { kind: 'gitlink' }
   if (entry.type === 'tree') return { kind: 'directory' }
   if (entry.type !== 'blob' || (entry.mode !== '100644' && entry.mode !== '100755')) return { kind: 'failed' }
+  if (!content) return { kind: 'file' }
   if (view.missing.has(entry.oid)) return { kind: 'unavailable' }
   const size = Number(git(root, ['cat-file', '-s', entry.oid])?.toString('utf8').trim())
   if (!Number.isFinite(size)) return { kind: 'failed' }
@@ -339,68 +340,6 @@ function workingStatus(root) {
   return { available: true, changes, undecodable }
 }
 
-// The start of the regular working-tree file at `objectPath` (a path from the
-// Git root `root`): { bytes, complete }; { nonregular } when it is absent, or
-// is a link, a folder or anything else known not to be a regular file; null
-// when it cannot be read or held still, which is never a known answer. Every
-// folder from the root down is examined with lstat before the open and again
-// after the read, and must be the same folder (device and inode) each time,
-// never a link; the file is opened without following a final link, and the
-// descriptor must be the same regular file as the path before and after the
-// read, unchanged in size, modification and change time. Any difference, or
-// a link on the way, makes the answer null.
-const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino
-const sameVersion = (a, b) => sameFile(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
-const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
-function workingHead(root, objectPath) {
-  const segments = objectPath.split('/')
-  const folders = segments.slice(0, -1).reduce((chain, segment) => [...chain, path.join(chain.at(-1), segment)], [root])
-  const file = path.join(root, ...segments)
-  const examine = () => {
-    const seen = []
-    for (const [index, folder] of folders.entries()) {
-      const stat = index === 0 ? fs.statSync(folder, { bigint: true }) : fs.lstatSync(folder, { bigint: true })
-      if (!stat.isDirectory()) return null
-      seen.push(stat)
-    }
-    return seen
-  }
-  let before
-  let fileBefore
-  try {
-    before = examine()
-    if (!before) return null
-    fileBefore = fs.lstatSync(file, { bigint: true })
-  } catch (error) {
-    return error?.code === 'ENOENT' ? { nonregular: true } : null
-  }
-  if (!fileBefore.isFile()) return { nonregular: true }
-  let fd = null
-  try {
-    fd = fs.openSync(file, OPEN_FLAGS)
-    const opened = fs.fstatSync(fd, { bigint: true })
-    if (!opened.isFile() || !sameFile(opened, fileBefore)) return null
-    const size = Number(opened.size)
-    const buffer = Buffer.alloc(Math.min(size, FRONT_MATTER_LIMIT))
-    let read = 0
-    while (read < buffer.length) {
-      const got = fs.readSync(fd, buffer, read, buffer.length - read, read)
-      if (got <= 0) break
-      read += got
-    }
-    if (read < buffer.length || !sameVersion(fs.fstatSync(fd, { bigint: true }), opened)) return null
-    const after = examine()
-    if (!after || after.some((stat, index) => !sameFile(stat, before[index]))) return null
-    const fileAfter = fs.lstatSync(file, { bigint: true })
-    if (!fileAfter.isFile() || !sameFile(fileAfter, opened)) return null
-    return { bytes: buffer.subarray(0, read), complete: size <= FRONT_MATTER_LIMIT }
-  } catch {
-    return null
-  } finally {
-    if (fd !== null) fs.closeSync(fd)
-  }
-}
-
 // The start of a blob: { bytes, complete }, or null when Git cannot read it.
 function blobHead(root, oid) {
   const result = gitRun(root, ['cat-file', 'blob', oid], { maxBuffer: FRONT_MATTER_LIMIT })
@@ -409,15 +348,16 @@ function blobHead(root, oid) {
   return null
 }
 
-// What one version of a Markdown file is, by its front matter: a mark record,
-// a marks index, something else, or indeterminate (unreadable, or front
-// matter that does not end within the limit).
+// What one committed version (a Git object) of a Markdown file is, by its
+// front matter: a mark record, a marks index, something else, or
+// indeterminate (unreadable, or front matter that does not end within the
+// limit). The opening delimiter is matched with the newline rule of the full
+// parser (splitFrontmatter): LF, CRLF or a lone CR.
 function classifyMarkdown(head) {
   if (!head) return 'indeterminate'
-  if (head.nonregular) return 'other'
   const text = head.bytes.toString('utf8')
   const split = splitFrontmatter(text)
-  if (!split) return !head.complete && /^---\r?\n/.test(text) ? 'indeterminate' : 'other'
+  if (!split) return !head.complete && text.replace(/\r\n?/g, '\n').startsWith('---\n') ? 'indeterminate' : 'other'
   const record = parseYamlSubset(split.yaml)
   if (!Array.isArray(record?.tags) || !record.tags.includes(GRAPHMARK_TAG)) return 'other'
   return record.kg?.type === 'index' && record.target === undefined ? 'index' : 'mark'
@@ -740,6 +680,27 @@ export function projectLayout(base, paths, pathModule = path) {
   }
 }
 
+// What the committed tree of `outer`, a Git repository enclosing the
+// repository at `inner`, holds where `inner` lies, when that is anything but
+// nothing or the submodule that records `inner` (exactly there, or above it);
+// null when it holds nothing there. An outer repository with no commit holds
+// nothing; one Git cannot read leaves the answer open, which is a problem.
+function enclosingProblem(outer, inner) {
+  if (git(outer, ['rev-parse', '--git-dir']) === null) return 'cannot be read by Git'
+  const head = git(outer, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])?.toString('utf8').trim()
+  if (!head) return null
+  const at = toPosix(path.relative(outer, inner))
+  const found = lookup(outer, head, at, MAX_OBJECT_BYTES, { content: false })
+  if (found.kind === 'absent' || found.kind === 'gitlink' || (found.kind === 'blocked' && found.as === 'a submodule')) return null
+  const held = {
+    file: () => `a file at ${at}`,
+    directory: () => `committed files at ${at}`,
+    symlink: () => `a symbolic link at ${at}`,
+    blocked: () => `${found.as} at ${found.at}, above ${at}`,
+  }[found.kind]
+  return held ? `holds ${held()} in its HEAD` : `cannot show what its HEAD holds at ${at}`
+}
+
 // The committed project, verified from Git:
 // 1. find the config's repository and read the config from its HEAD blob (it
 //    need not be checked out, and an unfinished edit does not matter);
@@ -837,6 +798,28 @@ function buildCommitted(request) {
     take(root).prefixes.add(toPosix(path.relative(root, repo.path)))
   }
   if (errors.length) return committed
+  // One folder is one repository: two declarations that resolve to the same
+  // folder would census it twice under two names.
+  for (const [index, one] of managed.entries()) {
+    for (const other of managed.slice(index + 1)) {
+      if (path.relative(path.resolve(one.path), path.resolve(other.path)) === '') errors.push(`repositories ${one.name} and ${other.name}: both resolve to ${path.resolve(one.path)}; one folder is read as one repository only, so the check refuses`)
+    }
+  }
+  if (errors.length) return committed
+  // Every Git repository that encloses a repository serving a managed folder,
+  // in the project or not, must hold nothing committed where that repository
+  // lies: only the submodule that records it there, or nothing at all.
+  // Otherwise a checkout of it holds files there that the census never sees.
+  for (const served of new Set(managed.map((repo) => gitRoot(repo.path)))) {
+    for (let outer = path.dirname(served); ; outer = path.dirname(outer)) {
+      if (fs.existsSync(path.join(outer, '.git'))) {
+        const problem = enclosingProblem(outer, served)
+        if (problem) errors.push(`${served}: is a Git repository where the enclosing repository ${outer} ${problem}; a checkout cannot hold both, so the check refuses`)
+      }
+      if (path.dirname(outer) === outer) break
+    }
+  }
+  if (errors.length) return committed
 
   // One virtual project folder for the config and every repository, each at
   // its host path from the deepest folder holding them all.
@@ -864,19 +847,6 @@ function buildCommitted(request) {
     entry.recorded = recorded
     if (recorded.unreadable) errors.push(`${entry.root}: HEAD's tree cannot be read without fetching objects this clone lacks`)
     for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be read exactly: ${problem}; the check refuses rather than read a different file`)
-  }
-  if (errors.length) return committed
-  // A repository inside another one's folder holds that place in a checkout:
-  // the outer committed tree may record it as a submodule there, and nothing
-  // else.
-  for (const outer of roots.values()) {
-    for (const nested of roots.values()) {
-      if (nested === outer || !inside(outer.root, nested.root)) continue
-      const at = toPosix(path.relative(outer.root, nested.root))
-      const { trees, files, links, gitlinks } = outer.recorded
-      const clash = [...trees, ...files.keys(), ...links, ...gitlinks.filter((rel) => rel !== at)].find((rel) => rel === at || rel.startsWith(`${at}/`))
-      if (clash) errors.push(`${nested.root}: is a repository where the committed tree of ${outer.root} holds ${clash}; a checkout cannot hold both, so the check refuses`)
-    }
   }
   if (errors.length) return committed
   try {
@@ -1112,10 +1082,29 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
   // (kg type index) that carries no target.
   const candidates = graph.nodes.filter((node) => tagged(node) && /\.md$/i.test(node.path ?? ''))
 
-  // Changed Markdown in a managed folder that is not a committed mark: what
-  // its index version and its working copy are. A pending mark record, staged
-  // or not, is refused; a pending marks index is reported; one that cannot be
-  // classified makes the result indeterminate.
+  // The folders that hold a committed mark record or marks index, by
+  // repository.
+  const marksFolders = new Map()
+  const holdsMarks = (node) => {
+    const folder = path.posix.dirname(node.path)
+    if (!marksFolders.has(node.repo)) marksFolders.set(node.repo, new Set())
+    marksFolders.get(node.repo).add(folder === '.' ? '' : folder)
+  }
+  for (const node of candidates) {
+    holdsMarks(node)
+    for (const index of node.relations?.belongs_to ?? []) {
+      const target = nodesById.get(index)
+      if (target?.type === 'index' && /\.md$/i.test(target.path ?? '')) holdsMarks(target)
+    }
+  }
+  const inMarksFolder = (repo, rel) => [...(marksFolders.get(repo) ?? [])].some((folder) => folder === '' || rel.startsWith(`${folder}/`))
+
+  // Pending Markdown in a managed folder, from `git status` and Git objects
+  // alone: the check never reads a working-tree file. A version Git holds
+  // (the index, each stage of a conflict) that is a mark record, and any
+  // pending change in a folder that holds marks, is refused; new Markdown
+  // elsewhere is reported as not verified; a committed version Git cannot
+  // show makes the result indeterminate.
   const scanned = new Set()
   for (const [name, context] of contexts) {
     if (!context.root || !context.head) continue
@@ -1138,6 +1127,8 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
       if (!/\.md$/i.test(objectPath)) continue
       const file = path.join(context.root, ...objectPath.split('/'))
       if (!inside(context.realFolder, file)) continue
+      const rel = toPosix(path.relative(context.realFolder, file))
+      const where = `${name}/${rel}`
       const atHead = lookup(context.root, context.head.commit, objectPath)
       // A link, a directory or a submodule is never a mark record; a version
       // Git cannot show makes the answer indeterminate.
@@ -1148,12 +1139,12 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
       const versions = []
       if (change.index) versions.push(['index', classifyMarkdown(blobHead(context.root, change.index))])
       for (const stage of change.stages ?? []) versions.push(['index (an unresolved conflict)', classifyMarkdown(blobHead(context.root, stage))])
-      if (change.working) versions.push(['working tree', classifyMarkdown(workingHead(context.root, objectPath))])
       if (headKind === 'indeterminate') versions.push(['committed tree', 'indeterminate'])
-      const where = `${name}/${toPosix(path.relative(context.realFolder, file))}`
       const of = (kind) => versions.filter(([, found]) => found === kind).map(([place]) => place).join(' and ')
-      if (of('mark')) errors.push(`${where}: the mark record is not committed at HEAD (it is in the ${of('mark')}); commit it before checking`)
+      if (of('mark')) errors.push(`${where}: pending mark: the record is in the ${of('mark')}, not committed at HEAD; commit it to verify`)
+      else if (inMarksFolder(name, rel)) errors.push(`${where}: pending mark: an uncommitted change (${change.kind}) in a folder that holds marks, which this check does not read; commit it to verify`)
       else if (of('indeterminate')) errors.push(`${where}: cannot tell whether the version in the ${of('indeterminate')} is a mark record (its front matter is unreadable or longer than ${FRONT_MATTER_LIMIT} bytes); the result is indeterminate`)
+      else if (change.kind === 'untracked' || change.kind === 'added') warnings.push(`${where}: uncommitted Markdown (${change.kind}); not verified, since this check reads only what is committed`)
       else if (of('index')) warnings.push(`${where}: an uncommitted marks index change (${change.kind}); this check verified the marks index committed at HEAD`)
     }
   }
@@ -1494,44 +1485,67 @@ function uncountedRecords(graph, repositories) {
       const rel = prefix ? objectPath.slice(prefix.length + 1) : objectPath
       if (!counted.has(`${name}\0${rel}`)) candidates.push({ rel, oid })
     }
-    const heads = blobHeads(root, candidates.map(({ oid }) => oid))
+    const kinds = classifyBlobs(root, candidates.map(({ oid }) => oid))
     for (const { rel, oid } of candidates) {
-      const kind = classifyMarkdown(heads.get(oid) ?? null)
+      const kind = kinds.get(oid) ?? 'indeterminate'
       if (kind === 'mark' || kind === 'indeterminate') found.push({ where: `${name}/${rel}`, kind })
     }
   }
   return found
 }
 
-// The start of each blob, read in one Git call per batch: a map from object id
-// to { bytes, complete }. An object Git cannot read is left out of it.
-function blobHeads(root, oids) {
-  const heads = new Map()
+// What each blob is as a Markdown version (classifyMarkdown), by object id.
+// Sizes come first from one `cat-file --batch-check`; a blob within the
+// front-matter limit is read with others in a batch of at most `batchBytes`
+// (one blob alone may fill a batch up to the limit), and classified, its
+// bytes dropped, before the next batch is read; a larger blob is read only up
+// to the limit. An object Git cannot read is left out (indeterminate).
+// `onBatch(bytes)` observes the size of each Git read.
+export function classifyBlobs(root, oids, { batchBytes = 8 * 1024 * 1024, onBatch = () => {} } = {}) {
+  const kinds = new Map()
   const unique = [...new Set(oids)]
-  for (let start = 0; start < unique.length; start += 64) {
-    const batch = unique.slice(start, start + 64)
-    const result = gitRun(root, ['cat-file', '--batch'], { input: `${batch.join('\n')}\n`, maxBuffer: 1024 * 1024 * 1024 })
-    if (result.status !== 0 || !result.stdout) {
-      for (const oid of batch) {
-        const head = blobHead(root, oid)
-        if (head) heads.set(oid, head)
-      }
-      continue
+  if (!unique.length) return kinds
+  const checked = gitRun(root, ['cat-file', '--batch-check'], { input: `${unique.join('\n')}\n`, maxBuffer: unique.length * 128 + 1024 })
+  if (checked.status !== 0 || !checked.stdout) return kinds
+  const sizes = new Map()
+  for (const line of checked.stdout.toString('utf8').split('\n')) {
+    const [oid, type, sizeText] = line.split(' ')
+    const size = Number(sizeText)
+    if (type === 'blob' && Number.isSafeInteger(size)) sizes.set(oid, size)
+  }
+  const small = []
+  for (const [oid, size] of sizes) {
+    if (size > FRONT_MATTER_LIMIT) {
+      const head = blobHead(root, oid)
+      onBatch(head?.bytes.length ?? 0)
+      if (head) kinds.set(oid, classifyMarkdown({ bytes: head.bytes, complete: false }))
+    } else small.push(oid)
+  }
+  for (let start = 0; start < small.length;) {
+    const batch = []
+    let bytes = 0
+    while (start < small.length && (!batch.length || bytes + sizes.get(small[start]) <= batchBytes)) {
+      bytes += sizes.get(small[start])
+      batch.push(small[start])
+      start += 1
     }
+    const result = gitRun(root, ['cat-file', '--batch'], { input: `${batch.join('\n')}\n`, maxBuffer: bytes + batch.length * 128 + 1024 })
+    if (result.status !== 0 || !result.stdout) continue
     const out = result.stdout
+    onBatch(out.length)
     let at = 0
     for (let index = 0; index < batch.length; index += 1) {
       const end = out.indexOf(0x0a, at)
       if (end < 0) break
       const [oid, type, sizeText] = out.subarray(at, end).toString('utf8').split(' ')
       at = end + 1
-      if (type === undefined || sizeText === undefined) continue
       const size = Number(sizeText)
-      if (type === 'blob' && Number.isSafeInteger(size)) heads.set(oid, { bytes: Buffer.from(out.subarray(at, at + Math.min(size, FRONT_MATTER_LIMIT))), complete: size <= FRONT_MATTER_LIMIT })
+      if (!Number.isSafeInteger(size)) continue
+      if (type === 'blob') kinds.set(oid, classifyMarkdown({ bytes: out.subarray(at, at + size), complete: true }))
       at += size + 1
     }
   }
-  return heads
+  return kinds
 }
 
 const USAGE = 'Usage: atelier graphmark check [--json] [--expect ID]... [--project PATH] [--repo-path NAME=PATH]...\n\nVerify every GraphMark record against the committed tree at HEAD: the atelier-graphmark@v1 contract, that the target lies in its own repository, that its full commit id holds the marked edition, that the selector names one part of it, and the audience. An uncommitted or edited mark record is refused. --expect fails the check when the mark with that kg id is missing; repeat it for several.\nReads Git objects only; writes nothing.'

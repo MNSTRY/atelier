@@ -86,8 +86,8 @@ mark record, not an index entry.
    generated graph.
 9. **Commit, build, check and read back.** Run the repository's boundary
    check on the staged record (`atelier boundary check --staged`, or the
-   installed hook) and commit it: the check verifies the committed record and
-   refuses an uncommitted edit to the record; it verifies what is committed,
+   installed hook) and commit it: the check verifies the committed record,
+   never reads the working tree, and refuses a record that is only pending;
    so commit the material and the nodes the mark depends on first.
    Then run `atelier graph`,
    `atelier graph --check` and `atelier graphmark check --expect <the mark's id>`,
@@ -197,12 +197,14 @@ longer resolves. `test/graphmark.test.mjs` pins these behaviours.
 - `atelier graphmark check` verifies the committed tree at `HEAD`, not the
   working tree: it reads the project config, the read policy and the
   committed files from Git objects alone and builds the graph from them,
-  copying nothing to disk, so an uncommitted edit can neither pass nor fail a
-  mark, a sparse checkout works, and the result does not depend on the host's
-  filesystem. It refuses a pending mark record (new, staged or a tracked
-  file turned into a mark), and warns about uncommitted changes to what a
-  mark depends on and about an uncommitted marks index change. A failed
-  `git status` makes the result indeterminate. A record in a Git-ignored path
+  copying nothing to disk and opening no working-tree file, so an
+  uncommitted edit can neither pass nor fail a mark, a sparse checkout works,
+  and the result does not depend on the host's filesystem. What is pending
+  comes from `git status` alone: a pending change to Markdown in a folder
+  that holds marks, and a staged mark record anywhere, are refused (commit
+  them to verify); new Markdown elsewhere and uncommitted changes to what a
+  mark depends on are warnings. A failed `git status` makes the result
+  indeterminate. A record in a Git-ignored path
   is not read at all. Use `--expect <id>` so a mark that went missing fails
   the check instead of disappearing from the count. A mark with any error is
   reported as `refused`.
