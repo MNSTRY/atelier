@@ -62,8 +62,9 @@ mark record, not an index entry.
    repository. A mark's audience is never wider than the marked material's.
 6. **Capture, if the material is not in a repository yet.** A passage from a
    conversation, a call or a file elsewhere is captured where step 5 placed it,
-   as a source file, and committed. Note where it came from for
-   `capturedFrom`.
+   as a source file. Stage it and run the repository's boundary check
+   (`atelier boundary check --staged`, or the installed hook) before
+   committing it. Note where it came from for `capturedFrom`.
 7. **Preserve the edition.** Make sure the marked material is committed on a
    branch that is kept, then record the target: the repository, the object's
    path from the Git repository root, the full commit id that holds it
@@ -86,7 +87,9 @@ mark record, not an index entry.
 9. **Commit, build, check and read back.** Run the repository's boundary
    check on the staged record (`atelier boundary check --staged`, or the
    installed hook) and commit it: the check verifies the committed record and
-   refuses an uncommitted edit. Then run `atelier graph`,
+   refuses an uncommitted edit, to the record or to the files behind the nodes
+   it depends on (the marked node, what it `evidences`, the marks index).
+   Then run `atelier graph`,
    `atelier graph --check` and `atelier graphmark check --expect <the mark's id>`,
    and find the mark's id and edges in the built graph. Report what was marked
    and why, where the record lives, its audience, and the furthest state
@@ -153,8 +156,8 @@ A mark moves through separate states. Report the furthest one you verified.
 | State | What has happened |
 | --- | --- |
 | `marked` | Someone has said "graphmark this" about a specific thing |
-| `preserved` | The material is committed, and the target names its revision, part and digest |
-| `recorded` | The mark record is written in the owner's repository |
+| `preserved` | The material is committed, and the target names its full commit id, path, part and digest |
+| `recorded` | The mark record is committed in the owner's repository |
 | `graph-checked` | `atelier graph --check` and `atelier graphmark check` pass, and the mark's id and edges are in the built graph |
 | `shared` | The record is in a repository its intended readers can read |
 | `accepted` | The material's owner has accepted the reading the mark records |
@@ -198,14 +201,19 @@ longer resolves. `test/graphmark.test.mjs` pins these behaviours.
   in the built graph. A record in a Git-ignored path is not read at all. Use
   `--expect <id>` so a mark that went missing fails the check instead of
   disappearing from the count.
+- The graph itself is built from the working tree. The check refuses a mark
+  whose marked node, `evidences` nodes or marks index (with their sidecars)
+  are untracked or differ from `HEAD`, so run it on a tree where those files
+  are committed. A mark with any error is reported as `refused`.
 - `atelier graphmark check` compares a mark's audience with the audience the
   marked edition declared at its commit, the marked file's current node or,
   for a file that is not a graph node, the repository's read boundary and what
   the file declares now, and the nodes it `evidences`. Custody (step 5) remains
   the agent's and reviewer's responsibility.
 - A changed edition is a warning, not an error: the mark still names the bytes
-  that were marked, and Git returns them. An edition the named commit does not
-  hold is an error.
+  that were marked, and Git returns them with the printed command, which reads
+  Git as the check does (`--no-replace-objects`). An edition the named commit
+  does not hold is an error.
 - A history rewrite that drops the marked commit (a squash merge, a rebase or
   a force push) leaves the mark unverified, even when a kept commit holds the
   same bytes; the check names such a commit as a repair hint. Mark material

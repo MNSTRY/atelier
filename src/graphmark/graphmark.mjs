@@ -6,6 +6,7 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import { buildGraph } from '../graph/graph.mjs'
 import { parseYamlSubset, splitFrontmatter } from '../graph/knowledge-graph.mjs'
+import { parseProjectOptions } from '../cli/project-options.mjs'
 import { commandProject } from '../project/config.mjs'
 import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 
@@ -24,7 +25,9 @@ import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 // that a mark is never more widely visible than its marked edition declares
 // or its owner's current policy allows. A repair hint (HEAD holds the bytes,
 // another path form names them) is a diagnostic, never a verified mark.
-// Offline: it reads committed Git objects and writes nothing.
+// Offline: the graph is built from the working tree, so a mark whose record
+// or graph dependencies differ from HEAD is refused; editions and declared
+// audiences come from committed Git objects. It writes nothing.
 
 export const GRAPHMARK_CONTRACT = 'atelier-graphmark@v1'
 export const GRAPHMARK_TAG = 'graphmark'
@@ -272,6 +275,33 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
   // (kg type index) that carries no target.
   const candidates = graph.nodes.filter((node) => tagged(node) && /\.md$/i.test(node.path ?? ''))
   const seen = new Set()
+  const SKIP = Symbol('marks index')
+
+  // The graph is read from the working tree; a node a mark depends on must be
+  // the one committed at HEAD, source and sidecar, or the check would verify
+  // something readers never receive.
+  const heads = new Map()
+  const headOf = (dir) => {
+    if (!heads.has(dir)) heads.set(dir, resolveRevision(dir, 'HEAD'))
+    return heads.get(dir)
+  }
+  const nodeDrift = (graphNode) => {
+    const nodeFolder = folders.get(graphNode.repo)
+    const nodeRoot = nodeFolder ? gitRoot(nodeFolder) : null
+    if (!nodeRoot) return 'is not in a Git repository this check reads'
+    const nodeHead = headOf(nodeRoot)
+    const source = path.resolve(nodeFolder, graphNode.path)
+    for (const file of /\.md$/i.test(graphNode.path) ? [source] : [source, `${source}.kg.json`]) {
+      const rel = toPosix(path.relative(nodeRoot, file))
+      const committed = nodeHead ? blobAt(nodeRoot, nodeHead.commit, rel) : null
+      const working = workingBytes(nodeRoot, file)
+      if (!committed && !working) continue
+      if (!committed?.bytes) return `${rel} ${working ? 'is not committed at HEAD' : 'is not a regular file at HEAD'}`
+      if (!working) return `${rel} is committed at HEAD but missing from the working tree`
+      if (!working.equals(committed.bytes)) return `${rel} differs from the one committed at HEAD`
+    }
+    return null
+  }
 
   // A record in a marks index without the tag would never be checked.
   const marksIndexes = new Set(graph.nodes.filter((node) => node.type === 'index' && tagged(node)).map((node) => node.id))
@@ -284,22 +314,22 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
     if (index) errors.push(`${node.repo}/${node.path}: belongs to the marks index ${index} but is not tagged ${GRAPHMARK_TAG}, so it is not checked; tag it, or take it out of the index`)
   }
 
-  for (const node of candidates) {
+  const inspect = (node) => {
     const where = `${node.repo}/${node.path}`
     const folder = folders.get(node.repo)
     if (!folder) {
       errors.push(`${where}: repository is not readable from this project`)
-      continue
+      return null
     }
     const recordFile = path.join(folder, node.path)
     const root = gitRoot(folder)
     const working = workingBytes(root ?? folder, recordFile)
     const draft = working ? readMarkRecord(working.toString('utf8')) : null
-    if (node.type === 'index' && draft && draft.target === undefined) continue
+    if (node.type === 'index' && draft && draft.target === undefined) return SKIP
     seen.add(node.id)
     if (!root) {
       errors.push(`${where}: the repository is not under Git, so no mark record or edition can be verified`)
-      continue
+      return null
     }
 
     // The record readers receive is the committed one: read it from HEAD, and
@@ -309,17 +339,17 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
     const committed = head ? blobAt(root, head.commit, recordPath) : null
     if (!committed?.bytes) {
       errors.push(`${where}: the mark record is not committed at HEAD; commit it before checking`)
-      continue
+      return null
     }
     if (!working || !working.equals(committed.bytes)) {
       errors.push(`${where}: the working-tree mark record differs from the one committed at HEAD; commit the change before checking, since readers receive the committed record`)
-      continue
+      return null
     }
     const raw = committed.bytes.toString('utf8')
     const record = readMarkRecord(raw)
     if (!record) {
       errors.push(`${where}: tagged ${GRAPHMARK_TAG} but has no front matter; a mark exists only when its record is written`)
-      continue
+      return null
     }
     if (record.kg?.id) seen.add(record.kg.id)
 
@@ -335,12 +365,12 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
     for (const [, problem] of forms) errors.push(`${at}: ${problem}`)
     const reasonProblem = bodyReasonProblem(raw)
     if (reasonProblem) errors.push(`${where}: ${reasonProblem}`)
-    if (failures.some((failure) => failure.at !== '/target/revision') || forms.some(([field]) => field !== 'revision')) continue
+    if (failures.some((failure) => failure.at !== '/target/revision') || forms.some(([field]) => field !== 'revision')) return null
 
     const { target } = record
     if (target.owner !== node.repo) {
       errors.push(`${where}: target owner "${target.owner}" is not this repository "${node.repo}"; a mark lives in the repository that owns what it marks`)
-      continue
+      return null
     }
     for (const index of record.kg.relations.belongs_to) {
       if (nodesById.get(index)?.type !== 'index') errors.push(`${where}: belongs_to ${index} is not a marks index (kg type index)`)
@@ -352,7 +382,16 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
     const foreign = [...folders].find(([name, dir]) => name !== node.repo && inside(dir, file) && !inside(dir, folder))
     if (foreign) {
       errors.push(`${at}: lies in repository "${foreign[0]}", not in "${node.repo}"; mark it in the repository that owns it`)
-      continue
+      return null
+    }
+    const fileNode = nodesByFile.get(file)
+    const dependencies = new Map()
+    if (fileNode) dependencies.set(fileNode.id, ['the marked node', fileNode])
+    for (const id of record.kg.relations.evidences) if (nodesById.has(id) && !dependencies.has(id)) dependencies.set(id, ['evidences', nodesById.get(id)])
+    for (const id of record.kg.relations.belongs_to) if (nodesById.has(id)) dependencies.set(id, ['the marks index', nodesById.get(id)])
+    for (const [id, [role, dependency]] of dependencies) {
+      const drift = nodeDrift(dependency)
+      if (drift) errors.push(`${where}: ${role} ${id}: ${drift}; commit it before checking, since the graph is read from the working tree`)
     }
 
     // The edition: target.revision is a full commit id, reachable from HEAD or
@@ -374,19 +413,20 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
     if (failure) {
       if (failure !== 'revision-form') errors.push(`${at}: the marked edition is not verified: ${failure}`)
       for (const hint of repairHints({ root, folder, head, target, resolved, file })) warnings.push(`${at}: repair hint: ${hint}`)
-      continue
+      return null
     }
     const editionBytes = atRev.bytes
     const selected = selectionProblem(target.selector, editionBytes)
     if (selected) {
       errors.push(`${at}: ${selected}`)
-      continue
+      return null
     }
 
     // Currency: what HEAD holds at the same path.
     const atHead = blobAt(root, head.commit, objectPath)
-    const recover = ['git', 'cat-file', 'blob', `${revision.commit}:${objectPath}`]
-    const recoverText = recover.map((arg, index) => (index < 3 ? arg : shellQuote(arg))).join(' ')
+    // Read Git as the check did: replace refs would return other bytes.
+    const recover = ['git', '-C', root, '--no-replace-objects', 'cat-file', 'blob', `${revision.commit}:${objectPath}`]
+    const recoverText = recover.map((arg) => (/^[A-Za-z0-9._-]+$/.test(arg) ? arg : shellQuote(arg))).join(' ')
     let edition
     if (atHead?.bytes && contentDigest(atHead.bytes) === target.contentDigest) edition = 'intact'
     else if (atHead?.bytes) {
@@ -410,7 +450,6 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
     const declared = declaredAudienceAt(root, revision.commit, objectPath, editionBytes)
     if (declared.problem) errors.push(`${at}: at ${short(revision.commit)}, ${declared.problem}; its declared audience cannot be read`)
     else if (declared.audience !== null) materials.push({ id: `${objectPath} (the audience its marked edition declares)`, audience: declared.audience })
-    const fileNode = nodesByFile.get(file)
     if (fileNode) {
       materials.push({ id: fileNode.id, audience: fileNode.audience })
       if (!record.kg.relations.evidences.includes(fileNode.id)) {
@@ -430,7 +469,7 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
       else errors.push(`${where}: evidences ${targetId} is not a node in this graph, so its audience cannot be checked`)
     }
     const markRank = AUDIENCE_READ_RANK[record.kg.audience]
-    for (const material of materials) {
+    for (const material of new Map(materials.map((item) => [item.id, item])).values()) {
       const materialRank = AUDIENCE_READ_RANK[material.audience]
       if (materialRank == null) {
         errors.push(`${where}: ${material.id} has the unknown audience "${material.audience}"; a mark cannot be checked against it`)
@@ -439,7 +478,7 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
       }
     }
 
-    marks.push({
+    return {
       id: record.kg.id,
       path: where,
       markState: record.markState,
@@ -449,7 +488,16 @@ export function checkGraphmarksInGraph(graph, repoRoots, { expect = [] } = {}) {
       objectId: objectPath,
       revision: revision.commit,
       recover,
-    })
+    }
+  }
+
+  for (const node of candidates) {
+    const before = errors.length
+    const entry = inspect(node)
+    if (entry === SKIP) continue
+    const mark = entry ?? { id: node.id, path: `${node.repo}/${node.path}` }
+    // A mark with any error is refused, whatever its bytes are.
+    marks.push(errors.length > before ? { ...mark, edition: 'refused' } : mark)
   }
 
   for (const id of expect) {
@@ -500,7 +548,7 @@ export function checkGraphmarks(project, options = {}) {
   return checkGraphmarksInGraph(graph, repoRoots, options)
 }
 
-const USAGE = 'Usage: atelier graphmark check [--json] [--expect ID]... [--project PATH]\n\nVerify every GraphMark record: that it is committed, the atelier-graphmark@v1 contract, that the target lies in its own repository, that its full commit id holds the marked edition, that the selector names one part of it, and the audience. --expect fails the check when the mark with that kg id is missing; repeat it for several.\nReads committed Git objects and writes nothing.'
+const USAGE = 'Usage: atelier graphmark check [--json] [--expect ID]... [--project PATH] [--repo-path NAME=PATH]...\n\nVerify every GraphMark record: that it is committed, the atelier-graphmark@v1 contract, that the target lies in its own repository, that its full commit id holds the marked edition, that the selector names one part of it, and the audience. --expect fails the check when the mark with that kg id is missing; repeat it for several.\nRefuses unless the files the mark depends on match HEAD. Writes nothing.'
 
 export function runGraphmarkCommand(argv = process.argv.slice(2)) {
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -513,21 +561,27 @@ export function runGraphmarkCommand(argv = process.argv.slice(2)) {
     process.exit(2)
   }
   const rest = argv[0] === sub ? argv.slice(1) : argv
-  const projectArgs = []
+  // --project, --project-config and --repo-path go to the shared resolver.
+  let remaining
+  try {
+    remaining = parseProjectOptions(rest).remaining
+  } catch (error) {
+    console.error(`${error.message}\n\n${USAGE}`)
+    process.exit(2)
+  }
   const expect = []
   let json = false
-  for (let i = 0; i < rest.length; i += 1) {
-    if (rest[i] === '--json') json = true
-    else if (rest[i] === '--project' && i + 1 < rest.length) projectArgs.push(rest[i], rest[(i += 1)])
-    else if (rest[i].startsWith('--project=')) projectArgs.push(rest[i])
-    else if (rest[i] === '--expect' && i + 1 < rest.length && rest[i + 1].trim() && !rest[i + 1].startsWith('--')) expect.push(rest[(i += 1)].trim())
-    else if (rest[i].startsWith('--expect=') && rest[i].slice('--expect='.length).trim()) expect.push(rest[i].slice('--expect='.length).trim())
+  for (let i = 0; i < remaining.length; i += 1) {
+    const arg = remaining[i]
+    if (arg === '--json') json = true
+    else if (arg === '--expect' && i + 1 < remaining.length && remaining[i + 1].trim() && !remaining[i + 1].startsWith('--')) expect.push(remaining[(i += 1)].trim())
+    else if (arg.startsWith('--expect=') && arg.slice('--expect='.length).trim()) expect.push(arg.slice('--expect='.length).trim())
     else {
-      console.error(`unknown option: ${rest[i]}\n\n${USAGE}`)
+      console.error(`unknown option: ${arg}\n\n${USAGE}`)
       process.exit(2)
     }
   }
-  const project = commandProject({ argv: projectArgs, writeLocalState: false })
+  const project = commandProject({ argv: rest, writeLocalState: false })
   const report = checkGraphmarks(project, { expect })
   if (json) {
     console.log(JSON.stringify(report, null, 2))
@@ -535,7 +589,7 @@ export function runGraphmarkCommand(argv = process.argv.slice(2)) {
     for (const warning of report.warnings) console.warn(`warning: ${warning}`)
     for (const error of report.errors) console.error(error)
     const count = (state) => report.marks.filter((mark) => mark.edition === state).length
-    console.log(`graphmark: ${report.marks.length} marks · ${count('intact')} intact · ${count('changed')} changed · ${count('removed')} removed · ${report.errors.length} errors`)
+    console.log(`graphmark: ${report.marks.length} marks · ${count('intact')} intact · ${count('changed')} changed · ${count('removed')} removed · ${count('refused')} refused · ${report.errors.length} errors`)
   }
   if (!report.ok) process.exit(1)
 }

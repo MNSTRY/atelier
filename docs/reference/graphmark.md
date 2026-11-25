@@ -157,13 +157,19 @@ A passing check proves structure, not meaning.
 
 ## The check
 
-`atelier graphmark check [--json] [--expect ID]... [--project PATH]` builds the
+`atelier graphmark check [--json] [--expect ID]... [--project PATH]` (and the
+other [project options](project-options.md)) builds the
 knowledge graph and then, for every Markdown node tagged `graphmark` other
 than a marks index (`kg.type: index`) without a `target`:
 
 - refuses a record that is not committed at `HEAD` (an untracked or only
   staged record included), or whose working-tree copy differs from the
-  committed one; everything after this reads the committed record;
+  committed one; the record's fields are read from the committed copy;
+- refuses a mark when a file behind a node it depends on is untracked,
+  missing or differs from `HEAD`: the marked file's node, every node it
+  `evidences` and every marks index it `belongs_to`, each with its sidecar.
+  The graph is built from the working tree, so this is what keeps graph facts
+  (audiences, identities, the index) the committed ones;
 - refuses a record that does not satisfy `atelier-graphmark@v1` (a record
   tagged `graphmark` that carries a `target` is checked even when typed as an
   index), whose body has no prose saying why, whose `evidences` does not name
@@ -187,8 +193,10 @@ than a marks index (`kg.type: index`) without a `target`:
   outside it, a quote that does not occur or occurs more than once, and a
   `lines` or `text-quote` selector on an edition that is not UTF-8 text;
 - reports a file changed or removed at `HEAD` since marking, with the command
-  that recovers the marked edition (also given as an argument list in
-  `--json`), and warns when a marked quote has left the current file;
+  that recovers the marked edition,
+  `git -C <repository> --no-replace-objects cat-file blob <commit>:<path>`
+  (also given as an argument list in `--json`), and warns when a marked quote
+  has left the current file;
 - refuses a mark whose audience is wider than any of: the audience its marked
   edition declares at the pinned commit (Markdown front matter, where
   undeclared Markdown counts as `private` as the graph treats it, or the
@@ -199,8 +207,13 @@ than a marks index (`kg.type: index`) without a `target`:
   and an `evidences` target that is not a node in the graph are errors, since
   the comparison would otherwise be skipped.
 
-It is offline: it reads committed Git objects (the working tree only to
-compare the record and to give repair hints), runs Git without ambient
+A mark with any error is reported with the state `refused`, in the summary
+and in the `--json` `marks` list, whatever its bytes are.
+
+It is offline: it builds the graph from the working tree, refuses the marks
+whose record or graph dependencies differ from `HEAD`, reads editions and
+declared audiences from committed Git objects, uses the working tree
+otherwise only to give repair hints, runs Git without ambient
 `GIT_*` variables, asks Git not to fetch a partial clone's missing objects
 (`GIT_NO_LAZY_FETCH`, which Git 2.44 and later honor), never follows a
 symbolic link, ignores local replace refs, and writes nothing, local state
@@ -209,7 +222,8 @@ The graph itself already refuses a mark whose relations name nodes that do
 not exist.
 
 Not checked mechanically: that the reason is the marker's, that custody was
-settled before anything was written, placement in the marks folder,
+settled before anything was written, that the boundary check ran on each
+placement, placement in the marks folder,
 `YYYY-MM-DD` naming, and that one object part has one record. Reachability is
 judged from this clone's refs: it does not prove that the intended readers'
 copy of the repository retains the commit. These stay the marker's and
