@@ -198,14 +198,17 @@ None of these supplies a verified fact.
    repositories with no folder in common (two Windows drives or shares) are
    refused. A repository inside another one's folder is read as its own
    repository only, since a checkout of the outer one holds none of its
-   files. Every Git repository that encloses a repository serving a managed
-   folder, part of the project or not, is asked what its `HEAD` holds there:
+   files. Each managed location is first resolved to the folder it is on
+   this host, links included (a location that cannot be resolved is
+   refused). Every Git repository that encloses the repository serving it,
+   part of the project or not, is asked what its `HEAD` holds there:
    anything but nothing, or the submodule that records it (at that place or
    above it), is refused, so a repository at a managed folder can never hide
    what the enclosing commit holds there. Two repositories naming one folder
-   and two declarations that resolve to one folder are refused. The project's own folders (config, workspace, operations) are only
-   names there: nothing is added for them, so none can stand in for a missing
-   committed file or folder. A path that is not valid
+   and two declarations that resolve to one folder, through a link or not,
+   are refused. The project's own folders (config, workspace, operations)
+   are only names there: nothing is added for them, so none can stand in for
+   a missing committed file or folder. A path that is not valid
    UTF-8, a segment Git refuses, the same path twice, and a name this host's
    path rules would not keep as one literal path (on Windows, a `\` inside a
    name) are refused. Names are Git's bytes, a leading U+FEFF included, and
@@ -293,9 +296,10 @@ itself holds for it (the index, and each stage of an unresolved conflict); it
 never opens the working-tree file:
 
 - a pending mark record is refused: one whose index or conflict version is a
-  mark record, and any pending Markdown change (new, edited, deleted or
+  mark record, any pending change to a committed mark record the census
+  leaves out, and any pending Markdown change (new, edited, deleted or
   renamed) in a folder that holds a committed mark record or marks index,
-  which says to commit it to verify;
+  inside the census or outside it, which says to commit it to verify;
 - new Markdown elsewhere in a managed folder (untracked or only staged) is
   reported as a warning, uncommitted and not verified; so is a tracked file
   turned into a mark in its working copy only, through the warning about a
@@ -339,6 +343,24 @@ placement, placement in the marks folder,
 judged from this clone's refs: it does not prove that the intended readers'
 copy of the repository retains the commit. These stay the marker's and
 reviewer's responsibility.
+
+Known limits:
+
+- **The interposition boundary.** While the graph builds, the check replaces
+  the functions on Node's shared `fs` and `fs.promises` objects. A call made
+  through a function reference taken before then (a destructured import, or
+  Node's own module loaders) does not pass through the reader. The graph's
+  reads go through those objects today, and the tests pin that.
+- **Concurrent tampering.** The check is not a defence against someone with
+  write access to the checkout who changes it while the check runs. It reads
+  Git objects and `git status`, but such a person can change the working
+  tree, the index or the refs between those reads. The result describes the
+  repository as Git reported it during the run.
+- **Git's own reads.** The check opens no working-tree file, but `git status`
+  does: Git examines working-tree paths, reads their contents when it must
+  compare them, and runs the clean filters the repository configures. Where
+  each repository is located also comes from the checkout (tracked paths,
+  `--repo-path`, a local overlay, links resolved).
 
 ## Boundaries
 

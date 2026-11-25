@@ -680,6 +680,30 @@ export function projectLayout(base, paths, pathModule = path) {
   }
 }
 
+// The folder `location` is on this host, every link resolved: the real path
+// of its deepest existing folder, with any missing tail kept as written. Null
+// when it cannot be resolved (a link loop, no permission, a file on the way).
+function physicalPath(location) {
+  const missing = []
+  for (let current = path.resolve(location); ; current = path.dirname(current)) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...missing)
+    } catch (error) {
+      if (error?.code !== 'ENOENT' || path.dirname(current) === current) return null
+      missing.unshift(path.basename(current))
+    }
+  }
+}
+
+// `physical` as the declared `location` spells it: the declared path or one
+// of its folders when that resolves to `physical`, or `physical` itself.
+function spelledAs(location, physical) {
+  for (let current = path.resolve(location); ; current = path.dirname(current)) {
+    if (physicalPath(current) === physical) return current
+    if (path.dirname(current) === current) return physical
+  }
+}
+
 // What the committed tree of `outer`, a Git repository enclosing the
 // repository at `inner`, holds where `inner` lies, when that is anything but
 // nothing or the submodule that records `inner` (exactly there, or above it);
@@ -798,11 +822,23 @@ function buildCommitted(request) {
     take(root).prefixes.add(toPosix(path.relative(root, repo.path)))
   }
   if (errors.length) return committed
+  // Each managed location by the folder it is on this host, links resolved,
+  // so a link can neither hide a duplicate nor skip an enclosing repository.
+  // A missing tail (a sparse checkout) is kept as written below the deepest
+  // folder that exists; a location that cannot be resolved is refused.
+  const located = []
+  for (const repo of managed) {
+    const real = physicalPath(repo.path)
+    if (real) located.push({ repo, real })
+    else errors.push(`repository ${repo.name}: ${repo.path} cannot be resolved on this host (a link loop or no permission), so which folder it is cannot be told; the check refuses`)
+  }
+  if (errors.length) return committed
   // One folder is one repository: two declarations that resolve to the same
   // folder would census it twice under two names.
-  for (const [index, one] of managed.entries()) {
-    for (const other of managed.slice(index + 1)) {
-      if (path.relative(path.resolve(one.path), path.resolve(other.path)) === '') errors.push(`repositories ${one.name} and ${other.name}: both resolve to ${path.resolve(one.path)}; one folder is read as one repository only, so the check refuses`)
+  for (const [index, one] of located.entries()) {
+    for (const other of located.slice(index + 1)) {
+      const spelled = one.repo.path === other.repo.path ? one.repo.path : `${one.repo.path} and ${other.repo.path}`
+      if (path.relative(one.real, other.real) === '') errors.push(`repositories ${one.repo.name} and ${other.repo.name}: both resolve to one folder (${spelled}); one folder is read as one repository only, so the check refuses`)
     }
   }
   if (errors.length) return committed
@@ -810,11 +846,17 @@ function buildCommitted(request) {
   // in the project or not, must hold nothing committed where that repository
   // lies: only the submodule that records it there, or nothing at all.
   // Otherwise a checkout of it holds files there that the census never sees.
-  for (const served of new Set(managed.map((repo) => gitRoot(repo.path)))) {
+  // The walk follows the physical folders; messages keep the declared
+  // spelling where one names the same folder.
+  const walked = new Set()
+  for (const { repo, real } of located) {
+    const served = gitRoot(real)
+    if (!served || walked.has(served)) continue
+    walked.add(served)
     for (let outer = path.dirname(served); ; outer = path.dirname(outer)) {
       if (fs.existsSync(path.join(outer, '.git'))) {
         const problem = enclosingProblem(outer, served)
-        if (problem) errors.push(`${served}: is a Git repository where the enclosing repository ${outer} ${problem}; a checkout cannot hold both, so the check refuses`)
+        if (problem) errors.push(`${spelledAs(repo.path, served)}: is a Git repository where the enclosing repository ${spelledAs(repo.path, outer)} ${problem}; a checkout cannot hold both, so the check refuses`)
       }
       if (path.dirname(outer) === outer) break
     }
@@ -1051,7 +1093,7 @@ function repositoryContext(value) {
 // `expect` lists mark ids that must be present. Returns { ok, marks, errors,
 // warnings }; every mark record appears in `marks`, `refused` when it has any
 // error.
-export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}) {
+export function checkGraphmarksInGraph(graph, repositories, { expect = [], marksOutside = [] } = {}) {
   const errors = []
   const warnings = []
   const marks = []
@@ -1083,13 +1125,16 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
   const candidates = graph.nodes.filter((node) => tagged(node) && /\.md$/i.test(node.path ?? ''))
 
   // The folders that hold a committed mark record or marks index, by
-  // repository.
+  // repository, in the census or outside it (`marksOutside`, from the
+  // out-of-census scan, an unclassifiable record included).
   const marksFolders = new Map()
   const holdsMarks = (node) => {
     const folder = path.posix.dirname(node.path)
     if (!marksFolders.has(node.repo)) marksFolders.set(node.repo, new Set())
     marksFolders.get(node.repo).add(folder === '.' ? '' : folder)
   }
+  for (const { repo, rel } of marksOutside) holdsMarks({ repo, path: rel })
+  const counted = new Set(candidates.map((node) => `${node.repo}\0${node.path}`))
   for (const node of candidates) {
     holdsMarks(node)
     for (const index of node.relations?.belongs_to ?? []) {
@@ -1135,7 +1180,13 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
       const headKind = atHead.kind === 'file'
         ? classifyMarkdown({ bytes: atHead.bytes, complete: true })
         : atHead.kind === 'absent' ? 'none' : ['symlink', 'directory', 'gitlink'].includes(atHead.kind) ? 'other' : 'indeterminate'
-      if (headKind === 'mark') continue // a committed record: inspected with the marks
+      // A committed record in the census is inspected with the marks; any
+      // pending change to one the census leaves out is refused here.
+      if (headKind === 'mark' && counted.has(`${name}\0${rel}`)) continue
+      if (headKind === 'mark') {
+        errors.push(`${where}: pending mark: an uncommitted change (${change.kind}) to a committed mark record outside the census; commit it to verify`)
+        continue
+      }
       const versions = []
       if (change.index) versions.push(['index', classifyMarkdown(blobHead(context.root, change.index))])
       for (const stage of change.stages ?? []) versions.push(['index (an unresolved conflict)', classifyMarkdown(blobHead(context.root, stage))])
@@ -1458,10 +1509,12 @@ export function buildCommittedGraph(input) {
 export function checkGraphmarks(input, options = {}) {
   const { graph, committed, errors, warnings } = buildCommittedGraph(input)
   if (!graph) return { ok: false, marks: [], errors, warnings }
-  const report = checkGraphmarksInGraph(graph, committed.repositories, options)
   // A committed mark record the census does not count is never checked: say
-  // so for each, and refuse an empty result that would hide them.
-  const outside = uncountedRecords(graph, committed.repositories)
+  // so for each, and refuse an empty result that would hide them. Its folder,
+  // and a marks index's, still holds marks for what is pending.
+  const uncounted = uncountedRecords(graph, committed.repositories)
+  const report = checkGraphmarksInGraph(graph, committed.repositories, { ...options, marksOutside: uncounted })
+  const outside = uncounted.filter(({ kind }) => kind !== 'index')
   const notes = outside.map(({ where, kind }) => kind === 'mark'
     ? `${where}: a committed mark record outside the knowledge graph's census (the project's setup.include or setup.exclude, or a folder the census skips), so this check did not verify it`
     : `${where}: is outside the knowledge graph's census, and the check cannot tell whether it is a mark record (its committed front matter is unreadable or longer than ${FRONT_MATTER_LIMIT} bytes)`)
@@ -1472,7 +1525,8 @@ export function checkGraphmarks(input, options = {}) {
 
 // Committed Markdown files in a managed repository's folder that the census
 // did not count (out of the project's scope, or in a folder the census skips)
-// and whose committed front matter is a mark record's, or cannot be read.
+// and whose committed front matter is a mark record's or a marks index's, or
+// cannot be read.
 function uncountedRecords(graph, repositories) {
   const counted = new Set(graph.nodes.map((node) => `${node.repo}\0${node.path}`))
   const found = []
@@ -1488,7 +1542,7 @@ function uncountedRecords(graph, repositories) {
     const kinds = classifyBlobs(root, candidates.map(({ oid }) => oid))
     for (const { rel, oid } of candidates) {
       const kind = kinds.get(oid) ?? 'indeterminate'
-      if (kind === 'mark' || kind === 'indeterminate') found.push({ where: `${name}/${rel}`, kind })
+      if (kind === 'mark' || kind === 'index' || kind === 'indeterminate') found.push({ repo: name, rel, where: `${name}/${rel}`, kind })
     }
   }
   return found

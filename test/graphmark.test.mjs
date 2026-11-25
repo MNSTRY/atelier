@@ -1854,7 +1854,7 @@ test('two repository declarations that resolve to one folder are refused', () =>
   const folder = path.join(shelf, 'content')
   const result = buildCommittedGraph({ argv: ['--project', path.join(project, 'atelier.project.json'), '--repo-path', `docs=${folder}`, '--repo-path', `content=${folder}`], cwd: project, env: {} })
   assert.equal(result.graph, null)
-  assert.ok(has(result.errors, `repositories docs and content: both resolve to ${folder}`), result.errors.join('\n'))
+  assert.ok(has(result.errors, `repositories docs and content: both resolve to one folder (${folder})`), result.errors.join('\n'))
   const run = spawnSync(process.execPath, [binary, 'graphmark', 'check', '--project', 'atelier.project.json', '--repo-path', `docs=${folder}`, '--repo-path', `content=${folder}`], { cwd: project, encoding: 'utf8' })
   assert.equal(run.status, 1)
 })
@@ -1896,4 +1896,76 @@ test('the out-of-census scan reads Git in bounded batches and keeps only what ea
   assert.equal(batches.length, 4)
   for (const bytes of batches) assert.ok(bytes <= 256 * 1024 + 128, String(bytes))
   assert.deepEqual(classifyBlobs(repo, Object.values(oids)), kinds)
+})
+
+// Findings from the confirmation review of 52302e1.
+
+test('a nested repository reached through a link is checked against the enclosing HEAD where it really lies', { skip: process.platform === 'win32' && 'symbolic links' }, () => {
+  for (const healthy of [false, true]) {
+    const { dir } = pinnedProject()
+    let real
+    if (healthy) {
+      // Nothing committed where the nested repository lies.
+      real = path.join(dir, 'shelf')
+      fs.writeFileSync(path.join(dir, '.gitignore'), 'shelf/\nlinked\n')
+      commitAll(dir, 'ignore the nested repository and its link')
+      fs.cpSync(path.join(dir, 'content'), path.join(real, 'content'), { recursive: true })
+      git(real, ['init', '-q'])
+      commitAll(real, 'the nested repository')
+      const head = git(real, ['rev-parse', 'HEAD'])
+      for (const name of [WHEEL, DRAWING, PADS]) editMark(real, name, (text) => text.replace(/revision: ".*"/, `revision: "${head}"`))
+      commitAll(real, 'pin the nested marks')
+    } else {
+      // The enclosing HEAD holds the marks where the nested repository lies.
+      real = path.join(dir, 'content')
+      git(dir, ['sparse-checkout', 'set', '--no-cone', '/atelier.project.json', '/repo-access.v1.json'])
+      fs.mkdirSync(real, { recursive: true })
+      git(real, ['init', '-q'])
+      fs.mkdirSync(path.join(real, 'content'))
+      fs.writeFileSync(path.join(real, 'content', 'note.md'), '---\ntitle: "Inner"\n---\n# Inner\n')
+      commitAll(real, 'another repository where the enclosing one commits')
+    }
+    // The managed folder is reached through a link to the nested repository.
+    const linked = path.join(dir, 'linked')
+    fs.symlinkSync(real, linked)
+    const result = checkGraphmarks({ argv: ['--project', path.join(dir, 'atelier.project.json'), '--repo-path', `content=${path.join(linked, 'content')}`], cwd: dir, env: {} })
+    if (healthy) {
+      assert.equal(result.ok, true, result.errors.join('\n'))
+      assert.deepEqual(result.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+    } else {
+      assert.equal(result.ok, false)
+      assert.ok(has(result.errors, `${linked}: is a Git repository where the enclosing repository ${dir} holds committed files at content in its HEAD`), result.errors.join('\n'))
+    }
+  }
+})
+
+test('two repository declarations naming one folder, one through a link, are refused', { skip: process.platform === 'win32' && 'symbolic links' }, () => {
+  const { project, shelf } = twoRootProject('knowledge/shelf', {}, { docs: true })
+  const folder = path.join(shelf, 'content')
+  const alias = path.join(project, 'alias')
+  fs.symlinkSync(folder, alias)
+  const result = buildCommittedGraph({ argv: ['--project', path.join(project, 'atelier.project.json'), '--repo-path', `docs=${alias}`, '--repo-path', `content=${folder}`], cwd: project, env: {} })
+  assert.equal(result.graph, null)
+  assert.ok(has(result.errors, `repositories docs and content: both resolve to one folder (${alias} and ${folder})`), result.errors.join('\n'))
+})
+
+test('a pending change to a mark record the census leaves out is refused, and so is new Markdown beside it', () => {
+  const { dir } = pinnedProject()
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.setup = { exclude: 'content/drafts' } })
+  fs.mkdirSync(path.join(dir, 'content', 'drafts'))
+  const excluded = path.join(dir, 'content', 'drafts', DRAWING)
+  fs.copyFileSync(markPath(dir, DRAWING), excluded)
+  commitAll(dir, 'a mark record the census leaves out')
+  const before = checkProject(dir)
+  assert.equal(before.ok, true, before.errors.join('\n'))
+  assert.ok(has(before.warnings, `content/drafts/${DRAWING}: a committed mark record outside the knowledge graph's census`), before.warnings.join('\n'))
+  // A staged editorial change to it, and an untracked neighbour.
+  fs.writeFileSync(excluded, fs.readFileSync(excluded, 'utf8').replace('# Mark: the spoke tension drawing', '# Mark: the spoke tension drawing, edited'))
+  git(dir, ['add', '--', excluded])
+  fs.writeFileSync(path.join(dir, 'content', 'drafts', 'editorial-notes.md'), '---\ntitle: "Editorial notes"\n---\n# Editorial notes\n')
+  const after = checkProject(dir)
+  assert.equal(after.ok, false)
+  assert.deepEqual(after.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+  assert.ok(has(after.errors, `content/drafts/${DRAWING}: pending mark: an uncommitted change (modified) to a committed mark record outside the census`), after.errors.join('\n'))
+  assert.ok(has(after.errors, 'content/drafts/editorial-notes.md: pending mark: an uncommitted change (untracked) in a folder that holds marks'), after.errors.join('\n'))
 })
