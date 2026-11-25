@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-graphmark.v1.schema.json",
+  "$comment": "contract revision 1.0.0 (MNSTRY GraphMark standard, revision 1)",
+  "title": "atelier-graphmark@v1",
+  "description": "Front matter of one GraphMark record: a Markdown file that points at a specific part of a specific, recoverable edition of something someone singled out as worth keeping, records who made it, who marked it, when and why, and joins it to the knowledge graph as evidence. The target is an evidence-navigation exact source reference (evidenceRef). The kg block is governed by the knowledge graph contract; this contract pins only what makes it a mark. A mark preserves and connects; it never adopts, publishes or releases anything.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "summary",
+    "tags",
+    "markedBy",
+    "markedOn",
+    "madeBy",
+    "target",
+    "markState",
+    "kg"
+  ],
+  "properties": {
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why it was marked, in one or two sentences, and not blank: the reason is the centre of the record. The record body says it in full.",
+      "pattern": "\\S"
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "contains": {
+        "const": "graphmark"
+      }
+    },
+    "markedBy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Who singled the thing out.",
+      "pattern": "\\S"
+    },
+    "markedOn": {
+      "type": "string",
+      "format": "date",
+      "description": "The day it was marked."
+    },
+    "madeBy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Who made the marked thing, and the work it builds on.",
+      "pattern": "\\S"
+    },
+    "target": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/evidenceRef"
+        },
+        {
+          "$ref": "#/$defs/graphmarkTarget"
+        }
+      ],
+      "description": "What was marked, as an exact source reference refined by graphmarkTarget: owner is the Atelier repository name, objectId the one literal path from the Git repository root, revision the full commit id that holds the edition, selector the one marked part, contentDigest the SHA-256 of the whole object at that commit."
+    },
+    "capturedFrom": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "Where captured material came from (a conversation, a call, a file outside any repository) before it was committed as the target."
+    },
+    "markState": {
+      "enum": [
+        "marked",
+        "preserved",
+        "recorded",
+        "graph-checked",
+        "shared",
+        "accepted"
+      ],
+      "description": "The furthest state verified."
+    },
+    "kg": {
+      "type": "object",
+      "description": "Knowledge graph block (atelier-graph@v0.1). Open: other kg keys are governed by the knowledge graph contract.",
+      "required": [
+        "id",
+        "type",
+        "audience",
+        "relations"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "evidence"
+        },
+        "audience": {
+          "enum": [
+            "public",
+            "team",
+            "operator",
+            "staff",
+            "private",
+            "sensitive"
+          ]
+        },
+        "relations": {
+          "type": "object",
+          "required": [
+            "evidences",
+            "belongs_to"
+          ],
+          "properties": {
+            "evidences": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "belongs_to": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "ext": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "value"
+      ]
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "objectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "owner",
+        "objectId",
+        "revision",
+        "selector",
+        "contentDigest"
+      ]
+    },
+    "graphmarkTarget": {
+      "description": "GraphMark's refinement of the shared exact source reference, which stays unchanged: a full commit id, one literal path from the Git repository root, and a selector type, version and value the standard defines. atelier graphmark check verifies the rest: that the commit is reachable and holds those bytes at that path, and that the selector names exactly one part of them.",
+      "type": "object",
+      "properties": {
+        "objectId": {
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.\\.?(?:/|$))(?![.][Gg][Ii][Tt](?:/|$)).+$"
+        },
+        "revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "selector": {
+          "properties": {
+            "type": {
+              "enum": [
+                "whole",
+                "lines",
+                "text-quote"
+              ]
+            },
+            "version": {
+              "const": "1"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "whole"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "const": "*"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "lines"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "pattern": "^[1-9][0-9]*(?:-[1-9][0-9]*)?$"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

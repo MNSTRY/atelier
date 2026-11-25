@@ -14,6 +14,7 @@ export const commandMap = new Map([
   ['export:dry-run', ['src/validate-atelier-export-dry-run.mjs']],
   ['dry-run', ['src/validate-atelier-export-dry-run.mjs']],
   ['graph', ['src/commands/graph.mjs']],
+  ['graphmark', ['src/commands/graphmark.mjs']],
   ['knowledge', ['src/commands/knowledge.mjs']],
   ['enroll', ['src/commands/enroll.mjs']],
   ['project', ['src/commands/project.mjs']],
@@ -120,6 +121,7 @@ Core commands:
   adopt                           Add Atelier to an existing repo/workspace.
   setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
+  graphmark check [--json]        Verify GraphMark records: contract, edition and audience.
   knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
   knowledge dashboard|session     Inspect guided work and retain private drafts.
   knowledge semantic OPERATION    Record a host-run semantic extraction for review.

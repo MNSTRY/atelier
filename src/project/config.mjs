@@ -238,6 +238,14 @@ export function remoteHost(url) {
   return parsed ? parsed[1].toLowerCase() : null
 }
 
+function isDirectoryPath(value) {
+  try {
+    return fs.statSync(value).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 function fallbackRoot(env, fallback) {
   const config = typeof fallback === 'string' ? { value: fallback } : asObject(fallback)
   return firstString(config.value, config.env ? env[config.env] : null)
@@ -252,6 +260,9 @@ export function resolveProjectConfig({
   configEnv = PROJECT_CONFIG_ENV,
   writeLocalState = true,
   defaults = {},
+  // A config document read from elsewhere (a committed blob) for the file at
+  // the selected path, which then need not exist on disk.
+  configDocument = undefined,
 } = {}) {
   const argPath = projectConfigArg(argv, configArgPrefix)
   const envPath = firstString(env[configEnv])
@@ -268,7 +279,12 @@ export function resolveProjectConfig({
 
   if (requestedPath) {
     configPath = resolvePathValue(requestedPath, cwd)
-    if (configPath && fs.existsSync(configPath)) {
+    // A project directory selects the atelier.project.json it holds.
+    if (configPath && isDirectoryPath(configPath)) configPath = path.join(configPath, 'atelier.project.json')
+    if (configPath && configDocument !== undefined) {
+      config = configDocument
+      configDir = path.dirname(configPath)
+    } else if (configPath && fs.existsSync(configPath)) {
       config = readProjectConfig(configPath)
       configDir = path.dirname(configPath)
     } else if (defaultRepoOpsRoot || defaultWorkspaceRoot) {

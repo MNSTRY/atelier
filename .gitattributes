@@ -34,3 +34,6 @@ src/knowledge/context.mjs text eol=lf
 src/graph/graph.mjs text eol=lf
 src/graph/knowledge-graph.mjs text eol=lf
 fixtures/knowledge-health/** text eol=lf
+
+# GraphMark fixtures record the SHA-256 of their exact committed bytes.
+fixtures/graphmark/** text eol=lf

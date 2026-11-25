@@ -1,0 +1,16 @@
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "spoke-tension.html",
+  "title": "Spoke tension drawing",
+  "summary": "A teaching drawing of opposing spokes pulling evenly on a hub.",
+  "tags": ["repair", "wheels", "drawing"],
+  "kg": {
+    "id": "repair-workshop:drawings:spoke-tension",
+    "type": "artifact",
+    "domain": "repair",
+    "lifecycle": "active",
+    "status": "active",
+    "audience": "team",
+    "relations": {}
+  }
+}

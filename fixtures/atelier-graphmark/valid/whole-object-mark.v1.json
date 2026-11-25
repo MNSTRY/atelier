@@ -1,0 +1,39 @@
+{
+  "title": "Mark: the spoke tension drawing",
+  "summary": "Marked because the drawing teaches even spoke tension without words.",
+  "tags": [
+    "graphmark"
+  ],
+  "markedBy": "A volunteer lead (invented)",
+  "markedOn": "2026-01-12",
+  "madeBy": "A volunteer (invented)",
+  "target": {
+    "owner": "content",
+    "objectId": "content/drawings/spoke-tension.html",
+    "revision": "0000000000000000000000000000000000000000",
+    "selector": {
+      "type": "whole",
+      "version": "1",
+      "value": "*"
+    },
+    "contentDigest": "sha256:e77fe4071772c006b87937530767b5e4c7c1ab66c780299a39f77e9c479e168b"
+  },
+  "markState": "recorded",
+  "kg": {
+    "id": "repair-workshop:mark:2026-01-12-spoke-tension-drawing",
+    "type": "evidence",
+    "status": "active",
+    "audience": "team",
+    "relations": {
+      "evidences": [
+        "repair-workshop:drawings:spoke-tension"
+      ],
+      "supports": [
+        "repair-workshop:mark:2026-01-12-order-of-wheel-checks"
+      ],
+      "belongs_to": [
+        "repair-workshop:marks"
+      ]
+    }
+  }
+}
