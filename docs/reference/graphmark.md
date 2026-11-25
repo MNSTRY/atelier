@@ -164,10 +164,14 @@ the tree on any filesystem and writes nothing, so the host's case and
 normalisation rules, links and path grammar cannot change what it reads. From
 the checkout it reads only: `git status`; the start (at most 256 KiB) of each
 Markdown file that status reports as changed, to tell a pending mark record
-(below), opened without following a link and held to the same file before
-and after the read; and the location inputs that tell it where each
-repository is, a machine-local overlay such as `atelier.local.json` included.
-None of these supplies a verified fact.
+(below); and the location inputs that tell it where each repository is, a
+machine-local overlay such as `atelier.local.json` included. None of these
+supplies a verified fact. A changed file is read only when every folder from
+its repository's root down to it is a plain folder (no link), the same folder
+by device and inode before the open and after the read, and the opened file
+(never through a final link) is the same file as its path before and after,
+unchanged in size, modification and change time; anything else makes the
+result indeterminate.
 
 1. **The committed config.** It finds the Git repository that holds the
    project config and reads the config from its `HEAD` blob, so the config
@@ -192,11 +196,18 @@ None of these supplies a verified fact.
 3. **The committed files.** It lists the committed tree under each managed
    repository folder by exact path: its folders, its regular files, its
    symbolic links (listed, never followed) and its submodules (the empty
-   folders a clean checkout holds). Each Git repository has its own root in
-   that listing, named by an opaque number, so two repositories, a nested one
-   included, never share a path whatever the host's drive or share rules. The
-   project's own folders (config, workspace, operations) are only names
-   there: nothing is added for them, so none can stand in for a missing
+   folders a clean checkout holds). The listing keeps every repository at its
+   path from the project config's folder on this host, under one virtual
+   folder (the deepest one holding the config and every repository), so the
+   census scope (`setup.include` and `setup.exclude`, relative to the config
+   folder) selects exactly what it selects in a checkout here; a config and
+   repositories with no folder in common (two Windows drives or shares) are
+   refused. A repository inside another one's folder is read as its own
+   repository only, since a checkout of the outer one holds none of its
+   files; one where the outer repository's committed tree holds files, or
+   anything but a submodule, is refused, as are two repositories naming one
+   folder. The project's own folders (config, workspace, operations) are only
+   names there: nothing is added for them, so none can stand in for a missing
    committed file or folder. A path that is not valid
    UTF-8, a segment Git refuses, the same path twice, and a name this host's
    path rules would not keep as one literal path (on Windows, a `\` inside a
@@ -204,13 +215,21 @@ None of these supplies a verified fact.
    are compared exactly: no case or Unicode folding. A partial clone that
    lacks a file there is refused.
 4. **The committed graph.** It builds the knowledge graph with the graph's
-   own, unchanged code, which reads through an in-memory reader: every
-   filesystem call the graph makes on the committed tree is answered from Git
-   objects by exact path at the moment of the read, a sidecar belongs to its
-   source only when `<source>.kg.json` is committed under exactly that name,
-   and any other kind of filesystem call on the committed tree is refused, so
-   a later change to the graph cannot read past it. Then it checks every mark
-   against that graph.
+   own, unchanged code, which reads through an in-memory reader. While it
+   builds, every filesystem call that names a path (a string, a buffer or a
+   file URL), synchronous or not, is either one the reader implements on a
+   path in a committed tree, answered from Git objects by exact path at the
+   moment of the read, or refused and recorded as an error: a path outside
+   every committed tree (a real file, or a folder the layout made only to
+   hold a repository) and any other kind of call are refused, so a later
+   change to the graph cannot read past it. A sidecar belongs to its source
+   only when `<source>.kg.json` is committed under exactly that name. Then it
+   checks every mark against that graph, and lists each committed mark record
+   in a managed folder that the census does not count (outside the project's
+   census scope, or in a folder the census skips) as a warning, since it is
+   not checked; when the census holds no mark record at all but the
+   committed tree holds such records outside it, the check fails rather than
+   pass with nothing verified.
 
 Then, for every Markdown node tagged `graphmark` other than a marks index
 (`kg.type: index`) without a `target`, it:
@@ -278,11 +297,12 @@ copy:
   sidecar, the files behind its `evidences` nodes and its marks index) or to
   the project config or the effective access file are reported as warnings,
   naming the committed path;
-- a file whose front matter cannot be read (no permission, a failed read) or
-  does not end within 256 KiB, a pending Markdown file whose name is not
-  UTF-8, and a `git status` that fails, make the result indeterminate: an
-  error, never a success. A link or a folder in the working tree is known not
-  to be a mark record. Status output is split and decoded as bytes, so names
+- a file whose front matter cannot be read (no permission, a failed read, a
+  link in a folder on the way, or a change while it is read) or does not end
+  within 256 KiB, a pending Markdown file whose name is not UTF-8, and a
+  `git status` that fails, make the result indeterminate: an error, never a
+  success. A file that is itself a link or a folder in the working tree, or
+  that is gone, is known not to be a mark record. Status output is split and decoded as bytes, so names
   keep their identity.
 
 Every mark record the committed graph holds appears in the summary and in the

@@ -81,7 +81,9 @@ or the installed hook) and commit it: the check verifies the committed tree at
 tracked file turned into a mark) and only warns about uncommitted changes to
 what the mark depends on, so commit those too. A failed `git status` makes the
 result indeterminate. A record in a Git-ignored path is skipped without an
-error. Run `atelier graph`,
+error, and one outside the project's census scope (`setup.include`,
+`setup.exclude`) is named in a warning and not checked; the check fails when
+none is in the census but some lie outside it. Run `atelier graph`,
 `atelier graph --check` and `atelier graphmark check --expect <the mark's id>`,
 then find the mark's id and edges in the built graph. The check refuses a
 record that breaks `atelier-graphmark@v1`, a target outside this repository, a

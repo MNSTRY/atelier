@@ -9,7 +9,7 @@ import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
 import { REPO_ACCESS_SCHEMA, buildKnowledgeGraph } from '../src/graph/knowledge-graph.mjs'
-import { buildCommittedGraph, checkGraphmarks, committedReader, isPromisorRepository, readMarkRecord, validateMarkRecord, virtualRootFor, withCommittedReader } from '../src/graphmark/graphmark.mjs'
+import { buildCommittedGraph, checkGraphmarks, committedReader, isPromisorRepository, projectLayout, readMarkRecord, validateMarkRecord, withCommittedReader } from '../src/graphmark/graphmark.mjs'
 import { buildGraph } from '../src/graph/graph.mjs'
 import { commandProject } from '../src/project/config.mjs'
 
@@ -239,6 +239,30 @@ function commitObjects(dir, entries, message, gitConfig = []) {
   const updated = spawnSync('git', [...gitConfig, 'update-index', '-z', '--add', '--index-info'], { cwd: dir, input: Buffer.concat(lines) })
   assert.equal(updated.status, 0, String(updated.stderr))
   git(dir, [...gitConfig, 'commit', '-qm', message])
+}
+
+// Commit one file at `objectPath` on top of HEAD through Git's tree objects
+// alone (mktree, commit-tree), leaving the index as it was.
+function commitTreeEntry(dir, objectPath, content, message) {
+  const run = (args, input) => {
+    const result = spawnSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', ...args], { cwd: dir, input })
+    assert.equal(result.status, 0, String(result.stderr))
+    return String(result.stdout).trim()
+  }
+  const blob = run(['hash-object', '-w', '--stdin'], content)
+  const segments = objectPath.split('/')
+  const rebuild = (tree, depth) => {
+    const entries = tree ? run(['ls-tree', '-z', tree]).split('\0').filter(Boolean) : []
+    const name = segments[depth]
+    const named = (line) => line.slice(line.indexOf('\t') + 1) === name
+    const existing = entries.find(named)
+    const entry = depth === segments.length - 1
+      ? `100644 blob ${blob}\t${name}`
+      : `040000 tree ${rebuild(existing ? existing.split('\t')[0].split(' ')[2] : null, depth + 1)}\t${name}`
+    return run(['mktree', '-z'], `${[...entries.filter((line) => !named(line)), entry].join('\0')}\0`)
+  }
+  const commit = run(['commit-tree', rebuild('HEAD^{tree}', 0), '-p', 'HEAD', '-m', message])
+  run(['update-ref', 'HEAD', commit])
 }
 
 const markOf = (report, suffix) => report.marks.find((mark) => mark.id.endsWith(suffix))
@@ -1461,17 +1485,12 @@ test('nothing the check does can enter the graph: a sidecar whose source is a co
   assert.ok(has(report.errors, 'content/drawings/ghost.svg.kg.json'), report.errors.join('\n'))
 })
 
-test('a committed name this host would not keep as one literal path is refused', (t) => {
+test('a committed name this host would not keep as one literal path is refused', () => {
   const { dir } = pinnedProject()
-  // Git on Windows refuses such a name in its own index unless told not to;
-  // a tree made elsewhere can still hold one.
-  try {
-    commitObjects(dir, [{ path: 'content/notes/a\\b.txt', content: 'a backslash in one name\n' }], 'a backslash in a name', ['-c', 'core.protectNTFS=false'])
-  } catch (error) {
-    if (process.platform !== 'win32') throw error
-    t.skip('Git on this host refuses to index the name at all')
-    return
-  }
+  // Made with Git's tree objects, not its index, so every host can hold the
+  // commit: Git on Windows may refuse the name in an index.
+  commitTreeEntry(dir, 'content/notes/a\\b.txt', 'a backslash in one name\n', 'a backslash in a name')
+  assert.ok(git(dir, ['ls-tree', '-r', '-z', '--name-only', 'HEAD']).split('\0').includes('content/notes/a\\b.txt'))
   const report = checkProject(dir)
   if (process.platform === 'win32') {
     assert.equal(report.ok, false)
@@ -1545,17 +1564,27 @@ test('a configured folder never stands in for a committed one: an orphan sidecar
   assert.deepEqual(missing.committed.errors, missing.real.errors)
 })
 
-test('every repository has its own virtual root, whatever the host spells its path', () => {
+test('the virtual layout keeps every repository at its host path from the config folder, or refuses', () => {
   const win = path.win32
-  const roots = ['C:\\work\\repo', '\\\\C\\work\\repo', 'C:\\work\\repo\\inner', '\\\\server\\share\\repo', 'D:\\work\\repo']
-  const virtual = roots.map((root, index) => virtualRootFor('C:\\tmp\\.atelier-graphmark-committed', index, root, win))
-  assert.equal(new Set(virtual).size, roots.length, virtual.join('\n'))
-  for (const [index, one] of virtual.entries()) {
-    for (const other of virtual.slice(index + 1)) {
-      assert.equal(one.startsWith(other + win.sep) || other.startsWith(one + win.sep), false, `${one} and ${other} nest`)
-    }
+  const base = 'X:\\tmp\\.atelier-graphmark-committed'
+  const config = 'C:\\work\\project'
+  const roots = ['C:\\work\\project', 'C:\\work\\knowledge', 'c:\\WORK\\knowledge\\inner', 'C:\\work\\drafts\\shelf']
+  const layout = projectLayout(base, [config, ...roots], win)
+  assert.ok(layout)
+  assert.equal(layout.anchor, 'C:\\work')
+  for (const root of roots) {
+    assert.equal(win.relative(layout.at(config), layout.at(root)), win.relative(config, root), root)
+    assert.ok(layout.at(root).startsWith(win.join(base, 'project', 'work')), layout.at(root))
+    assert.equal(win.basename(layout.at(root)), win.basename(root))
   }
-  assert.deepEqual(virtual.map((one) => win.basename(one)), roots.map((root) => win.basename(root)))
+  const virtual = roots.map((root) => layout.at(root))
+  assert.equal(new Set(virtual.map((one) => one.toLowerCase())).size, roots.length, virtual.join('\n'))
+  // Two drives, or a drive and a share, have no folder in common.
+  assert.equal(projectLayout(base, [config, 'D:\\work\\knowledge'], win), null)
+  assert.equal(projectLayout(base, [config, '\\\\server\\share\\knowledge'], win), null)
+  const posix = projectLayout('/tmp/.atelier-graphmark-committed', ['/srv/a/project', '/home/b/knowledge'], path.posix)
+  assert.equal(posix.anchor, '/')
+  assert.equal(path.posix.relative(posix.at('/srv/a/project'), posix.at('/home/b/knowledge')), '../../../home/b/knowledge')
 })
 
 test('a repository nested in another is read from its own HEAD only', () => {
@@ -1613,4 +1642,226 @@ test('the committed reader serves file URLs and refuses paths in no committed tr
     assert.throws(() => fs.existsSync(path.join(base, 'elsewhere', 'note.md')), { code: 'EPERM' })
   })
   assert.equal(reader.violations.length, 1, reader.violations.join('\n'))
+})
+
+// Findings from the confirmation review of 0d12e9d.
+
+// A project whose config repository holds no content, with the workshop in a
+// Git repository of its own at `shelfAt` (a path from the config folder), and
+// optionally a docs folder in the config repository that links across to it.
+// The workshop's repository keeps its name, content, which its marks name.
+function twoRootProject(shelfAt, setup, { docs = false } = {}) {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-roots-'))
+  const { dir: shelf } = pinnedProject()
+  const place = path.join(project, ...shelfAt.split('/'))
+  fs.mkdirSync(path.dirname(place), { recursive: true })
+  fs.renameSync(shelf, place)
+  const repos = [{ name: 'content', path: `${shelfAt}/content`, readBoundary: 'team' }]
+  if (docs) {
+    fs.mkdirSync(path.join(project, 'docs'))
+    fs.writeFileSync(path.join(project, 'docs', 'guide.md'), `---\ntitle: "Guide"\nkg:\n  id: "repair-workshop:docs:guide"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n# Guide\n\nSee [the wheel checks](../${shelfAt}/content/notes/wheel-checks.md).\n`)
+    repos.unshift({ name: 'docs', path: 'docs', readBoundary: 'team' })
+  }
+  fs.writeFileSync(path.join(project, 'atelier.project.json'), `${JSON.stringify({ schema: 'mnstry.atelier-project-config@v1', name: 'two-roots', roots: { workspace: '.', repoOps: '.' }, graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' }, setup, repos }, null, 2)}\n`)
+  fs.writeFileSync(path.join(project, 'repo-access.v1.json'), `${JSON.stringify({ schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'team', repos: Object.fromEntries(repos.map((repo) => [repo.name, { readBoundary: 'team' }])) }, null, 2)}\n`)
+  fs.writeFileSync(path.join(project, '.gitignore'), `${shelfAt.split('/')[0]}/\n`)
+  git(project, ['init', '-q'])
+  commitAll(project, 'the project')
+  return { project, shelf: place }
+}
+
+const sameGraph = (committed, real) => {
+  assert.ok(committed)
+  for (const key of new Set([...Object.keys(real), ...Object.keys(committed)])) assert.deepEqual(committed[key], real[key], key)
+}
+
+test('the census scope is read from the config folder across Git roots: an include keeps the separate repository', () => {
+  const { project, shelf } = twoRootProject('knowledge/shelf', { include: 'knowledge', exclude: 'knowledge/shelf/content/drafts' })
+  // A mark record the scope leaves out is reported, not silently dropped.
+  fs.mkdirSync(path.join(shelf, 'content', 'drafts'))
+  fs.copyFileSync(markPath(shelf, DRAWING), path.join(shelf, 'content', 'drafts', DRAWING))
+  commitAll(shelf, 'a draft mark the census leaves out')
+  const { real, committed, errors } = graphFacts(project)
+  assert.ok(committed, errors.join('\n'))
+  assert.equal(real.nodes.filter((node) => node.repo === 'content').length, 7)
+  sameGraph(committed, real)
+  const report = checkProject(project, { expect: ['repair-workshop:mark:2026-01-12-order-of-wheel-checks'] })
+  assert.equal(report.ok, true, report.errors.join('\n'))
+  assert.deepEqual(report.marks.map((mark) => mark.edition), ['intact', 'intact', 'intact'])
+  assert.ok(has(report.warnings, `content/drafts/${DRAWING}: a committed mark record outside the knowledge graph's census`), report.warnings.join('\n'))
+})
+
+test('the census scope is read from the config folder across Git roots: an exclude leaves the separate repository out, and nothing passes empty', () => {
+  const { project } = twoRootProject('content/drafts/shelf', { exclude: 'content/drafts' })
+  const { real, committed, errors } = graphFacts(project)
+  assert.ok(committed, errors.join('\n'))
+  assert.equal(real.nodes.length, 0)
+  sameGraph(committed, real)
+  const report = checkProject(project)
+  assert.equal(report.ok, false)
+  assert.deepEqual(report.marks, [])
+  assert.ok(has(report.errors, 'no mark record is in the knowledge graph\'s census, but the committed tree holds 3 outside it'), report.errors.join('\n'))
+  for (const name of [WHEEL, DRAWING, PADS]) assert.ok(has(report.warnings, `content/marks/${name}: a committed mark record outside`), report.warnings.join('\n'))
+})
+
+test('the committed graph of a project across Git roots equals a clean checkout, in any order', () => {
+  const { project, shelf } = twoRootProject('knowledge/shelf', { exclude: 'knowledge/shelf/content/drafts' }, { docs: true })
+  fs.mkdirSync(path.join(shelf, 'content', 'drafts'))
+  fs.writeFileSync(path.join(shelf, 'content', 'drafts', 'unfinished.md'), '---\ntitle: "Unfinished"\n---\n# Unfinished\n')
+  commitAll(shelf, 'a draft the census leaves out')
+  const first = graphFacts(project)
+  assert.ok(first.committed, first.errors.join('\n'))
+  assert.ok(first.real.nodes.some((node) => node.id === 'repair-workshop:docs:guide'))
+  assert.equal(first.real.nodes.some((node) => node.path === 'drafts/unfinished.md'), false)
+  sameGraph(first.committed, first.real)
+  // The order the repositories are declared in does not move them.
+  editJson(path.join(project, 'atelier.project.json'), (doc) => { doc.repos.reverse() })
+  commitAll(project, 'the repositories in the other order')
+  const second = graphFacts(project)
+  sameGraph(second.committed, second.real)
+  assert.deepEqual(second.committed.nodes, first.committed.nodes)
+})
+
+test('a repository where another repository commits files is refused', () => {
+  const { dir } = pinnedProject()
+  const inner = path.join(dir, 'content', 'inner')
+  fs.mkdirSync(inner)
+  fs.writeFileSync(path.join(inner, 'outer.md'), '---\ntitle: "Outer"\n---\n# Outer\n')
+  commitAll(dir, 'the outer repository commits a file there')
+  git(inner, ['init', '-q'])
+  fs.writeFileSync(path.join(inner, 'note.md'), '---\ntitle: "Inner"\n---\n# Inner\n')
+  git(inner, ['add', 'note.md'])
+  git(inner, ['commit', '-qm', 'the inner repository'])
+  editJson(path.join(dir, 'atelier.project.json'), (doc) => { doc.repos.push({ name: 'inner', path: 'content/inner', readBoundary: 'team' }) })
+  editJson(path.join(dir, 'repo-access.v1.json'), (doc) => { doc.repos.inner = { readBoundary: 'team' } })
+  commitAll(dir, 'enrol the inner repository')
+  const result = buildCommittedGraph({ argv: ['--project', path.join(dir, 'atelier.project.json')], cwd: dir, env: {} })
+  assert.equal(result.graph, null)
+  assert.ok(has(result.errors, `${inner}: is a repository where the committed tree of ${dir} holds content/inner`), result.errors.join('\n'))
+})
+
+// Run the check with one `fs` function hooked: the first time it is called
+// on `target`, `onCall(call)` runs in its place (`call` makes the real call).
+function checkWithHook(dir, name, target, onCall) {
+  const original = fs[name]
+  let hooked = false
+  fs[name] = function (one, ...rest) {
+    if (!hooked && String(one) === target) {
+      hooked = true
+      return onCall(() => original.call(this, one, ...rest))
+    }
+    return original.call(this, one, ...rest)
+  }
+  try {
+    return { report: checkProject(dir), hooked }
+  } finally {
+    fs[name] = original
+  }
+}
+
+test('a folder above a pending Markdown file replaced by a link while it is read makes the result indeterminate', { skip: process.platform === 'win32' && 'symbolic links' }, () => {
+  // Replaced before the file is examined and left, or replaced for the open
+  // and put back.
+  for (const [name, restore] of [['lstatSync', false], ['openSync', true]]) {
+    const { dir } = pinnedProject()
+    const folder = path.join(dir, 'content', 'pending')
+    fs.mkdirSync(folder)
+    const pending = path.join(folder, '2026-01-19-pending.md')
+    fs.copyFileSync(markPath(dir, DRAWING), pending)
+    // Elsewhere, a file of the same name that is no mark record.
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-elsewhere-'))
+    fs.writeFileSync(path.join(elsewhere, '2026-01-19-pending.md'), '---\ntitle: "A plain note"\n---\n# A plain note\n')
+    const { report, hooked } = checkWithHook(dir, name, pending, (call) => {
+      fs.renameSync(folder, `${folder}-moved`)
+      fs.symlinkSync(elsewhere, folder)
+      try {
+        return call()
+      } finally {
+        if (restore) {
+          fs.unlinkSync(folder)
+          fs.renameSync(`${folder}-moved`, folder)
+        }
+      }
+    })
+    assert.equal(hooked, true, `the check reached the pending file through fs.${name}`)
+    assert.equal(report.ok, false, name)
+    assert.ok(has(report.errors, 'pending/2026-01-19-pending.md: cannot tell whether the version in the working tree is a mark record'), `${name}: ${report.errors.join('\n')}`)
+  }
+})
+
+test('a pending Markdown file edited in place while it is read makes the result indeterminate', () => {
+  for (const sameSize of [false, true]) {
+    const { dir } = pinnedProject()
+    const pending = markPath(dir, '2026-01-20-edited.md')
+    const plain = '---\ntitle: "A plain note that is long enough"\n---\n# A plain note\n'
+    fs.writeFileSync(pending, plain)
+    const old = new Date(Date.now() - 3600 * 1000)
+    fs.utimesSync(pending, old, old)
+    const record = fs.readFileSync(markPath(dir, DRAWING), 'utf8')
+    const readSync = fs.readSync
+    let edited = false
+    fs.readSync = function (fd, ...rest) {
+      if (!edited) {
+        edited = true
+        // The same file, its bytes changed: the same length, or not.
+        fs.writeFileSync(pending, sameSize ? plain.replace('A plain note that is long enough', 'A plain note that is long ENOUGH') : record)
+      }
+      return readSync.call(this, fd, ...rest)
+    }
+    let report
+    try {
+      report = checkProject(dir)
+    } finally {
+      fs.readSync = readSync
+    }
+    assert.equal(edited, true)
+    assert.equal(report.ok, false, `same size ${sameSize}`)
+    assert.ok(has(report.errors, 'marks/2026-01-20-edited.md: cannot tell whether the version in the working tree is a mark record'), report.errors.join('\n'))
+  }
+})
+
+test('the committed reader keeps no blob larger than its budget, and still serves it', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-graphmark-cache-'))
+  git(repo, ['init', '-q'])
+  const hash = (content) => String(spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo, input: content }).stdout).trim()
+  const large = 'x'.repeat(64)
+  const small = 'small\n'
+  const base = path.join(os.tmpdir(), `.atelier-graphmark-reader-cache-${process.pid}`)
+  const reader = committedReader(base, { cacheBytes: 32 })
+  const tree = path.join(base, 'project')
+  reader.addRoot(tree)
+  reader.add(path.join(tree, 'large.md'), 'file', { root: repo, oid: hash(large) })
+  reader.add(path.join(tree, 'small.md'), 'file', { root: repo, oid: hash(small) })
+  withCommittedReader(reader, () => {
+    assert.equal(fs.readFileSync(path.join(tree, 'large.md'), 'utf8'), large)
+    assert.equal(reader.cachedBytes(), 0)
+    assert.equal(fs.readFileSync(path.join(tree, 'small.md'), 'utf8'), small)
+    assert.equal(reader.cachedBytes(), small.length)
+    assert.equal(fs.readFileSync(path.join(tree, 'large.md'), 'utf8'), large)
+    assert.equal(reader.cachedBytes(), small.length)
+  })
+  assert.deepEqual(reader.violations, [])
+})
+
+test('while the graph builds, every path it names is served from Git objects or refused', () => {
+  const base = path.join(os.tmpdir(), `.atelier-graphmark-reader-boundary-${process.pid}`)
+  const reader = committedReader(base)
+  const tree = path.join(base, 'project', 'repo')
+  reader.addRoot(tree)
+  reader.add(path.join(tree, 'note.md'), 'file', { bytes: Buffer.from('# Note\n') })
+  const real = fileURLToPath(import.meta.url)
+  withCommittedReader(reader, () => {
+    assert.equal(fs.readFileSync(path.join(tree, 'note.md'), 'utf8'), '# Note\n')
+    // A real file outside the committed tree, by path, URL or Buffer.
+    assert.throws(() => fs.readFileSync(real), { code: 'EPERM' })
+    assert.throws(() => fs.existsSync(pathToFileURL(real)), { code: 'EPERM' })
+    assert.throws(() => fs.statSync(Buffer.from(real)), { code: 'EPERM' })
+    assert.throws(() => fs.promises.readFile(real), { code: 'EPERM' })
+    // A folder the layout made to hold a repository is in no committed tree.
+    assert.throws(() => fs.readdirSync(path.join(base, 'project')), { code: 'EPERM' })
+    assert.throws(() => fs.existsSync(base), { code: 'EPERM' })
+  })
+  assert.equal(reader.violations.length, 6, reader.violations.join('\n'))
+  // Restored afterwards.
+  assert.equal(fs.existsSync(real), true)
 })

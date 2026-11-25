@@ -339,29 +339,47 @@ function workingStatus(root) {
   return { available: true, changes, undecodable }
 }
 
-// The start of a regular working-tree file inside `base`: { bytes, complete };
-// { nonregular } for a link, a folder or anything else known not to be a
-// regular file; null when it cannot be read or held still (no permission, a
-// failed read, or the path changed while it was read), which is never a
-// known answer. The file is examined with lstat, opened without following a
-// final link, and the opened descriptor must be the same regular file, by
-// device and inode, before and after the read, and still inside `base`.
+// The start of the regular working-tree file at `objectPath` (a path from the
+// Git root `root`): { bytes, complete }; { nonregular } when it is absent, or
+// is a link, a folder or anything else known not to be a regular file; null
+// when it cannot be read or held still, which is never a known answer. Every
+// folder from the root down is examined with lstat before the open and again
+// after the read, and must be the same folder (device and inode) each time,
+// never a link; the file is opened without following a final link, and the
+// descriptor must be the same regular file as the path before and after the
+// read, unchanged in size, modification and change time. Any difference, or
+// a link on the way, makes the answer null.
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino
-function workingHead(base, file) {
+const sameVersion = (a, b) => sameFile(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
+const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+function workingHead(root, objectPath) {
+  const segments = objectPath.split('/')
+  const folders = segments.slice(0, -1).reduce((chain, segment) => [...chain, path.join(chain.at(-1), segment)], [root])
+  const file = path.join(root, ...segments)
+  const examine = () => {
+    const seen = []
+    for (const [index, folder] of folders.entries()) {
+      const stat = index === 0 ? fs.statSync(folder, { bigint: true }) : fs.lstatSync(folder, { bigint: true })
+      if (!stat.isDirectory()) return null
+      seen.push(stat)
+    }
+    return seen
+  }
   let before
+  let fileBefore
   try {
-    before = fs.lstatSync(file, { bigint: true })
+    before = examine()
+    if (!before) return null
+    fileBefore = fs.lstatSync(file, { bigint: true })
   } catch (error) {
     return error?.code === 'ENOENT' ? { nonregular: true } : null
   }
-  if (!before.isFile()) return { nonregular: true }
+  if (!fileBefore.isFile()) return { nonregular: true }
   let fd = null
   try {
-    const realBase = fs.realpathSync(base)
-    if (!inside(realBase, fs.realpathSync(file))) return { nonregular: true }
-    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    fd = fs.openSync(file, OPEN_FLAGS)
     const opened = fs.fstatSync(fd, { bigint: true })
-    if (!opened.isFile() || !sameFile(opened, before)) return null
+    if (!opened.isFile() || !sameFile(opened, fileBefore)) return null
     const size = Number(opened.size)
     const buffer = Buffer.alloc(Math.min(size, FRONT_MATTER_LIMIT))
     let read = 0
@@ -370,9 +388,11 @@ function workingHead(base, file) {
       if (got <= 0) break
       read += got
     }
-    const after = fs.lstatSync(file, { bigint: true })
-    if (!after.isFile() || !sameFile(after, opened) || !inside(realBase, fs.realpathSync(file))) return null
-    if (read < buffer.length) return null
+    if (read < buffer.length || !sameVersion(fs.fstatSync(fd, { bigint: true }), opened)) return null
+    const after = examine()
+    if (!after || after.some((stat, index) => !sameFile(stat, before[index]))) return null
+    const fileAfter = fs.lstatSync(file, { bigint: true })
+    if (!fileAfter.isFile() || !sameFile(fileAfter, opened)) return null
     return { bytes: buffer.subarray(0, read), complete: size <= FRONT_MATTER_LIMIT }
   } catch {
     return null
@@ -483,18 +503,23 @@ const kindTest = (kind) => ({
 // followed). Submodules are not part of it.
 const READER_CACHE_BYTES = 64 * 1024 * 1024
 
-export function committedReader(base) {
+export function committedReader(base, { cacheBytes = READER_CACHE_BYTES } = {}) {
   const entries = new Map([[base, { kind: 'dir', children: new Map() }]])
   const cache = new Map()
   let cached = 0
   const sizes = new Map()
   const violations = []
-  // Each repository has its own virtual root; a path in no root (and not the
-  // policy file) belongs to no committed tree, and is refused.
+  // Each repository has its virtual root (and the policy file its own); a
+  // path in no root belongs to no committed tree and is refused, even a
+  // folder the layout made to hold a root.
   const roots = new Set()
   const owned = (name) => [...roots].some((root) => inside(root, name))
   const addDir = (dir) => {
-    if (entries.has(dir)) return
+    const existing = entries.get(dir)
+    if (existing) {
+      if (existing.kind !== 'dir') throw new Error(`${dir} is both a folder and a ${existing.kind}`)
+      return
+    }
     const parent = path.dirname(dir)
     if (!inside(base, parent)) throw new Error(`committed path outside the reader: ${dir}`)
     addDir(parent)
@@ -502,6 +527,7 @@ export function committedReader(base) {
     entries.get(parent).children.set(path.basename(dir), 'dir')
   }
   const add = (name, kind, source) => {
+    if (entries.has(name)) throw new Error(`${name} is held twice`)
     const parent = path.dirname(name)
     addDir(parent)
     entries.set(name, { kind, ...source })
@@ -509,13 +535,11 @@ export function committedReader(base) {
   }
   const at = (target) => {
     const name = path.resolve(pathArgument(target) ?? String(target))
-    const entry = entries.get(name)
-    if (entry) return entry
     if (!owned(name)) {
       violations.push(`the knowledge graph reached ${name}, which is in no committed tree`)
       throw fsError('EPERM', 'resolve', name)
     }
-    return null
+    return entries.get(name) ?? null
   }
   const bytesOf = (entry, target) => {
     if (entry.bytes) return entry.bytes
@@ -525,11 +549,13 @@ export function committedReader(base) {
         violations.push(`${target} could not be read from Git`)
         throw fsError('EIO', 'read', target)
       }
-      // Bounded: the oldest blobs are dropped, and read again if needed.
+      // Bounded: a blob larger than the budget is served without being kept,
+      // and the oldest blobs are dropped, and read again if needed.
+      if (read.stdout.length > cacheBytes) return read.stdout
       cache.set(entry.oid, read.stdout)
       cached += read.stdout.length
       for (const [oid, bytes] of cache) {
-        if (cached <= READER_CACHE_BYTES || oid === entry.oid) break
+        if (cached <= cacheBytes) break
         cache.delete(oid)
         cached -= bytes.length
       }
@@ -575,9 +601,11 @@ export function committedReader(base) {
       const entry = at(target)
       if (!entry || entry.kind === 'link') throw fsError('ENOENT', 'scandir', target)
       if (entry.kind !== 'dir') throw fsError('ENOTDIR', 'scandir', target)
-      const names = [...entry.children.keys()].sort()
-      if (!options?.withFileTypes) return names
+      // A repository nested in this folder is read as its own repository
+      // only: a checkout of this one holds none of its files.
       const parent = path.resolve(pathArgument(target) ?? String(target))
+      const names = [...entry.children.keys()].filter((name) => !roots.has(path.join(parent, name))).sort()
+      if (!options?.withFileTypes) return names
       return names.map((name) => ({ name, parentPath: parent, path: parent, ...kindTest(entry.children.get(name)) }))
     },
     realpathSync: (target) => {
@@ -595,7 +623,7 @@ export function committedReader(base) {
     roots.add(root)
     addDir(root)
   }
-  return { base, add, addDir, addRoot, implementation, violations }
+  return { base, add, addDir, addRoot, implementation, violations, cachedBytes: () => cached }
 }
 
 const pathArgument = (target) => {
@@ -611,10 +639,13 @@ const pathArgument = (target) => {
   return null
 }
 
-// Run `build` with `fs` answering for the reader's virtual root from Git
-// objects. A path elsewhere goes to the real `fs`, untouched. Any `fs` call on
-// a virtual path that the reader does not implement, synchronous or not, is
-// refused and recorded, so a future read the graph adds cannot go unchecked.
+// Run `build` with `fs` answering from Git objects. While it runs, every `fs`
+// call that names a path (a string, a Buffer or a file URL), synchronous or
+// not, is served by the reader when the path is in a committed tree and the
+// reader implements the call; any other such call, on any path, is refused
+// and recorded, so the build can read nothing else and a future read the
+// graph adds cannot go unchecked. Calls on an open descriptor pass through:
+// no descriptor for a path can be opened while the build runs.
 export function withCommittedReader(reader, build) {
   const prefix = reader.base + path.sep
   const virtual = (target) => {
@@ -625,19 +656,25 @@ export function withCommittedReader(reader, build) {
     reader.violations.push(`the knowledge graph used fs.${name} on the committed tree, which only Git-object reads may serve`)
     throw fsError('EPERM', name, reader.base)
   }
+  const refuseOutside = (name, target) => {
+    reader.violations.push(`the knowledge graph used fs.${name} on ${target}, which is outside the committed tree`)
+    throw fsError('EPERM', name, target)
+  }
   const restore = []
   const wrap = (owner, name) => {
     const original = owner[name]
     if (typeof original !== 'function' || /^[A-Z]/.test(name)) return
     const own = owner === fs ? reader.implementation[name] : undefined
     const wrapped = function (target, ...rest) {
-      if (!virtual(target)) return original.call(this, target, ...rest)
-      return own ? own(target, ...rest) : refuse(name)
+      if (virtual(target)) return own ? own(target, ...rest) : refuse(name)
+      if (pathArgument(target) !== null) return refuseOutside(name, pathArgument(target))
+      return original.call(this, target, ...rest)
     }
     if (typeof original.native === 'function') {
       wrapped.native = function (target, ...rest) {
-        if (!virtual(target)) return original.native.call(this, target, ...rest)
-        return own ? own(target, ...rest) : refuse(`${name}.native`)
+        if (virtual(target)) return own ? own(target, ...rest) : refuse(`${name}.native`)
+        if (pathArgument(target) !== null) return refuseOutside(`${name}.native`, pathArgument(target))
+        return original.native.call(this, target, ...rest)
       }
     }
     owner[name] = wrapped
@@ -671,12 +708,36 @@ function accessPolicyProblems(bytes, managedNames, externalNames, label) {
   return problems.map((problem) => `${problem} (in the committed repository access file); the check does not fill in defaults`)
 }
 
-// The virtual root for the n-th Git root: an opaque `repo-<n>` folder (with
-// the repository's basename, so the graph keeps its names), never derived
-// from the rest of the host path, so no two repositories can share one or
-// nest inside each other, whatever the host's drive, share or case rules.
-export function virtualRootFor(base, index, root, pathModule = path) {
-  return pathModule.join(base, `repo-${index}`, pathModule.basename(root) || 'root')
+// The project's virtual layout. `anchor` is the deepest host folder holding
+// every path given (the config folder and each repository); a path below it
+// keeps its path from there under `<base>/project/<the anchor's name>`. So
+// every folder keeps its name, and the path from the config folder to each
+// repository, which the census scope (setup.include and setup.exclude) and
+// relative links are read against, is exactly the one on this host, by this
+// host's path rules. Null when no folder holds them all (two Windows drives
+// or shares): the layout cannot be kept.
+export function projectLayout(base, paths, pathModule = path) {
+  const below = (folder, one) => {
+    const rel = pathModule.relative(folder, one)
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${pathModule.sep}`) && !pathModule.isAbsolute(rel))
+  }
+  if (!paths.length) return null
+  let anchor = paths[0]
+  while (!paths.every((one) => below(anchor, one))) {
+    const up = pathModule.dirname(anchor)
+    if (up === anchor) return null
+    anchor = up
+  }
+  // The anchor keeps its own name, so every folder at or below it does.
+  const project = pathModule.join(base, 'project', pathModule.basename(anchor) || 'root')
+  return {
+    anchor,
+    holds: (one) => below(anchor, one),
+    at: (one) => {
+      const rel = pathModule.relative(anchor, one)
+      return rel ? pathModule.join(project, rel) : project
+    },
+  }
 }
 
 // The committed project, verified from Git:
@@ -688,16 +749,16 @@ export function virtualRootFor(base, index, root, pathModule = path) {
 // 4. read the effective repository access file from the committed tree of the
 //    project repository that holds it, by exact path; only true absence under
 //    plain folders means defaults;
-// 5. map the project onto the reader's virtual root, with no further
-//    resolution, so the graph reads exactly those objects.
+// 5. map the project onto the reader's virtual layout, which keeps every
+//    repository at its host path from the config folder, with no further
+//    resolution, so the graph reads exactly those objects and scopes its
+//    census exactly as a checkout here would.
 function buildCommitted(request) {
   const base = path.join(os.tmpdir(), `.atelier-graphmark-committed-${process.pid}-${crypto.randomBytes(12).toString('hex')}`)
   const errors = []
   const warnings = []
   const reader = committedReader(base)
   const committed = { errors, warnings, repositories: new Map(), project: null, reader }
-  // Each Git root gets its own virtual root, named by its order, never by any
-  // transformation of the host path: two repositories can never share one.
   const roots = new Map()
   const take = (root) => {
     if (!roots.has(root)) {
@@ -705,20 +766,18 @@ function buildCommitted(request) {
       const status = workingStatus(root)
       if (!head) errors.push(`${root}: has no commit at HEAD, so nothing committed can be verified`)
       if (!status.available) errors.push(`${root}: git status failed, so uncommitted mark records cannot be ruled out; the result is indeterminate`)
-      roots.set(root, { root, head, status, mirror: virtualRootFor(base, roots.size, root), prefixes: new Set() })
+      roots.set(root, { root, head, status, mirror: null, prefixes: new Set() })
     }
     return roots.get(root)
   }
-  // A host path inside a known repository maps into that repository's root;
-  // any other path maps to a name that is in no committed tree.
+  // A host path the layout holds keeps its place in it; any other path (a
+  // workspace or operations folder elsewhere) maps to a name that is in no
+  // committed tree.
+  let layout = null
   let outside = 0
   const mirror = (abs) => {
     const resolvedPath = path.resolve(abs)
-    const owner = [...roots.values()].filter((entry) => inside(entry.root, resolvedPath)).sort((a, b) => b.root.length - a.root.length)[0]
-    if (owner) {
-      const rel = toPosix(path.relative(owner.root, resolvedPath))
-      return rel ? path.join(owner.mirror, ...rel.split('/')) : owner.mirror
-    }
+    if (layout.holds(resolvedPath)) return layout.at(resolvedPath)
     outside += 1
     return path.join(base, `outside-${outside}`, path.basename(resolvedPath))
   }
@@ -779,6 +838,23 @@ function buildCommitted(request) {
   }
   if (errors.length) return committed
 
+  // One virtual project folder for the config and every repository, each at
+  // its host path from the deepest folder holding them all.
+  const resolvedConfigDir = path.resolve(resolved.configDir)
+  layout = projectLayout(base, [resolvedConfigDir, ...roots.keys(), ...managed.map((repo) => path.resolve(repo.path))])
+  if (!layout) {
+    errors.push(`the project config (${resolvedConfigDir}) and its repositories (${[...roots.keys()].join(', ')}) share no folder on this host (they are on different drives or shares), so their committed trees cannot be laid out as one checkout; the check refuses rather than scope the census differently`)
+    return committed
+  }
+  const listed = [...roots.values()]
+  for (const [index, one] of listed.entries()) {
+    for (const other of listed.slice(index + 1)) {
+      if (path.relative(one.root, other.root) === '') errors.push(`${one.root} and ${other.root}: name one folder on this host, so their committed trees cannot both be read; the check refuses`)
+    }
+    one.mirror = layout.at(one.root)
+  }
+  if (errors.length) return committed
+
   // 3. The committed tree of each managed folder, by exact path: its
   // folders, regular files and links, and its submodules as the empty
   // folders a clean checkout holds. Nothing else is in the reader.
@@ -788,11 +864,42 @@ function buildCommitted(request) {
     entry.recorded = recorded
     if (recorded.unreadable) errors.push(`${entry.root}: HEAD's tree cannot be read without fetching objects this clone lacks`)
     for (const problem of recorded.problems.slice(0, 5)) errors.push(`${entry.root}: HEAD's tree cannot be read exactly: ${problem}; the check refuses rather than read a different file`)
-    const at = (rel) => path.join(entry.mirror, ...rel.split('/'))
-    reader.addRoot(entry.mirror)
-    for (const rel of [...recorded.trees, ...recorded.gitlinks]) reader.addDir(at(rel))
-    for (const [rel, oid] of recorded.files) reader.add(at(rel), 'file', { root: entry.root, oid })
-    for (const rel of recorded.links) reader.add(at(rel), 'link', {})
+  }
+  if (errors.length) return committed
+  // A repository inside another one's folder holds that place in a checkout:
+  // the outer committed tree may record it as a submodule there, and nothing
+  // else.
+  for (const outer of roots.values()) {
+    for (const nested of roots.values()) {
+      if (nested === outer || !inside(outer.root, nested.root)) continue
+      const at = toPosix(path.relative(outer.root, nested.root))
+      const { trees, files, links, gitlinks } = outer.recorded
+      const clash = [...trees, ...files.keys(), ...links, ...gitlinks.filter((rel) => rel !== at)].find((rel) => rel === at || rel.startsWith(`${at}/`))
+      if (clash) errors.push(`${nested.root}: is a repository where the committed tree of ${outer.root} holds ${clash}; a checkout cannot hold both, so the check refuses`)
+    }
+  }
+  if (errors.length) return committed
+  try {
+    for (const entry of roots.values()) {
+      const { recorded } = entry
+      const at = (rel) => path.join(entry.mirror, ...rel.split('/'))
+      reader.addRoot(entry.mirror)
+      for (const rel of [...recorded.trees, ...recorded.gitlinks]) reader.addDir(at(rel))
+      for (const [rel, oid] of recorded.files) reader.add(at(rel), 'file', { root: entry.root, oid })
+      for (const rel of recorded.links) reader.add(at(rel), 'link', {})
+    }
+  } catch (error) {
+    errors.push(`the committed trees cannot be laid out as one checkout: ${error.message}`)
+    return committed
+  }
+
+  // The census base, which the graph derives from the mapped config folder
+  // and each repository's mapped folder, must be the one on this host.
+  const virtualConfigDir = mirror(resolvedConfigDir)
+  for (const repo of managed) {
+    const logical = toPosix(path.relative(resolvedConfigDir, path.resolve(repo.path)))
+    const mapped = toPosix(path.relative(virtualConfigDir, mirror(repo.path)))
+    if (logical !== mapped) errors.push(`repository ${repo.name}: lies at ${logical} from the project config here, which the committed layout cannot keep (${mapped}); the check refuses rather than scope the census differently`)
   }
   if (errors.length) return committed
 
@@ -826,8 +933,8 @@ function buildCommitted(request) {
   for (const repo of managed) {
     const owner = roots.get(gitRoot(repo.path))
     const folder = mirror(repo.path)
-    committed.repositories.set(repo.name, { folder, realFolder: path.resolve(repo.path), root: owner.root, mirror: owner.mirror, head: owner.head, status: owner.status })
     const prefix = toPosix(path.relative(owner.root, repo.path))
+    committed.repositories.set(repo.name, { folder, realFolder: path.resolve(repo.path), root: owner.root, mirror: owner.mirror, head: owner.head, status: owner.status, prefix, recorded: owner.recorded })
     const within = (objectPath) => prefix === '' || objectPath === prefix || objectPath.startsWith(`${prefix}/`)
     const missing = owner.recorded.missing.filter(within)
     if (missing.length) errors.push(`repository ${repo.name}: HEAD names ${missing.length} file(s) this clone lacks (${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', …' : ''}); the committed graph cannot be built without them`)
@@ -1041,7 +1148,7 @@ export function checkGraphmarksInGraph(graph, repositories, { expect = [] } = {}
       const versions = []
       if (change.index) versions.push(['index', classifyMarkdown(blobHead(context.root, change.index))])
       for (const stage of change.stages ?? []) versions.push(['index (an unresolved conflict)', classifyMarkdown(blobHead(context.root, stage))])
-      if (change.working) versions.push(['working tree', classifyMarkdown(workingHead(context.root, file))])
+      if (change.working) versions.push(['working tree', classifyMarkdown(workingHead(context.root, objectPath))])
       if (headKind === 'indeterminate') versions.push(['committed tree', 'indeterminate'])
       const where = `${name}/${toPosix(path.relative(context.realFolder, file))}`
       const of = (kind) => versions.filter(([, found]) => found === kind).map(([place]) => place).join(' and ')
@@ -1361,7 +1468,70 @@ export function checkGraphmarks(input, options = {}) {
   const { graph, committed, errors, warnings } = buildCommittedGraph(input)
   if (!graph) return { ok: false, marks: [], errors, warnings }
   const report = checkGraphmarksInGraph(graph, committed.repositories, options)
-  return { ...report, warnings: [...warnings, ...report.warnings] }
+  // A committed mark record the census does not count is never checked: say
+  // so for each, and refuse an empty result that would hide them.
+  const outside = uncountedRecords(graph, committed.repositories)
+  const notes = outside.map(({ where, kind }) => kind === 'mark'
+    ? `${where}: a committed mark record outside the knowledge graph's census (the project's setup.include or setup.exclude, or a folder the census skips), so this check did not verify it`
+    : `${where}: is outside the knowledge graph's census, and the check cannot tell whether it is a mark record (its committed front matter is unreadable or longer than ${FRONT_MATTER_LIMIT} bytes)`)
+  const extra = []
+  if (!report.marks.length && outside.length) extra.push(`no mark record is in the knowledge graph's census, but the committed tree holds ${outside.length} outside it that may be (${outside.slice(0, 3).map(({ where }) => where).join(', ')}${outside.length > 3 ? ', …' : ''}); the check refuses rather than pass with nothing verified`)
+  return { ...report, ok: report.ok && !extra.length, errors: [...report.errors, ...extra], warnings: [...warnings, ...report.warnings, ...notes] }
+}
+
+// Committed Markdown files in a managed repository's folder that the census
+// did not count (out of the project's scope, or in a folder the census skips)
+// and whose committed front matter is a mark record's, or cannot be read.
+function uncountedRecords(graph, repositories) {
+  const counted = new Set(graph.nodes.map((node) => `${node.repo}\0${node.path}`))
+  const found = []
+  for (const [name, repository] of repositories) {
+    const { prefix, recorded, root } = repository
+    if (!recorded) continue
+    const candidates = []
+    for (const [objectPath, oid] of recorded.files) {
+      if (!/\.md$/i.test(objectPath) || (prefix && !objectPath.startsWith(`${prefix}/`))) continue
+      const rel = prefix ? objectPath.slice(prefix.length + 1) : objectPath
+      if (!counted.has(`${name}\0${rel}`)) candidates.push({ rel, oid })
+    }
+    const heads = blobHeads(root, candidates.map(({ oid }) => oid))
+    for (const { rel, oid } of candidates) {
+      const kind = classifyMarkdown(heads.get(oid) ?? null)
+      if (kind === 'mark' || kind === 'indeterminate') found.push({ where: `${name}/${rel}`, kind })
+    }
+  }
+  return found
+}
+
+// The start of each blob, read in one Git call per batch: a map from object id
+// to { bytes, complete }. An object Git cannot read is left out of it.
+function blobHeads(root, oids) {
+  const heads = new Map()
+  const unique = [...new Set(oids)]
+  for (let start = 0; start < unique.length; start += 64) {
+    const batch = unique.slice(start, start + 64)
+    const result = gitRun(root, ['cat-file', '--batch'], { input: `${batch.join('\n')}\n`, maxBuffer: 1024 * 1024 * 1024 })
+    if (result.status !== 0 || !result.stdout) {
+      for (const oid of batch) {
+        const head = blobHead(root, oid)
+        if (head) heads.set(oid, head)
+      }
+      continue
+    }
+    const out = result.stdout
+    let at = 0
+    for (let index = 0; index < batch.length; index += 1) {
+      const end = out.indexOf(0x0a, at)
+      if (end < 0) break
+      const [oid, type, sizeText] = out.subarray(at, end).toString('utf8').split(' ')
+      at = end + 1
+      if (type === undefined || sizeText === undefined) continue
+      const size = Number(sizeText)
+      if (type === 'blob' && Number.isSafeInteger(size)) heads.set(oid, { bytes: Buffer.from(out.subarray(at, at + Math.min(size, FRONT_MATTER_LIMIT))), complete: size <= FRONT_MATTER_LIMIT })
+      at += size + 1
+    }
+  }
+  return heads
 }
 
 const USAGE = 'Usage: atelier graphmark check [--json] [--expect ID]... [--project PATH] [--repo-path NAME=PATH]...\n\nVerify every GraphMark record against the committed tree at HEAD: the atelier-graphmark@v1 contract, that the target lies in its own repository, that its full commit id holds the marked edition, that the selector names one part of it, and the audience. An uncommitted or edited mark record is refused. --expect fails the check when the mark with that kg id is missing; repeat it for several.\nReads Git objects only; writes nothing.'

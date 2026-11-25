@@ -206,6 +206,13 @@ longer resolves. `test/graphmark.test.mjs` pins these behaviours.
   is not read at all. Use `--expect <id>` so a mark that went missing fails
   the check instead of disappearing from the count. A mark with any error is
   reported as `refused`.
+- The check verifies the mark records the knowledge graph counts. Each
+  repository keeps its path from the project config's folder, so the
+  project's census scope (`setup.include`, `setup.exclude`) selects what it
+  selects in a checkout. A committed mark record the scope leaves out is
+  named in a warning and not checked; when the census holds no mark record
+  but the committed tree holds some outside it, the check fails. A repository
+  inside another one's folder is read as its own repository only.
 - `atelier graphmark check` compares a mark's audience with the audience the
   marked edition declared at its commit, the marked file's committed node or,
   for a file that is not a graph node, the committed read boundary and what
