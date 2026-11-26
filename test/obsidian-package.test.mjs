@@ -219,7 +219,7 @@ test('a consumer publishes that view into a temporary vault with no app, from th
 test('mutation control: the release audit refuses proof tooling, experiments, a receipt directory, an app archive, a harness receipt, an oversized Obsidian fixture and an export with no packed file', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-obsidian-audit-mutation-'))
   try {
-    for (const rel of ['scripts/check-release-tarball.mjs', 'scripts/npm-cli.mjs', 'scripts/structural-patterns.mjs', 'src/disclosure/content-scan.mjs', 'src/egress/forbidden-egress.mjs']) {
+    for (const rel of ['scripts/check-release-tarball.mjs', 'scripts/check-version-pins.mjs', 'scripts/npm-cli.mjs', 'scripts/structural-patterns.mjs', 'src/disclosure/content-scan.mjs', 'src/egress/forbidden-egress.mjs']) {
       fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
       fs.copyFileSync(path.join(ROOT, rel), path.join(root, rel))
     }

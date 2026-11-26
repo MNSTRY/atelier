@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execNpmSync } from './npm-cli.mjs'
+import { checkVersionPinsInRoot } from './check-version-pins.mjs'
 import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 import { compileDisclosurePatterns } from '../src/disclosure/content-scan.mjs'
 import {
@@ -38,11 +39,11 @@ const allowedFiles = [
   /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html|yaml|yml|csv)$/,
   /^skills\/(codex|claude)\/[a-z0-9-]+\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
-  // The decision contract's declarations are part of its public typed API.
-  // Other declaration paths still require their own reviewed admission.
+  // Exact reviewed TypeScript declarations beside exported .mjs modules.
   /^src\/decisions\/contracts\.d\.mts$/,
-  // Exact declarations for the portable extension wire, host client and server APIs.
   /^src\/extensions\/(contracts|client|server|postgres|drizzle|prisma|convex)\.d\.mts$/,
+  /^src\/ui\/presentation\/(index|browser)\.d\.mts$/,
+  /^src\/ui\/primitives\/(index|browser)\.d\.mts$/,
   // Optional native supplier adapters are text and receive the same content scan.
   // Admit only these runtime modules; native SDKs, caches and fixtures stay outside.
   /^src\/ingestion\/optional\/graphify\/(?:json_bridge|graphify_supplier|query_receiving|composition_receiving)\.py$/,
@@ -161,6 +162,9 @@ const changelog = readFileSync(join(auditRoot, 'CHANGELOG.md'), 'utf8')
 if (!changelog.includes(`## ${expectedVersion}`)) fail(`CHANGELOG.md must contain a "## ${expectedVersion}" heading`)
 const readme = readFileSync(join(auditRoot, 'README.md'), 'utf8')
 if (!readme.includes(expectedVersion)) fail(`README.md must mention version ${expectedVersion}`)
+for (const pinFinding of checkVersionPinsInRoot(auditRoot, expectedVersion)) {
+  fail(`version pin drift: ${pinFinding}`)
+}
 
 const pack = candidate.pack
 if (pack.name !== expectedPackageName) fail(`npm pack name must be ${expectedPackageName}`)
@@ -206,10 +210,19 @@ for (const requiredPortableFile of [
   }
 }
 
-// Every declared export names a packed file: a subpath whose target was left
+// Every declared export names packed file(s): a subpath whose target was left
 // out of the tarball would resolve in this checkout and fail for a consumer.
+// Supports both string targets and conditional export objects ({ types, import, default }).
+function collectExportTargets(value) {
+  if (typeof value === 'string') return [value]
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.values(value).flatMap((nested) => collectExportTargets(nested))
+  }
+  return []
+}
 for (const [subpath, target] of Object.entries(packedPackageJson.exports ?? {})) {
-  if (typeof target !== 'string' || !paths.includes(target.replace(/^\.\//, ''))) {
+  const targets = collectExportTargets(target)
+  if (targets.length === 0 || targets.some((entry) => !paths.includes(entry.replace(/^\.\//, '')))) {
     console.error(`[release:audit] package export ${subpath} names a file the tarball does not carry`)
     failures += 1
   }

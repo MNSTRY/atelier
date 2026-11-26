@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+- **GraphMark standard:** `@mnstry/atelier/graphmark`, `contracts/atelier-graphmark.v1.schema.json`, guide, skill, and CLI checks.
+- **TypeScript declarations for consumed UI surfaces:** shipped runtime-verified `.d.mts` declarations for `@mnstry/atelier/presentation`, `/presentation/browser`, `/ui/primitives`, and `/ui/primitives/browser`, compiled and executed under strict `tsc --module NodeNext` in `consumer:smoke`.
+- **Stability manifest & consumer compatibility matrix:** `contracts/stability-manifest.v1.json` classifying every exported subpath (`stable` / `beta` / `experimental`), `docs/maintainers/consumer-compatibility-matrix.md`, and `test/architecture-boundaries.test.mjs` internal layer import ratchets.
+- **Hardened release & contract compatibility gates:** `scripts/check-version-pins.mjs` wired into `release:audit`; multi-baseline (`v0.2.0-alpha.11` epoch + `v0.2.0-alpha.25` latest release), path-mapped (`previousContractFiles`), `$ref`-resolving, and bidirectional historical-fixture checks in `contract:compat`; `public-api:compat` wired into PR CI with conditional export support.
+- **Public boundary rules & contributor scaffolding:** re-exported `DEFAULT_CONTENT_RULES` from `@mnstry/atelier/boundary` so consumers no longer deep-import internal files; added `--allow-dco-external-authors` in `scripts/check-repo-disclosure.mjs` and `rfcs/0000-template.md` to prepare for outside PRs.
+
+### Changed
+- **Fresh-clone contributor tests:** `npm test` runs the complete public test suite with zero required environment variables; private-denylist pack assertions run fail-closed via `npm run test:private-boundary` in `prepublishOnly` and CI's `secret-sweep` lane.
+- **README & SECURITY:** replaced the opening reverse-chronological changelog wall in `README.md` with a local verifiable refusal demo while preserving all canonical normative blocks; documented network-reaching subprocess and egress-scanner limits in `SECURITY.md`.
+
 ## 0.2.0-alpha.25
 
 - Personal workspace composition honours each enrolled repository's own tracked `atelier.project.json`: when it declares one knowledge folder (`repos[0].path`), only that folder enters the composed graph, and node evidence is relative to it. Before, the whole repository was read, so tooling, tests and drafts outside the declared folder made composition refuse `source-graph-invalid`. Several declared folders, a folder outside the root, a missing or linked folder, or an invalid document refuse `project-config-unsupported`. A repository without a tracked configuration composes as before, with the same generation id. The Obsidian service also watches the configuration.

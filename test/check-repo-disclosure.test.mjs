@@ -216,6 +216,48 @@ test('--commits all allows the GitHub web-merge committer', (t) => {
   assert.equal(status, 0, output)
 })
 
+test('--allow-dco-external-authors accepts exact trailer line in range and rejects spoofed text or --commits all', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'base\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+
+  // Refuses --commits all
+  const allRes = runChecker(dir, ['--commits', 'all', '--allow-dco-external-authors'])
+  assert.equal(allRes.status, 2, allRes.output)
+
+  // Rejects mid-sentence spoofed Sign-off line
+  git(dir, ['commit', '--quiet', '--allow-empty', '-m', 'feat: spoof\n\nNot-Signed-off-by: Alice <alice@example.com>'], {
+    GIT_AUTHOR_NAME: 'Alice',
+    GIT_AUTHOR_EMAIL: 'alice@example.com',
+  })
+  const spoofRes = runChecker(dir, ['--commits', 'range', '--base', base, '--allow-dco-external-authors'])
+  assert.equal(spoofRes.status, 1, spoofRes.output)
+  assert.match(spoofRes.output, /commit-identity \(author\)/)
+
+  // Accepts exact trailer paragraph Signed-off-by matching external author & committer (real `git commit -s`)
+  const base2 = git(dir, ['rev-parse', 'HEAD'])
+  git(dir, ['commit', '--quiet', '--allow-empty', '-m', 'feat: valid\n\nSigned-off-by: Alice <alice@example.com>'], {
+    GIT_AUTHOR_NAME: 'Alice',
+    GIT_AUTHOR_EMAIL: 'alice@example.com',
+    GIT_COMMITTER_NAME: 'Alice',
+    GIT_COMMITTER_EMAIL: 'alice@example.com',
+  })
+  const validRes = runChecker(dir, ['--commits', 'range', '--base', base2, '--allow-dco-external-authors'])
+  assert.equal(validRes.status, 0, validRes.output)
+
+  // Rejects an unallowlisted third-party committer that does not match the DCO-signed author
+  const base3 = git(dir, ['rev-parse', 'HEAD'])
+  git(dir, ['commit', '--quiet', '--allow-empty', '-m', 'feat: third-party committer\n\nSigned-off-by: Alice <alice@example.com>'], {
+    GIT_AUTHOR_NAME: 'Alice',
+    GIT_AUTHOR_EMAIL: 'alice@example.com',
+    GIT_COMMITTER_NAME: 'Bob',
+    GIT_COMMITTER_EMAIL: 'bob@example.com',
+  })
+  const mismatchRes = runChecker(dir, ['--commits', 'range', '--base', base3, '--allow-dco-external-authors'])
+  assert.equal(mismatchRes.status, 1, mismatchRes.output)
+  assert.match(mismatchRes.output, /commit-identity \(committer\)/)
+})
+
 test('commit messages in range are scanned against the denylist', (t) => {
   const dir = makeRepo(t)
   writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')

@@ -1,30 +1,68 @@
 # MNSTRY Atelier
 
-`0.2.0-alpha.25` makes [personal workspace](docs/guides/personal-workspace.md) composition read only the knowledge folder each enrolled repository declares in its own `atelier.project.json`. `0.2.0-alpha.24` adds [governed Impeccable design guidance](docs/reference/impeccable.md): the `@mnstry/atelier/impeccable` context, policy and detector adapters, a Node-hosted WASM source binding, and a sealed resource-only capability package. `0.2.0-alpha.23` contains element scroll-frame layers so foreground content cannot cover the thumb and the thumb cannot escape over outer overlays. `0.2.0-alpha.22` fixes viewport scrollbar positioning and tracking. `0.2.0-alpha.21` adds [shared overlay scrollbars](docs/reference/ui-primitives.md#scrollbar-policy). `0.2.0-alpha.20` lets carousel autoplay run from load and through page scrolling. `0.2.0-alpha.19` keeps on-screen loop copies in multi-card carousels clickable and opens their expanded panels on the live slide. `0.2.0-alpha.18` refines carousel motion (gentle resume, coasting throws, centred expanded slides, a looping scroll bar). `0.2.0-alpha.17` adds shared [UI primitives](docs/reference/ui-primitives.md): one carousel, disclosure, scroll lock and motion layer for Atelier-built sites. `0.2.0-alpha.16` renames the [graph workspace](docs/guides/graph-workspace.md)'s room to the map and its middle layer to distribution, keeping the alpha.15 names for one release. `0.2.0-alpha.15` added the workspace (a map of every readable record, a focused authoring workbench and a review room, built from primitives distributions and owners can compose), renderer-neutral graph views and an [extension SDK and Postgres project workflow](docs/guides/extensions.md). Native host qualification remains a separate gate.
+**Turn a Git repository into a governed knowledge graph.**
 
-**Turn a repository into a living, governed system.**
+Define what your files mean, enforce which sources may cross boundaries, and
+give people, agents, and tools a bounded view of the work. Git remains the
+source of record. Your files remain plain text. The authoring runtime remains
+local, with zero telemetry and Apache-2.0 licensing.
+
+- **Current package:** `@mnstry/atelier@0.3.0` (Node.js 22 or 24)
+- **Stability & contracts:** [stability manifest](contracts/stability-manifest.v1.json) · [contract stability](docs/reference/contract-stability.md) · [security & egress limits](SECURITY.md)
+- **Release history:** [CHANGELOG.md](CHANGELOG.md)
+
+## Try it locally
+
+Create a disposable synthetic workspace, compile its deterministic knowledge
+graph, project its local review surface, and watch the export boundary enforce
+itself offline:
+
+```bash
+npm install --save-dev @mnstry/atelier@0.3.0
+npx mnstry-atelier init --fixture=sample-workspace --target ./sample
+npx mnstry-atelier graph --project ./sample/atelier.project.json
+npx mnstry-atelier project --project ./sample/atelier.project.json
+npx mnstry-atelier dev --project ./sample/atelier.project.json
+```
+
+Verify an export offline, and see a public export referencing a private source
+refused fail-closed:
+
+```bash
+# Valid synthetic export -> accepted: true, importable: false
+npx mnstry-atelier dry-run ./node_modules/@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json
+
+# Public export referencing a private source -> refused (non-zero exit)
+node -e "
+  const fs = require('node:fs');
+  const doc = JSON.parse(fs.readFileSync('./node_modules/@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json', 'utf8'));
+  doc.provenance.sourceNodes[0].audience = 'private';
+  fs.writeFileSync('./invalid-export.json', JSON.stringify(doc, null, 2));
+"
+npx mnstry-atelier dry-run ./invalid-export.json
+```
+
+`npx` runs the binary installed in `./node_modules/.bin`, so install the scoped
+package first. Keep the `@mnstry/` scope: the unscoped npm package `atelier` is
+unrelated. Inside an installed workspace, the shorter `atelier` command is also
+available.
+
+## Why Atelier
 
 Important bodies of work often begin as files: methods, research, programs,
-policies, editorial systems, product knowledge, or something no existing app
-quite understands. A folder can hold that work, but it cannot explain what each
-file is, how the pieces relate, who may see them, or whether the whole is ready
-to use.
+policies, editorial systems, or product knowledge. A folder can hold that work,
+but it cannot explain what each file is, how the pieces relate, who may see
+them, or whether the whole is ready to use.
 
-The Atelier adds that missing layer without taking the work away from you. It
-turns a repository into an ontology-governed knowledge graph, gives rules the
-power to refuse invalid states, and produces bounded views for people, teams,
-agents, and tools. Git remains the source of record. Your files remain readable.
-The authoring runtime remains local; optional vault adapters run in an explicitly configured host.
+The Atelier adds that missing layer without taking the work away from you:
 
-That makes the same repository useful at several levels:
-
-- A **steward** can shape a coherent system without surrendering it to a
+- A **steward** shapes a coherent system without surrendering it to a
   proprietary database.
-- A **team** can collaborate through explicit roles, handoffs, and disclosure
+- A **team** collaborates through explicit roles, handoffs, and disclosure
   boundaries.
-- A **person or agent** can receive the right context and capabilities for the
+- A **person or agent** receives the right context and capabilities for the
   task, without receiving the entire repository.
-- A **toolmaker** can build a specialized or commercial product on the graph,
+- A **toolmaker** builds a specialized or commercial distribution on the graph,
   contracts, validators, and projections instead of inventing a new source of
   truth.
 
@@ -33,34 +71,18 @@ that must stay legible, internally connected, privacy-aware, and usable across
 many interfaces. Methodology authoring is one application of the system, not
 its definition or ceiling.
 
-See the [responsibility architecture](docs/reference/architecture.md) for Inquiry, Knowledge
-Stewardship, [Phronesis — practical judgment](docs/reference/phronesis.md), Creation and Delivery, Capability Stewardship,
-Reflection, Interaction and Coordination. Start a provider-neutral research
-workflow with the [research starter](docs/guides/research-starter.md).
-Knowledge Stewardship is the broader responsibility; the Knowledge Graph is a
-shared representation used across responsibilities. Phronesis draws on and
-contributes to that graph through existing owners. It supplies no automatic
-wisdom or universal score.
-Use [portable template profiles](docs/reference/template-profile.md) to bind semantic and
-surface roles to canonical sources, with optional advisory decisions and
-separate host and release validation.
-
-Follow the [Knowledge Health workshop](docs/knowledge-health/quickstart.md) to
-inspect its finding, retain a contribution, and follow the owning correction
-and evidence refresh. Use the exact version and host qualified for that release.
-
-The Knowledge Health kit starts subprocesses, which the egress scanner does not
-model. `src/knowledge-health/example.mjs` and `src/knowledge-health/workshop.mjs`
-run `git init` in the new disposable directory they create.
-`src/knowledge/participatory/installed-workshop.mjs` imports the subprocess API
-and calls nothing through it; its setup uses that workshop's `git init`.
-`src/knowledge-health/proof/installed-check.mjs` runs the installed `atelier`
-bin and `git init` in a consumer directory.
-`src/knowledge-health/proof/common.mjs` runs `npm` and Node for the maintainer
-rehearsal script `src/knowledge-health/proof/rehearse.mjs`, which calls
-`npm view`, `npm install` and `npm pack` against `https://registry.npmjs.org`.
-No Atelier command or package export runs that script; it uses the network only
-when a maintainer starts it by hand.
+See the [responsibility architecture](docs/reference/architecture.md) for Inquiry,
+Knowledge Stewardship, [Phronesis — practical judgment](docs/reference/phronesis.md),
+Creation and Delivery, Capability Stewardship, Reflection, Interaction and
+Coordination. See [GraphMark](docs/reference/graphmark.md),
+[portable template profiles](docs/reference/template-profile.md),
+[personal workspaces](docs/guides/personal-workspace.md),
+[graph workspaces](docs/guides/graph-workspace.md),
+[shared UI primitives](docs/reference/ui-primitives.md),
+[database extensions](docs/guides/extensions.md), and the
+[Knowledge Health workshop](docs/knowledge-health/quickstart.md) for specific
+capabilities. Documented subprocess and egress-scanner limits live in
+[SECURITY.md](SECURITY.md#subprocess-and-egress-scanner-limits).
 
 ## From files to a working system
 
@@ -72,18 +94,12 @@ byte budget; `atelier knowledge evaluate` compares lexical and graph retrieval
 without provider calls. A passing check is structural evidence; useful answers
 and efficient token usage still need measurement in real work.
 
-For local-harness authoring, see [durable coauthor sessions](docs/reference/coauthor-session.md)
-and [skill stewardship and managed installation](docs/guides/skill-steward.md).
-The next-release [capability stewardship foundation](docs/guides/capability-stewardship.md)
-adds portable packages, repository-owned adoption and version-bound evidence
-alongside existing skills and tools.
-[Learning from feedback](docs/guides/learning.md) connects private observations to
-reviewed lessons and explicitly activated harness context, with a local CLI.
-[Progressive local ingestion](docs/guides/ingestion.md) preserves selected sources and
-provides bounded text, CSV and JSON evidence search before interpretation.
-[Immutable intake and guide contracts](docs/reference/intake-and-guides.md) extend existing
-processing and hosted-tool adapters without adding remote execution or publication
-authority. These alpha capabilities require explicit consumer integration.
+For local-harness authoring, see [durable coauthor sessions](docs/reference/coauthor-session.md),
+[skill stewardship](docs/guides/skill-steward.md),
+[capability stewardship](docs/guides/capability-stewardship.md),
+[learning from feedback](docs/guides/learning.md),
+[progressive local ingestion](docs/guides/ingestion.md), and
+[immutable intake and guide contracts](docs/reference/intake-and-guides.md).
 
 ```text
 files you own
@@ -96,25 +112,6 @@ governed projections
     ├── collaboration and disclosure
     └── specialized tools and commercial distributions
 ```
-
-You can see the complete loop in a disposable sample workspace:
-
-```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
-npx mnstry-atelier init --fixture=sample-workspace --target ./sample
-npx mnstry-atelier graph --project ./sample/atelier.project.json
-npx mnstry-atelier project --project ./sample/atelier.project.json
-npx mnstry-atelier dev --project ./sample/atelier.project.json
-```
-
-Open the loopback URL printed by `dev`. The browser page is generated from
-the same graph and rules that the CLI and library expose.
-
-`npx` here runs the binary installed in `./node_modules/.bin`, so install the
-scoped package first. Keep the `@mnstry/` scope: the unscoped npm package
-`atelier` is unrelated. The branded `npx mnstry-atelier` command avoids that
-collision; inside an installed workspace, the shorter `atelier` command is
-also available.
 
 ## What authoring looks like
 
@@ -335,9 +332,9 @@ const navigation = renderActionGroup([
 ], { label: 'Browse the workspace' })
 ```
 
-The package exports change over the alpha series, so pin the exact prerelease
-version and treat the package export map and shipped source modules as the
-executable API reference. [Distribution contracts](docs/guides/distributions.md) explain
+See [`contracts/stability-manifest.v1.json`](contracts/stability-manifest.v1.json)
+for each export's stability tier (`stable`, `beta`, or `experimental`) and pin
+the exact version in production toolchains. [Distribution contracts](docs/guides/distributions.md) explain
 how a governed subset can be packaged for another surface without widening its
 audience.
 
@@ -473,14 +470,15 @@ npm run egress:check
 ```
 
 **Compatibility is checked by machinery, not memory.** Documents valid
-against the `v0.2.0-alpha.0` contracts stay valid: every change is checked
-against the baseline tag's validators, and schema widening outside `ext`
-containers is refused by a schema-vs-schema differ. Breaking changes require
-a new contract version and a recorded migration. Known limit: the differ
-compares schemas structurally and does not resolve `$ref` pointers, so a
-`$ref` retargeted at a looser definition is not caught by this gate — the
-fixture tests catch that for contracts with negative fixtures, and closing
-the gap in the differ is tracked work:
+against the pinned baseline contracts (`contracts/compat-baseline.json`) stay
+valid: every change is checked bidirectionally against the baseline tags'
+validators and historical fixtures, and schema widening outside `ext`
+containers is refused by a schema-vs-schema differ that resolves local `$ref`
+targets and sibling keywords. Breaking changes require a new contract version
+and a recorded migration. Known limit: the differ inspects JSON Schema
+constraints (including local `$ref` targets) rather than external remote
+references or custom runtime semantic rules outside JSON Schema — fixture
+tests cover those semantic checks:
 
 ```bash
 npm run contract:compat
@@ -545,10 +543,10 @@ to MNSTRY, and a document MNSTRY declines can still be fully conformant.
 ## Install and go deeper
 
 Node.js 22 (22.18.0 or later) or Node.js 24 (24.13.1 or later) is required.
-Pin the prerelease while the package remains in alpha:
+Pin the exact version in production toolchains:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
+npm install --save-dev @mnstry/atelier@0.3.0
 ```
 
 Start with [independent setup](./docs/start/independent-start.md) or
@@ -558,10 +556,11 @@ API and architecture references, and maintainer controls.
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.14`.
+Current package: `@mnstry/atelier@0.3.0`.
 
-The alpha package is usable and contract-tested, but its library API may still
-change before a stable release. Pin the exact version in production toolchains.
+`@mnstry/atelier` is in its `0.x` series: contracts and `stable`-tier exports
+are enforced by compatibility gates, while `beta` and `experimental` exports
+may still evolve before `1.0.0`. Pin the exact version in production toolchains.
 
 ```text
 atelier init

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { publicApiCompatibilityFindings } from '../scripts/check-public-api-compat.mjs'
+import { publicApiCompatibilityFindings, resolveRuntimeExportTarget } from '../scripts/check-public-api-compat.mjs'
 
 const baseline = {
   requiredSubpaths: ['.', './graph'],
@@ -27,4 +27,17 @@ test('public API compatibility names every removed subpath and symbol', () => {
     'published named export removed: . -> buildGraph',
     'published named export removed: ./graph -> runGraphCommand',
   ])
+})
+
+test('runtime export target resolver handles strings and conditional export objects', () => {
+  assert.equal(resolveRuntimeExportTarget('./src/index.mjs'), './src/index.mjs')
+  assert.equal(
+    resolveRuntimeExportTarget({ types: './src/index.d.mts', import: './src/index.mjs' }),
+    './src/index.mjs',
+  )
+  assert.equal(
+    resolveRuntimeExportTarget({ types: './src/index.d.mts', default: './src/index.mjs' }),
+    './src/index.mjs',
+  )
+  assert.equal(resolveRuntimeExportTarget(null), null)
 })

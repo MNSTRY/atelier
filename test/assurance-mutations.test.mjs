@@ -75,6 +75,7 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
   try {
     for (const rel of [
       'scripts/check-release-tarball.mjs',
+      'scripts/check-version-pins.mjs',
       'scripts/npm-cli.mjs',
       'scripts/structural-patterns.mjs',
       'src/disclosure/content-scan.mjs',

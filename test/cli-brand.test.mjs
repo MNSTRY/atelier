@@ -244,6 +244,28 @@ test('runCli reports unknown commands with the wrapper display name', async () =
   assert.match(out[0], /^Loomworks Studio/)
 })
 
+test('runCli returns nonzero when a dispatched subprocess is interrupted by a signal', async () => {
+  const sigtermCode = await runCli({
+    argv: ['egress', 'check'],
+    spawn: () => ({ status: null, signal: 'SIGTERM' }),
+  })
+  const expectedSigterm = typeof os.constants.signals?.SIGTERM === 'number' ? 128 + os.constants.signals.SIGTERM : 1
+  assert.equal(sigtermCode, expectedSigterm)
+  assert.notEqual(sigtermCode, 0)
+
+  const unknownSignalCode = await runCli({
+    argv: ['egress', 'check'],
+    spawn: () => ({ status: null, signal: 'SIG_UNKNOWN_CUSTOM' }),
+  })
+  assert.equal(unknownSignalCode, 1)
+
+  const nullStatusCode = await runCli({
+    argv: ['egress', 'check'],
+    spawn: () => ({ status: null, signal: null }),
+  })
+  assert.equal(nullStatusCode, 1)
+})
+
 // The tests below dispatch through bin/atelier.mjs, so they prove the
 // commandMap entry, the normalizeArgs splice, and the spawned module agree —
 // the unit tests above only exercise the builders.

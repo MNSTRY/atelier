@@ -76,6 +76,7 @@ The [responsibility architecture](reference/architecture.md) and versioned contr
 ## Maintainer controls
 
 - [Assurance controls and evidence map](maintainers/assurance-controls.md)
+- [Consumer compatibility matrix](maintainers/consumer-compatibility-matrix.md)
 - [Describing the Atelier](maintainers/describing-the-atelier.md)
 - [Release engineering](maintainers/release-engineering.md)
 

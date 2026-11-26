@@ -48,14 +48,15 @@ npm run egress:check
 ```
 
 **Compatibility is checked by machinery, not memory.** Documents valid
-against the `v0.2.0-alpha.0` contracts stay valid: every change is checked
-against the baseline tag's validators, and schema widening outside `ext`
-containers is refused by a schema-vs-schema differ. Breaking changes require
-a new contract version and a recorded migration. Known limit: the differ
-compares schemas structurally and does not resolve `$ref` pointers, so a
-`$ref` retargeted at a looser definition is not caught by this gate — the
-fixture tests catch that for contracts with negative fixtures, and closing
-the gap in the differ is tracked work:
+against the pinned baseline contracts (`contracts/compat-baseline.json`) stay
+valid: every change is checked bidirectionally against the baseline tags'
+validators and historical fixtures, and schema widening outside `ext`
+containers is refused by a schema-vs-schema differ that resolves local `$ref`
+targets and sibling keywords. Breaking changes require a new contract version
+and a recorded migration. Known limit: the differ inspects JSON Schema
+constraints (including local `$ref` targets) rather than external remote
+references or custom runtime semantic rules outside JSON Schema — fixture
+tests cover those semantic checks:
 
 ```bash
 npm run contract:compat

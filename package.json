@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.25",
+  "version": "0.3.0",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
@@ -168,6 +168,7 @@
     "contract": "node src/check-atelier-export-contract.mjs",
     "dry-run": "node src/validate-atelier-export-dry-run.mjs fixtures/atelier-export/sample-studio-offer.v1.json",
     "test": "node --test test/*.test.mjs",
+    "test:private-boundary": "node --test test/maintainer/private-boundary.test.mjs",
     "syntax:check": "node scripts/check-syntax.mjs",
     "graph:test": "node --test test/graph.test.mjs test/graph-knowledge-graph.test.mjs test/graph-determinism.test.mjs test/graph-source-formats.test.mjs",
     "project:test": "node --test test/project.test.mjs test/project-config.test.mjs test/projection-policy.test.mjs test/projection-alignment.test.mjs",
@@ -193,7 +194,7 @@
     "assurance:mutation-smoke": "node --test test/assurance-mutations.test.mjs",
     "consumer:smoke": "node scripts/consumer-smoke.mjs",
     "distribution:smoke": "node scripts/distribution-smoke.mjs",
-    "prepublishOnly": "npm run repo:check && npm run migrations:check && npm run contract:compat && npm run public-api:compat && npm run syntax:check && npm test && npm run assurance:mutation-smoke && npm run release:candidate"
+    "prepublishOnly": "npm run repo:check && npm run migrations:check && npm run contract:compat && npm run public-api:compat && npm run syntax:check && npm test && npm run test:private-boundary && npm run assurance:mutation-smoke && npm run release:candidate"
   },
   "dependencies": {
     "ajv": "8.20.0",

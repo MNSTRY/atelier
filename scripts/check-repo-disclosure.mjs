@@ -7,7 +7,7 @@
 // Usage:
 //   node scripts/check-repo-disclosure.mjs [--root <dir>] [--staged]
 //     [--structural-only] [--commits none|range|all] [--base <ref>] [--untrusted]
-//     [--external-contributor-range]
+//     [--external-contributor-range] [--allow-dco-external-authors]
 //
 // Denylist source precedence: ATELIER_DENYLIST_JSON env -> this trusted
 // package's release-denylist.local.json -> fail closed (exit 2) unless --structural-only
@@ -91,6 +91,7 @@ let staged = false
 let structuralOnly = false
 let untrusted = false
 let externalContributorRange = false
+let allowDcoExternalAuthors = false
 let commitsMode = 'none'
 let base = null
 for (let i = 0; i < args.length; i += 1) {
@@ -107,6 +108,8 @@ for (let i = 0; i < args.length; i += 1) {
     untrusted = true
   } else if (arg === '--external-contributor-range') {
     externalContributorRange = true
+  } else if (arg === '--allow-dco-external-authors') {
+    allowDcoExternalAuthors = true
   } else if (arg === '--commits') {
     i += 1
     if (!['none', 'range', 'all'].includes(args[i])) usageError('--commits must be none, range, or all')
@@ -120,6 +123,9 @@ for (let i = 0; i < args.length; i += 1) {
   }
 }
 if (commitsMode === 'range' && !base) usageError('--commits range requires --base <ref>')
+if (allowDcoExternalAuthors && commitsMode !== 'range') {
+  usageError('--allow-dco-external-authors requires --commits range --base <ref>')
+}
 if (externalContributorRange && commitsMode !== 'range') {
   usageError('--external-contributor-range requires --commits range')
 }
@@ -405,10 +411,23 @@ function scanCommits(selector) {
     // merge commits use GitHub identity. Raw content remains scanned above.
     const isMergeCommit = parentLines.length > 1
     if (!isMergeCommit && !externalContributorRange) {
-      if (!ALLOWED_AUTHORS.some((id) => id.name === author.name && id.email === author.email)) {
+      let hasMatchingDco = false
+      if (allowDcoExternalAuthors) {
+        const msgStart = text.indexOf('\n\n')
+        if (msgStart !== -1) {
+          const message = text.slice(msgStart + 2).trimEnd()
+          const paragraphs = message.split(/\n{2,}/)
+          const trailerParagraph = paragraphs[paragraphs.length - 1] ?? ''
+          const expectedTrailer = `Signed-off-by: ${author.name} <${author.email}>`
+          hasMatchingDco = trailerParagraph.split('\n').some((line) => line === expectedTrailer)
+        }
+      }
+      if (!hasMatchingDco && !ALLOWED_AUTHORS.some((id) => id.name === author.name && id.email === author.email)) {
         report('commit-identity (author)', sha)
       }
-      if (!ALLOWED_COMMITTERS.some((id) => id.name === committer.name && id.email === committer.email)) {
+      const committerMatchesDcoAuthor =
+        allowDcoExternalAuthors && hasMatchingDco && committer.name === author.name && committer.email === author.email
+      if (!committerMatchesDcoAuthor && !ALLOWED_COMMITTERS.some((id) => id.name === committer.name && id.email === committer.email)) {
         report('commit-identity (committer)', sha)
       }
     }

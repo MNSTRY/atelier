@@ -190,7 +190,7 @@ export published by `v0.2.0-alpha.4` with the current package. Removing one
 fails closed. It also rejects modified source that retains the already-tagged
 baseline version, independently of the release-candidate check. The baseline
 records and verifies its tag commit and the public npm artifact identity; the
-published archive was independently checked to contain all 20 subpaths and 212
+published archive was independently checked to contain all 27 subpaths and 242
 named exports. This is runtime JavaScript shape continuity, not a promise about
 function signatures, types, or behavior.
 
@@ -310,12 +310,15 @@ maintainer-reviewed before entering the list.
 
 ## CI lanes
 
-Four jobs run on pushes to `main` and on pull requests, and all four are
-required status checks:
+The core workflow (`.github/workflows/ci.yml`) runs required checks on pushes to
+`main` and on pull requests:
 
-- `test`: syntax check (`node --check`, not a type system), the full test suite (including isolated consumer disclosure-command proofs), contract checks, `egress:check`, `assurance:mutation-smoke`, and
-  `migrations:check`. This job sets `ATELIER_ALLOW_MISSING_DENYLIST=1` scoped
-  to the job only — denylist assertions belong to the secret lane.
+- `test`: syntax check (`node --check`, not a type system), the full public test
+  suite (including isolated consumer disclosure-command proofs), contract checks
+  (`contract`, `contract:compat`, `public-api:compat`), `egress:check`, and
+  `migrations:check`. Private-denylist assertions run fail-closed in the
+  `secret-sweep` lane and `prepublishOnly` (which also runs
+  `assurance:mutation-smoke`).
 - `consumer-smoke`: warms the npm cache with `npm ci` (the offline tarball
   install needs the registry dependencies cached), then runs
   `npm run consumer:smoke`.
@@ -361,6 +364,8 @@ A version bump touches exactly:
   starter's pack is qualified for the released root version (the
   `review packs` consumer smoke and `test/review-portability.test.mjs` fail
   when it lags)
+- `compatibility.atelierVersions` in `fixtures/templates/local-library.v1.json`,
+  so template-upgrade consumer smoke qualifies the released version
 - the linked package version recorded in
   `examples/astro-presentation/package-lock.json`
 

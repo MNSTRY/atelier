@@ -88,10 +88,30 @@ make a released tarball differ from the reviewed tag.
 
 ## Supported versions
 
-The package is alpha. Only the latest tagged release receives fixes; there
+During the `0.x` series, only the latest tagged release receives fixes; there
 are no backports to earlier tags. Published contracts carry a separate and
 stronger promise — `docs/reference/contract-stability.md` and `docs/reference/continuity.md`
 record it — and that promise is not weakened by a security fix.
+
+## Subprocess and egress-scanner limits
+
+The lexical egress scanner (`npm run egress:check`) inspects executable and
+markup files for forbidden network primitives, but does not model
+`child_process` calls. Many modules under `src/` invoke local-only subprocesses
+(such as local `git` commands, the local `atelier` binary, or workshop helpers
+operating inside disposable directories) that make no network requests.
+
+The documented **network-reaching** subprocess exceptions (mirrored in
+`docs/blocks/claims.md`) are:
+
+- `gh api user` / `gh api repos/...` actor and repository-identity fallback
+  (see `docs/start/install.md`).
+- Explicitly enrolled Atelier Sync Git fetch and confirmed non-force push
+  operations (see `docs/guides/atelier-sync.md`).
+- Maintainer-only rehearsal script `src/knowledge-health/proof/rehearse.mjs`
+  (via `src/knowledge-health/proof/common.mjs`), which invokes `npm view`,
+  `npm install`, and `npm pack` against `https://registry.npmjs.org` only when
+  a maintainer runs it by hand. No Atelier command or package export invokes it.
 
 ## Received advisories
 

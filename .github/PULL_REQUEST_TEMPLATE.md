@@ -32,7 +32,7 @@ it. If this is docs-only or a pure refactor, say so.
 
 ```bash
 npm run syntax:check
-ATELIER_ALLOW_MISSING_DENYLIST=1 npm test
+npm test
 npm run contract && npm run contract:compat
 npm run egress:check && npm run migrations:check
 ```
