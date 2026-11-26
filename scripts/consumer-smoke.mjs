@@ -274,7 +274,8 @@ assert.equal(typeof scanDisclosureContent, 'function')
 const declaredExports = ${JSON.stringify(packageJson.exports, null, 2)}
 for (const [subpath, target] of Object.entries(declaredExports)) {
   const specifier = subpath === '.' ? '${packageName}' : '${packageName}/' + subpath.slice(2)
-  if (target.endsWith('.json')) {
+  const resolvedTarget = typeof target === 'string' ? target : (target?.import ?? target?.default ?? '')
+  if (resolvedTarget.endsWith('.json')) {
     const resolved = fileURLToPath(import.meta.resolve(specifier))
     JSON.parse(readFileSync(resolved, 'utf8'))
   } else {
@@ -322,6 +323,128 @@ if (!validateDecisionAnswers(request.questions, result.answers).ok) throw new Er
     '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
     '--outDir', 'compiled', 'decisions-consumer.mts'], { cwd: tempRoot, stdio: 'inherit' })
   run(process.execPath, [join('compiled', 'decisions-consumer.mjs')], { cwd: tempRoot, stdio: 'inherit' })
+
+  writeFileSync(join(tempRoot, 'typed-surfaces-consumer.mts'), `
+import {
+  carouselStyles,
+  scrollbarStyles,
+  renderCarouselControls,
+  slideWindow,
+  rowFit,
+  releaseVelocity,
+  autoplayConfig,
+} from '@mnstry/atelier/ui/primitives'
+import type { OverlayScrollbarHandle, CarouselHandle, enhanceCarousels, enhanceOverlayScrollbar, lockScroll } from '@mnstry/atelier/ui/primitives/browser'
+import {
+  PRESENTATION_SCHEMA,
+  PRESENTATION_VERSION,
+  validatePresentation,
+  validatePanePresentation,
+  assertPresentation,
+  tokenContract,
+  resolveTokens,
+  presentationStyles,
+  resizeRequest,
+  keyboardResize,
+  presentationState,
+  editValueError,
+} from '@mnstry/atelier/presentation'
+import type { PresentationModel, PresentationPane } from '@mnstry/atelier/presentation'
+import type { PresentationBindingHandle, UpdatePresentationOptions, bindPresentation } from '@mnstry/atelier/presentation/browser'
+
+function check(condition: unknown, message: string): void {
+  if (!condition) throw new Error(message)
+}
+
+check(carouselStyles.length > 0, 'carouselStyles must be non-empty')
+check(scrollbarStyles.length > 0, 'scrollbarStyles must be non-empty')
+const controls: string = renderCarouselControls({ label: 'Demo', autoplay: 'off' })
+check(controls.includes('Demo'), 'renderCarouselControls must include label')
+
+const win = slideWindow(0, 4, 2, false)
+check(win.start === 0 && win.end === 2 && win.previousDisabled === true && win.nextDisabled === false, 'slideWindow shape mismatch')
+
+const fit: number = rowFit(3, 240, 16, 800, 180)
+check(fit >= 180, 'rowFit must return numeric fit >= min')
+const velocity: number = releaseVelocity(-100, 50)
+check(velocity > 0, 'releaseVelocity must return positive velocity for leftward drag')
+const autoplay = autoplayConfig({ mode: 'discrete', interval: 4000 })
+check(autoplay.mode === 'discrete', 'autoplayConfig mode mismatch')
+
+const schemaId: 'atelier.presentation/v1' = PRESENTATION_SCHEMA
+const schemaVersion: '1.0.0' = PRESENTATION_VERSION
+check(schemaId === 'atelier.presentation/v1' && schemaVersion === '1.0.0', 'presentation schema constants mismatch')
+
+const presErrors: string[] = validatePresentation({})
+check(Array.isArray(presErrors) && presErrors.length > 0, 'validatePresentation must return non-empty string[]')
+const paneErrors: string[] = validatePanePresentation({})
+check(Array.isArray(paneErrors) && paneErrors.length > 0, 'validatePanePresentation must return non-empty string[]')
+
+check(typeof tokenContract.color.page === 'string', 'tokenContract.color.page must be a string')
+const darkTokens = resolveTokens('dark')
+check(typeof darkTokens.color.page === 'string', 'resolveTokens(dark) must return color tokens')
+const css: string = presentationStyles('light', {}, 'demo-root')
+check(css.includes('demo-root'), 'presentationStyles must scope to rootId')
+
+const clamped: number = resizeRequest({ min: 20, max: 80, value: 40 }, 90)
+check(clamped === 80, 'resizeRequest must clamp to max')
+const keyNext: number | null = keyboardResize({ min: 20, max: 80, value: 40 }, 'ArrowRight', 'ltr')
+check(keyNext === 41, 'keyboardResize ArrowRight must increment by 1')
+const state = presentationState({ focused: true })
+check(state.focused === true && state.disabled === false, 'presentationState mismatch')
+check(editValueError('hello') === null, 'editValueError must accept valid text')
+
+const validModel: PresentationModel = {
+  schema: 'atelier.presentation/v1',
+  version: '1.0.0',
+  contractVersion: '1.0.0',
+  id: 'demo-workspace',
+  title: 'Demo Workspace',
+  theme: 'light',
+  density: 'comfortable',
+  direction: 'ltr',
+  lang: 'en',
+  navigation: [{ id: 'nav-main', label: 'Main', target: 'pane-main', ext: { group: 'primary' } }],
+  panes: [
+    {
+      id: 'pane-main',
+      label: 'Main',
+      role: 'primary',
+      blocks: ['node-intro'],
+      width: { min: 20, max: 80, value: 60, ext: {} },
+      contractVersion: '1.0.0',
+      ext: {},
+    },
+    { id: 'pane-ctx', label: 'Context', role: 'context', blocks: [] },
+  ],
+  nodes: [{ id: 'node-intro', type: 'text', label: 'Intro', text: 'Hello' }],
+  ext: { source: 'smoke' },
+}
+check(validatePresentation(validModel).length === 0, 'schema-valid PresentationModel must validate cleanly')
+assertPresentation(validModel)
+
+const invalidPaneRole: PresentationPane = {
+  id: 'bad-pane',
+  label: 'Bad',
+  // @ts-expect-error secondary is not a valid atelier.presentation/v1 pane role
+  role: 'secondary',
+  blocks: [],
+}
+void invalidPaneRole
+
+type _CheckScroll = OverlayScrollbarHandle
+type _CheckCarousel = CarouselHandle
+type _CheckPres = PresentationBindingHandle
+type _CheckUpdateOpts = UpdatePresentationOptions
+type _CheckBind = typeof bindPresentation
+type _CheckEnhanceCarousels = typeof enhanceCarousels
+type _CheckEnhanceScrollbar = typeof enhanceOverlayScrollbar
+type _CheckLockScroll = typeof lockScroll
+`)
+  run(process.execPath, [join(packageRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+    '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
+    '--lib', 'ES2022,DOM', '--outDir', 'compiled', 'typed-surfaces-consumer.mts'], { cwd: tempRoot, stdio: 'inherit' })
+  run(process.execPath, [join('compiled', 'typed-surfaces-consumer.mjs')], { cwd: tempRoot, stdio: 'inherit' })
   const atelierCli = join('node_modules', '@mnstry', 'atelier', 'bin', 'atelier.mjs')
   const legacyCli = join('node_modules', '@mnstry', 'atelier', 'bin', 'mnstry-atelier.mjs')
   const cliOutput = run(process.execPath, [

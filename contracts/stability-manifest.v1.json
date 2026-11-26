@@ -1,0 +1,436 @@
+{
+  "$id": "https://mnstry.ai/schemas/atelier/stability-manifest.v1.json",
+  "schema": "mnstry.atelier-stability-manifest@v1",
+  "package": "@mnstry/atelier",
+  "excludedInternalSymbols": [
+    "*ForOracleTests"
+  ],
+  "cliContract": "CLI JSON outputs and process exit codes are contractual; human-readable --help banners and summary text may evolve without a major version bump.",
+  "tiers": {
+    "stable": "Covered by SemVer and public-api:compat; breaking changes require a major version.",
+    "beta": "Contract-tested and supported; minor refinements may land before 1.0.0 with migration notes.",
+    "experimental": "Opt-in or host-bound preview surface; excluded from core SemVer guarantees."
+  },
+  "exports": {
+    ".": {
+      "tier": "stable"
+    },
+    "./analysis/adapter": {
+      "tier": "stable"
+    },
+    "./architecture": {
+      "tier": "beta"
+    },
+    "./attestation": {
+      "tier": "stable"
+    },
+    "./boundary": {
+      "tier": "stable"
+    },
+    "./build": {
+      "tier": "beta"
+    },
+    "./capabilities": {
+      "tier": "beta"
+    },
+    "./cli": {
+      "tier": "stable"
+    },
+    "./coauthor": {
+      "tier": "experimental"
+    },
+    "./coauthor/store": {
+      "tier": "experimental"
+    },
+    "./collaboration": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-adoption-policy.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-adoption-policy.v2.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-architecture.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-build.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-capability.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-coauthor.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-coordination.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-decision-request.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-decision-result.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-evidence-navigation.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-export.v1.schema.json": {
+      "tier": "stable"
+    },
+    "./contracts/atelier-extension-manifest.v1.schema.json": {
+      "tier": "stable"
+    },
+    "./contracts/atelier-graphmark.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-guide.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-harness.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-ingestion.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-inquiry.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-instruction-adoption.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-intake.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-interaction.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-judgment.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-knowledge.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-learning.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-migration.v2.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-migration.v3.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-obsidian-acceptance-receipt.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-apply-policy.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-corpus-profile.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-edit-operation.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-ext-settings.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-generation-manifest.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-generation-manifest.v2.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-proposal-receipt.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-publication-journal.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-scope.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-service-state.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-obsidian-source-snapshot.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./contracts/atelier-pane-presentation.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-personal-workspace-manifest.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-personal-workspace-overlay.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-presentation.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-skill-steward.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-template-adoption.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-template-profile.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-trackable.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-upgrade-plan.v2.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-upgrade-plan.v3.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-upgrade-receipt.v1.schema.json": {
+      "tier": "beta"
+    },
+    "./contracts/atelier-vault-publication.v1.schema.json": {
+      "tier": "experimental"
+    },
+    "./coordination": {
+      "tier": "beta"
+    },
+    "./decisions": {
+      "tier": "beta"
+    },
+    "./disclosure": {
+      "tier": "beta"
+    },
+    "./dry-run": {
+      "tier": "stable"
+    },
+    "./egress": {
+      "tier": "stable"
+    },
+    "./evidence-navigation": {
+      "tier": "beta"
+    },
+    "./evidence-navigation/local": {
+      "tier": "beta"
+    },
+    "./export-contract": {
+      "tier": "stable"
+    },
+    "./extension-packs": {
+      "tier": "stable"
+    },
+    "./extensions": {
+      "tier": "stable"
+    },
+    "./extensions/client": {
+      "tier": "stable"
+    },
+    "./extensions/convex": {
+      "tier": "beta"
+    },
+    "./extensions/drizzle": {
+      "tier": "stable"
+    },
+    "./extensions/postgres": {
+      "tier": "stable"
+    },
+    "./extensions/prisma": {
+      "tier": "stable"
+    },
+    "./extensions/server": {
+      "tier": "stable"
+    },
+    "./fixtures/atelier-export/sample-studio-offer.v1.json": {
+      "tier": "stable"
+    },
+    "./graph": {
+      "tier": "stable"
+    },
+    "./graph-workspace": {
+      "tier": "beta"
+    },
+    "./graph-workspace/browser": {
+      "tier": "beta"
+    },
+    "./graphmark": {
+      "tier": "beta"
+    },
+    "./guides": {
+      "tier": "beta"
+    },
+    "./harness": {
+      "tier": "stable"
+    },
+    "./harnesses": {
+      "tier": "beta"
+    },
+    "./impeccable": {
+      "tier": "beta"
+    },
+    "./impeccable/wasm": {
+      "tier": "beta"
+    },
+    "./ingestion": {
+      "tier": "beta"
+    },
+    "./ingestion/composition": {
+      "tier": "experimental"
+    },
+    "./ingestion/evaluation": {
+      "tier": "beta"
+    },
+    "./ingestion/graphify": {
+      "tier": "experimental"
+    },
+    "./ingestion/jev": {
+      "tier": "experimental"
+    },
+    "./ingestion/jev/judgments": {
+      "tier": "experimental"
+    },
+    "./ingestion/lightrag": {
+      "tier": "experimental"
+    },
+    "./ingestion/native-normalization": {
+      "tier": "experimental"
+    },
+    "./ingestion/optional": {
+      "tier": "experimental"
+    },
+    "./ingestion/processors": {
+      "tier": "beta"
+    },
+    "./ingestion/qualification": {
+      "tier": "experimental"
+    },
+    "./ingestion/vanilla": {
+      "tier": "experimental"
+    },
+    "./inquiry": {
+      "tier": "beta"
+    },
+    "./intake": {
+      "tier": "beta"
+    },
+    "./interaction": {
+      "tier": "beta"
+    },
+    "./judgment": {
+      "tier": "beta"
+    },
+    "./knowledge": {
+      "tier": "beta"
+    },
+    "./knowledge-health": {
+      "tier": "beta"
+    },
+    "./learning": {
+      "tier": "beta"
+    },
+    "./learning/adapters": {
+      "tier": "beta"
+    },
+    "./learning/assistance": {
+      "tier": "beta"
+    },
+    "./local-state": {
+      "tier": "beta"
+    },
+    "./obsidian": {
+      "tier": "experimental"
+    },
+    "./obsidian/contracts": {
+      "tier": "experimental"
+    },
+    "./obsidian/edits": {
+      "tier": "experimental"
+    },
+    "./obsidian/materialize": {
+      "tier": "experimental"
+    },
+    "./obsidian/proposals": {
+      "tier": "experimental"
+    },
+    "./obsidian/publication": {
+      "tier": "experimental"
+    },
+    "./obsidian/recovery": {
+      "tier": "experimental"
+    },
+    "./obsidian/selection": {
+      "tier": "experimental"
+    },
+    "./personal-workspace": {
+      "tier": "beta"
+    },
+    "./presentation": {
+      "tier": "beta"
+    },
+    "./presentation/browser": {
+      "tier": "beta"
+    },
+    "./presentation/native": {
+      "tier": "beta"
+    },
+    "./project": {
+      "tier": "stable"
+    },
+    "./projection": {
+      "tier": "stable"
+    },
+    "./readiness": {
+      "tier": "stable"
+    },
+    "./readiness-protocols": {
+      "tier": "stable"
+    },
+    "./reflection": {
+      "tier": "beta"
+    },
+    "./runtime": {
+      "tier": "beta"
+    },
+    "./runtime/git": {
+      "tier": "beta"
+    },
+    "./runtime/observation": {
+      "tier": "beta"
+    },
+    "./server": {
+      "tier": "stable"
+    },
+    "./skills": {
+      "tier": "beta"
+    },
+    "./support": {
+      "tier": "stable"
+    },
+    "./template-bindings": {
+      "tier": "beta"
+    },
+    "./templates": {
+      "tier": "beta"
+    },
+    "./trackables": {
+      "tier": "beta"
+    },
+    "./ui": {
+      "tier": "beta"
+    },
+    "./ui/primitives": {
+      "tier": "beta"
+    },
+    "./ui/primitives/browser": {
+      "tier": "beta"
+    },
+    "./upgrade": {
+      "tier": "stable"
+    },
+    "./vault": {
+      "tier": "experimental"
+    },
+    "./vault/source": {
+      "tier": "experimental"
+    }
+  }
+}

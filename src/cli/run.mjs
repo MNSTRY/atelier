@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import { constants as osConstants } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -373,6 +374,7 @@ export async function runCli({
   brand = DEFAULT_BRAND,
   stdout = console.log,
   stderr = console.error,
+  spawn = spawnSync,
 }) {
   validateBrand(brand)
   const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -409,7 +411,7 @@ export async function runCli({
     return 1
   }
 
-  const result = spawnSync(process.execPath, [executorPath, scriptPath, ...prefixArgs, ...rest], {
+  const result = spawn(process.execPath, [executorPath, scriptPath, ...prefixArgs, ...rest], {
     cwd,
     stdio: 'inherit',
     env: {
@@ -422,5 +424,10 @@ export async function runCli({
     stderr(result.error.message)
     return 1
   }
-  return result.status ?? 0
+  if (typeof result.status === 'number') return result.status
+  if (result.signal) {
+    const signalNumber = osConstants.signals?.[result.signal]
+    return typeof signalNumber === 'number' ? 128 + signalNumber : 1
+  }
+  return 1
 }

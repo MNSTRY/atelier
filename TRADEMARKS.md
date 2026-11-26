@@ -30,12 +30,13 @@ in two places:
 - the distribution's user-facing credits or about surface.
 
 The README requirement is normative and mechanically checked by
-`atelier distribution check`. As an advisory (reported, non-blocking) signal,
-a distribution's extension-pack manifest may also carry
-`ext["mnstry.atelier/attribution"]` set to the same attribution string, using
-the reserved `ext` container — no schema change is involved. Attribution in
-`--version` output is a distribution-side test convention, not a runtime
-check.
+`atelier distribution check`. For CLI distributions, `atelier distribution check`
+also executes the distribution's declared `bin` entry with `--version` and
+requires the exact attribution string in stdout as a blocking check (packages
+without a CLI or distribution markers receive an advisory skip). As an advisory
+(reported, non-blocking) signal, a distribution's extension-pack manifest may
+also carry `ext["mnstry.atelier/attribution"]` set to the same attribution
+string, using the reserved `ext` container — no schema change is involved.
 
 ## Quiet software
 

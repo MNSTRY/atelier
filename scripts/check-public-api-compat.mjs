@@ -32,12 +32,20 @@ function gitOutput(args) {
   }).trim()
 }
 
+export function resolveRuntimeExportTarget(target) {
+  if (typeof target === 'string') return target
+  if (target && typeof target === 'object' && !Array.isArray(target)) {
+    return resolveRuntimeExportTarget(target.import ?? target.default ?? null)
+  }
+  return null
+}
+
 async function main() {
   const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'))
   const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
   const moduleExports = {}
   for (const subpath of Object.keys(baseline.requiredModuleExports)) {
-    const target = packageJson.exports?.[subpath]
+    const target = resolveRuntimeExportTarget(packageJson.exports?.[subpath])
     if (typeof target !== 'string' || !target.endsWith('.mjs')) continue
     const module = await import(pathToFileURL(join(packageRoot, target)).href)
     moduleExports[subpath] = Object.keys(module)

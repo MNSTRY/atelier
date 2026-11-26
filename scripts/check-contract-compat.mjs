@@ -53,8 +53,8 @@ function formatErrors(validate) {
 // findings are fine; document content never appears here.
 const DIFF_DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'required'])
 const DIFF_MAP_KEYWORDS = new Set(['properties', 'patternProperties', '$defs', 'definitions'])
-const DIFF_MIN_KEYWORDS = ['minLength', 'minItems', 'minimum']
-const DIFF_MAX_KEYWORDS = ['maxLength', 'maxItems', 'maximum']
+const DIFF_MIN_KEYWORDS = ['minLength', 'minItems', 'minimum', 'exclusiveMinimum', 'minProperties']
+const DIFF_MAX_KEYWORDS = ['maxLength', 'maxItems', 'maximum', 'exclusiveMaximum', 'maxProperties']
 const DIFF_ABSENCE_KEYWORDS = [
   'enum', 'not', 'allOf', 'anyOf', 'oneOf', 'if', 'then', 'else', 'items',
   'prefixItems', 'propertyNames', 'uniqueItems', 'multipleOf', 'format',
@@ -70,14 +70,70 @@ function diffPointer(parts) {
   return `/${parts.map((part) => String(part).replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`
 }
 
+function resolveLocalRef(rootSchema, node, seen = new Set()) {
+  if (!isPlainObject(node) || typeof node.$ref !== 'string' || !node.$ref.startsWith('#/')) return node
+  if (seen.has(node.$ref)) return node
+  seen.add(node.$ref)
+  const segments = node.$ref
+    .slice(2)
+    .split('/')
+    .map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
+  let target = rootSchema
+  for (const segment of segments) {
+    if (!isPlainObject(target) || !Object.hasOwn(target, segment)) return node
+    target = target[segment]
+  }
+  const resolvedTarget = resolveLocalRef(rootSchema, target, seen)
+  if (!isPlainObject(resolvedTarget)) return resolvedTarget
+  const siblings = {}
+  for (const [key, value] of Object.entries(node)) {
+    if (key !== '$ref') siblings[key] = value
+  }
+  return Object.keys(siblings).length > 0 ? { ...resolvedTarget, ...siblings } : resolvedTarget
+}
+
 export function diffSchemaWidenings(oldSchema, newSchema) {
   const findings = []
-  walkSchemaPair(oldSchema, newSchema, [], findings)
+  walkSchemaPair(oldSchema, newSchema, [], findings, oldSchema, newSchema, new Set())
   return findings
 }
 
-function walkSchemaPair(oldNode, newNode, parts, findings) {
+function walkSchemaPair(oldNode, newNode, parts, findings, oldRoot, newRoot, activeRefs) {
   if (!isPlainObject(oldNode) || !isPlainObject(newNode)) return
+  const oldRef = typeof oldNode.$ref === 'string' && oldNode.$ref.startsWith('#/') ? oldNode.$ref : null
+  const newRef = typeof newNode.$ref === 'string' && newNode.$ref.startsWith('#/') ? newNode.$ref : null
+  if (oldRef !== newRef && (oldRef || newRef)) {
+    const pairKey = `${oldRef ?? '(inline)'}->${newRef ?? '(inline)'}`
+    const resolvedOld = oldRef ? resolveLocalRef(oldRoot, oldNode) : oldNode
+    const resolvedNew = newRef ? resolveLocalRef(newRoot, newNode) : newNode
+    if (!activeRefs.has(pairKey)) {
+      const nextActive = new Set(activeRefs)
+      nextActive.add(pairKey)
+      walkSchemaPair(resolvedOld, resolvedNew, parts, findings, oldRoot, newRoot, nextActive)
+    }
+    // Also compare any sibling keywords alongside $ref (JSON Schema 2020-12
+    // evaluates siblings together with the referenced schema).
+    const stripRef = (node) => {
+      const copy = {}
+      for (const [k, v] of Object.entries(node)) {
+        if (k !== '$ref') copy[k] = v
+      }
+      return copy
+    }
+    if (oldRef && newRef) {
+      const oldSiblings = stripRef(oldNode)
+      const newSiblings = stripRef(newNode)
+      if (Object.keys(oldSiblings).length > 0 || Object.keys(newSiblings).length > 0) {
+        walkSchemaPair(oldSiblings, newSiblings, parts, findings, oldRoot, newRoot, activeRefs)
+      }
+    } else if (oldRef && !newRef && resolvedOld !== oldNode) {
+      const oldSiblings = stripRef(oldNode)
+      if (Object.keys(oldSiblings).length > 0) {
+        walkSchemaPair(oldSiblings, newNode, parts, findings, oldRoot, newRoot, activeRefs)
+      }
+    }
+    return
+  }
   const at = parts.length === 0 ? '/' : diffPointer(parts)
   const flag = (message) => findings.push({ pointer: at, message })
 
@@ -147,18 +203,18 @@ function walkSchemaPair(oldNode, newNode, parts, findings) {
     if (DIFF_MAP_KEYWORDS.has(key)) {
       if (!isPlainObject(oldChild) || !isPlainObject(newChild)) continue
       for (const [mapKey, oldEntry] of Object.entries(oldChild)) {
-        walkSchemaPair(oldEntry, newChild[mapKey], [...parts, key, mapKey], findings)
+        walkSchemaPair(oldEntry, newChild[mapKey], [...parts, key, mapKey], findings, oldRoot, newRoot, activeRefs)
       }
       continue
     }
     if (Array.isArray(oldChild) && Array.isArray(newChild)) {
       const shared = Math.min(oldChild.length, newChild.length)
       for (let index = 0; index < shared; index += 1) {
-        walkSchemaPair(oldChild[index], newChild[index], [...parts, key, index], findings)
+        walkSchemaPair(oldChild[index], newChild[index], [...parts, key, index], findings, oldRoot, newRoot, activeRefs)
       }
       continue
     }
-    walkSchemaPair(oldChild, newChild, [...parts, key], findings)
+    walkSchemaPair(oldChild, newChild, [...parts, key], findings, oldRoot, newRoot, activeRefs)
   }
 }
 
@@ -167,7 +223,13 @@ function walkSchemaPair(oldNode, newNode, parts, findings) {
 // the same plumbing in self-consistency mode (baseline = the working tree).
 // readCurrentContract is injectable for the same reason: the widening-differ
 // positive controls substitute a deliberately widened current schema.
-export async function checkCompat({ readOldContract, readCurrentContract, corpus = CONTRACT_CORPUS, root = CORPUS_ROOT }) {
+export async function checkCompat({
+  readOldContract,
+  readCurrentContract,
+  readOldValidDocs,
+  corpus = CONTRACT_CORPUS,
+  root = CORPUS_ROOT,
+}) {
   const checked = []
   const skipped = []
   const failures = []
@@ -175,13 +237,25 @@ export async function checkCompat({ readOldContract, readCurrentContract, corpus
     readCurrentContract ?? ((contractFile) => JSON.parse(fs.readFileSync(path.join(root, contractFile), 'utf8')))
 
   for (const entry of corpus) {
-    let oldSchema
-    try {
-      oldSchema = await readOldContract(entry.contractFile)
-    } catch (error) {
-      failures.push({ entry: entry.name, subject: entry.contractFile, message: `unreadable at baseline: ${error.message}` })
-      continue
+    let oldSchema = null
+    let resolvedBaselineFile = entry.contractFile
+    const candidateFiles = [entry.contractFile, ...(entry.previousContractFiles ?? [])]
+    let readFailed = false
+    for (const candidateFile of candidateFiles) {
+      try {
+        const loaded = await readOldContract(candidateFile)
+        if (loaded !== null) {
+          oldSchema = loaded
+          resolvedBaselineFile = candidateFile
+          break
+        }
+      } catch (error) {
+        failures.push({ entry: entry.name, subject: candidateFile, message: `unreadable at baseline: ${error.message}` })
+        readFailed = true
+        break
+      }
     }
+    if (readFailed) continue
     if (oldSchema === null) {
       skipped.push(entry.contractFile)
       continue
@@ -203,11 +277,11 @@ export async function checkCompat({ readOldContract, readCurrentContract, corpus
       })
     }
 
-    let validate
+    let validateOld
     try {
-      validate = compileContract(oldSchema, entry.docPointer)
+      validateOld = compileContract(oldSchema, entry.docPointer)
     } catch (error) {
-      failures.push({ entry: entry.name, subject: entry.contractFile, message: `baseline schema failed to compile: ${error.message}` })
+      failures.push({ entry: entry.name, subject: resolvedBaselineFile, message: `baseline schema failed to compile: ${error.message}` })
       continue
     }
 
@@ -227,10 +301,40 @@ export async function checkCompat({ readOldContract, readCurrentContract, corpus
     }
 
     for (const { label, doc } of documents) {
-      if (validate(doc)) continue
-      failures.push({ entry: entry.name, subject: label, message: formatErrors(validate) })
+      if (validateOld(doc)) continue
+      failures.push({ entry: entry.name, subject: label, message: formatErrors(validateOld) })
     }
-    checked.push({ entry: entry.name, documents: documents.length })
+
+    let historicalChecked = 0
+    if (readOldValidDocs) {
+      let validateCurrent
+      try {
+        validateCurrent = compileContract(currentSchema, entry.docPointer)
+      } catch (error) {
+        failures.push({ entry: entry.name, subject: entry.contractFile, message: `current schema failed to compile: ${error.message}` })
+        continue
+      }
+      const historicalDocs = await readOldValidDocs(entry)
+      if (historicalDocs.length === 0 && (entry.fixtureRoot || (Array.isArray(entry.validFiles) && entry.validFiles.length > 0))) {
+        failures.push({
+          entry: entry.name,
+          subject: entry.contractFile,
+          kind: 'gate',
+          message: 'no historical valid documents found at baseline — check previousFixtureRoots or baseline fixture paths',
+        })
+      }
+      for (const { label, doc } of historicalDocs) {
+        historicalChecked += 1
+        if (validateCurrent(doc)) continue
+        failures.push({
+          entry: entry.name,
+          subject: label,
+          kind: 'historical-rejected',
+          message: formatErrors(validateCurrent),
+        })
+      }
+    }
+    checked.push({ entry: entry.name, documents: documents.length, historicalDocuments: historicalChecked })
   }
 
   if (checked.length === 0 && corpus.length > 0) {
@@ -294,51 +398,89 @@ async function main() {
     console.log('contract-compat: epoch not yet tagged; gate inert')
     return
   }
-  try {
-    git(['rev-parse', '--verify', `${ref}^{commit}`])
-  } catch {
-    usageError(`baseline ref does not resolve: ${ref}`)
-  }
+  const refsToCheck = baselineOverride
+    ? [baselineOverride]
+    : [baselineDoc.baselineTag, ...(baselineDoc.latestReleaseTag && baselineDoc.latestReleaseTag !== baselineDoc.baselineTag ? [baselineDoc.latestReleaseTag] : [])]
 
-  const cache = new Map()
-  const readOldContract = (contractFile) => {
-    if (!cache.has(contractFile)) {
-      // Only a path verifiably absent at the ref is "new since baseline"; any
-      // other git failure must surface as a gate failure, not a silent skip.
-      const listing = git(['ls-tree', ref, '--', contractFile])
-      if (listing.trim() === '') {
-        cache.set(contractFile, null)
-      } else {
-        cache.set(contractFile, JSON.parse(git(['show', `${ref}:${contractFile}`])))
-      }
+  let totalFailures = 0
+  for (const ref of refsToCheck) {
+    try {
+      git(['rev-parse', '--verify', `${ref}^{commit}`])
+    } catch {
+      usageError(`baseline ref does not resolve: ${ref}`)
     }
-    return cache.get(contractFile)
-  }
 
-  const { checked, skipped, failures } = await checkCompat({ readOldContract })
+    const cache = new Map()
+    const readOldContract = (contractFile) => {
+      if (!cache.has(contractFile)) {
+        // Only a path verifiably absent at the ref is "new since baseline"; any
+        // other git failure must surface as a gate failure, not a silent skip.
+        const listing = git(['ls-tree', ref, '--', contractFile])
+        if (listing.trim() === '') {
+          cache.set(contractFile, null)
+        } else {
+          cache.set(contractFile, JSON.parse(git(['show', `${ref}:${contractFile}`])))
+        }
+      }
+      return cache.get(contractFile)
+    }
 
-  for (const file of skipped) console.log(`contract-compat: new since baseline: ${file} (skipped)`)
-  for (const failure of failures) {
-    if (failure.kind === 'gate') {
-      console.error(`contract-compat: ${failure.message}`)
+    const readOldValidDocs = (entry) => {
+      const files = []
+      const fixtureRoots = [
+        ...(entry.fixtureRoot ? [entry.fixtureRoot] : []),
+        ...(Array.isArray(entry.previousFixtureRoots) ? entry.previousFixtureRoots : []),
+      ]
+      if (fixtureRoots.length > 0) {
+        for (const fixtureRoot of fixtureRoots) {
+          const validDir = `${fixtureRoot}/valid`
+          const listing = git(['ls-tree', '-r', '--name-only', ref, '--', validDir]).split('\n').filter((file) => file.endsWith('.json'))
+          if (listing.length > 0) {
+            files.push(...listing)
+            break
+          }
+        }
+      } else if (Array.isArray(entry.validFiles)) {
+        for (const validFile of entry.validFiles) {
+          if (git(['ls-tree', ref, '--', validFile]).trim() !== '') files.push(validFile)
+        }
+      }
+      return files.map((file) => ({
+        label: `${ref}:${file}`,
+        doc: JSON.parse(git(['show', `${ref}:${file}`])),
+      }))
+    }
+
+    const { checked, skipped, failures } = await checkCompat({ readOldContract, readOldValidDocs })
+
+    for (const file of skipped) console.log(`contract-compat (${ref}): new since baseline: ${file} (skipped)`)
+    for (const failure of failures) {
+      if (failure.kind === 'gate') {
+        console.error(`contract-compat (${ref}): ${failure.message}`)
+        continue
+      }
+      if (failure.kind === 'widening') {
+        console.error(`contract-compat (${ref}): ${failure.subject} widened relative to ${ref} for ${failure.entry}:`)
+      } else if (failure.kind === 'historical-rejected') {
+        console.error(`contract-compat (${ref}): historical valid document ${failure.subject} rejected by current schema for ${failure.entry}:`)
+      } else {
+        console.error(`contract-compat (${ref}): ${failure.subject} rejected by ${ref} validator for ${failure.entry}:`)
+      }
+      console.error(failure.message)
+    }
+    if (failures.length > 0) {
+      console.error(`contract-compat: ${failures.length} rejection(s) against ${ref}`)
+      totalFailures += failures.length
       continue
     }
-    if (failure.kind === 'widening') {
-      console.error(`contract-compat: ${failure.subject} widened relative to ${ref} for ${failure.entry}:`)
-    } else {
-      console.error(`contract-compat: ${failure.subject} rejected by ${ref} validator for ${failure.entry}:`)
-    }
-    console.error(failure.message)
-  }
-  if (failures.length > 0) {
-    console.error(`contract-compat: ${failures.length} rejection(s) against ${ref}`)
-    process.exit(1)
-  }
 
-  const documents = checked.reduce((total, item) => total + item.documents, 0)
-  console.log(
-    `contract-compat: clean against ${ref} — ${documents} document(s) across ${checked.length} contract(s), ${skipped.length} new since baseline`,
-  )
+    const documents = checked.reduce((total, item) => total + item.documents, 0)
+    const historicalDocuments = checked.reduce((total, item) => total + (item.historicalDocuments ?? 0), 0)
+    console.log(
+      `contract-compat: clean against ${ref} — ${documents} current + ${historicalDocuments} historical document(s) across ${checked.length} contract(s), ${skipped.length} new since baseline`,
+    )
+  }
+  if (totalFailures > 0) process.exit(1)
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

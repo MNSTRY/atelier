@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { CONTRACT_CORPUS, CORPUS_ROOT } from '../src/contracts/corpus.mjs'
+import { CONTRACT_CORPUS, CORPUS_ROOT, corpusValidFiles } from '../src/contracts/corpus.mjs'
 import { checkCompat, diffSchemaWidenings } from '../scripts/check-contract-compat.mjs'
 
 // The compat gate is inert until the epoch tag exists, so its plumbing is kept
@@ -188,4 +188,174 @@ test('the widening differ catches deleted constraints, not just loosened ones', 
     0,
     'gutting a subschema must be flagged',
   )
+})
+
+test('previousContractFiles maps a moved contract back to its baseline path instead of skipping', async () => {
+  const entry = CONTRACT_CORPUS.find((item) => item.name === 'atelier-attestation')
+  const movedEntry = {
+    ...entry,
+    contractFile: 'contracts/governance/atelier-attestation.v1.schema.json',
+    previousContractFiles: [entry.contractFile],
+  }
+  const { checked, skipped, failures } = await checkCompat({
+    corpus: [movedEntry],
+    readOldContract: (contractFile) => (contractFile === entry.contractFile ? readWorkingTreeContract(entry.contractFile) : null),
+    readCurrentContract: () => readWorkingTreeContract(entry.contractFile),
+  })
+  assert.deepEqual(failures, [])
+  assert.deepEqual(skipped, [])
+  assert.equal(checked.length, 1)
+  assert.equal(checked[0].entry, 'atelier-attestation')
+})
+
+test('bidirectional check rejects a tightened current schema that breaks historical valid documents', async () => {
+  const entry = CONTRACT_CORPUS.find((item) => item.name === 'atelier-attestation')
+  const baseSchema = readWorkingTreeContract(entry.contractFile)
+  const tightenedCurrent = {
+    ...baseSchema,
+    properties: {
+      ...baseSchema.properties,
+      signature: { type: 'boolean' },
+    },
+  }
+  const sampleFile = corpusValidFiles(entry, CORPUS_ROOT)[0]
+  const sampleValidDoc = JSON.parse(fs.readFileSync(sampleFile, 'utf8'))
+  const { failures } = await checkCompat({
+    corpus: [entry],
+    readOldContract: () => baseSchema,
+    readCurrentContract: () => tightenedCurrent,
+    readOldValidDocs: () => [{ label: `v0.2.0-alpha.11:${path.relative(CORPUS_ROOT, sampleFile)}`, doc: sampleValidDoc }],
+  })
+  assert.ok(
+    failures.some((failure) => failure.kind === 'historical-rejected' && failure.entry === 'atelier-attestation'),
+    `expected historical-rejected failure, got ${JSON.stringify(failures)}`,
+  )
+})
+
+test('the widening differ resolves retargeted local $ref pointers to a looser definition', () => {
+  const oldSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      audience: { $ref: '#/$defs/strictAudience' },
+    },
+    $defs: {
+      strictAudience: { type: 'string', enum: ['public', 'team'] },
+      looseAudience: { type: 'string', enum: ['public', 'team', 'unrestricted'] },
+    },
+  }
+  const newSchema = {
+    ...oldSchema,
+    properties: {
+      audience: { $ref: '#/$defs/looseAudience' },
+    },
+  }
+  const findings = diffSchemaWidenings(oldSchema, newSchema)
+  assert.ok(
+    findings.some((finding) => finding.pointer === '/properties/audience' && /enum gained member/.test(finding.message)),
+    `expected retargeted $ref widening finding, got ${JSON.stringify(findings)}`,
+  )
+})
+
+test('the widening differ compares sibling keywords alongside a retargeted $ref', () => {
+  const oldSchema = {
+    type: 'object',
+    properties: {
+      slug: { $ref: '#/$defs/slugA', maxLength: 32 },
+    },
+    $defs: {
+      slugA: { type: 'string', pattern: '^[a-z-]+$' },
+      slugB: { type: 'string', pattern: '^[a-z-]+$' },
+    },
+  }
+  const newSchema = {
+    ...oldSchema,
+    properties: {
+      slug: { $ref: '#/$defs/slugB' },
+    },
+  }
+  const findings = diffSchemaWidenings(oldSchema, newSchema)
+  assert.ok(
+    findings.some((finding) => finding.pointer === '/properties/slug' && /maxLength increased or removed/.test(finding.message)),
+    `expected sibling maxLength removal finding, got ${JSON.stringify(findings)}`,
+  )
+})
+
+test('the widening differ handles renamed recursive $defs without stack overflow', () => {
+  const oldSchema = {
+    $ref: '#/$defs/nodeV1',
+    $defs: {
+      nodeV1: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', enum: ['a'] },
+          child: { $ref: '#/$defs/nodeV1' },
+        },
+      },
+    },
+  }
+  const newSchema = {
+    $ref: '#/$defs/nodeV2',
+    $defs: {
+      nodeV2: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', enum: ['a', 'b'] },
+          child: { $ref: '#/$defs/nodeV2' },
+        },
+      },
+    },
+  }
+  const findings = diffSchemaWidenings(oldSchema, newSchema)
+  assert.ok(
+    findings.some((finding) => /enum gained member/.test(finding.message)),
+    `expected widening finding on renamed recursive $defs, got ${JSON.stringify(findings)}`,
+  )
+})
+
+test('bidirectional check fails closed when a pre-existing entry yields zero historical valid docs', async () => {
+  const entry = CONTRACT_CORPUS.find((item) => item.name === 'atelier-attestation')
+  const baseSchema = readWorkingTreeContract(entry.contractFile)
+  const { failures } = await checkCompat({
+    corpus: [entry],
+    readOldContract: () => baseSchema,
+    readCurrentContract: () => baseSchema,
+    readOldValidDocs: () => [],
+  })
+  assert.ok(
+    failures.some((failure) => failure.kind === 'gate' && /no historical valid documents/.test(failure.message)),
+    `expected zero-historical-docs gate failure, got ${JSON.stringify(failures)}`,
+  )
+})
+
+test('the widening differ preserves intermediate chained $ref siblings and checks exclusive/property bounds', () => {
+  const oldChained = {
+    type: 'object',
+    properties: {
+      code: { $ref: '#/$defs/a' },
+      score: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 10 },
+      bag: { type: 'object', minProperties: 1, maxProperties: 5 },
+    },
+    $defs: {
+      a: { $ref: '#/$defs/b', minLength: 10 },
+      b: { type: 'string' },
+    },
+  }
+  const newChained = {
+    type: 'object',
+    properties: {
+      code: { $ref: '#/$defs/b' },
+      score: { type: 'number' },
+      bag: { type: 'object' },
+    },
+    $defs: oldChained.$defs,
+  }
+  const findings = diffSchemaWidenings(oldChained, newChained)
+  assert.ok(findings.some((f) => f.pointer === '/properties/code' && /minLength decreased or removed/.test(f.message)))
+  assert.ok(findings.some((f) => f.pointer === '/properties/score' && /exclusiveMinimum decreased or removed/.test(f.message)))
+  assert.ok(findings.some((f) => f.pointer === '/properties/score' && /exclusiveMaximum increased or removed/.test(f.message)))
+  assert.ok(findings.some((f) => f.pointer === '/properties/bag' && /minProperties decreased or removed/.test(f.message)))
+  assert.ok(findings.some((f) => f.pointer === '/properties/bag' && /maxProperties increased or removed/.test(f.message)))
 })

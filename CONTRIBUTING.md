@@ -120,20 +120,18 @@ Before submitting, run what CI runs:
 
 ```bash
 npm run syntax:check
-ATELIER_ALLOW_MISSING_DENYLIST=1 npm test
-npm run contract && npm run contract:compat
-npm run egress:check && npm run repo:check && npm run migrations:check
+npm test
+npm run contract && npm run contract:compat && npm run public-api:compat
+npm run egress:check && npm run migrations:check
+node scripts/check-repo-disclosure.mjs --structural-only
 node --test test/disclosure.test.mjs
 ```
 
-A note on the test suite from a fresh clone: plain `npm test` includes one
-fail-closed check that expects a private denylist file
-(`release-denylist.local.json`, gitignored) used by MNSTRY's release lane.
-On a fresh clone that file is absent, so that one check **fails** — it
-never passes silently on missing protection. That is why the command above
-sets `ATELIER_ALLOW_MISSING_DENYLIST=1`: it acknowledges the missing file
-and turns the failure into a recorded skip, and every other test runs
-normally either way.
+`npm test` runs the complete public suite on a fresh clone with no special
+environment variables or private files. Maintainer release lanes additionally
+run `npm run test:private-boundary`, `npm run repo:check`, and
+`npm run release:audit` with the private denylist, failing closed whenever it
+is absent.
 
 All gates green is the entry condition, not the goal — tests that prove the
 change is the goal.

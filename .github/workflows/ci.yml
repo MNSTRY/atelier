@@ -42,6 +42,7 @@ jobs:
       - run: npm run egress:check
       - run: npm run migrations:check
       - run: npm run contract:compat
+      - run: npm run public-api:compat
   consumer-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -209,14 +210,13 @@ jobs:
           else
             node scripts/check-repo-disclosure.mjs --commits "$COMMIT_SCAN"
           fi
-      # The test job runs pack neutrality structural-only (it acknowledges the
-      # missing denylist and the test visibly skips the denylist assertions);
-      # this lane re-runs the same test with the real denylist so the name
-      # assertions actually execute somewhere in CI.
+      # The public `npm test` lane runs with zero required secrets for fresh-clone
+      # contributors; this lane runs the fail-closed private-boundary test with
+      # the maintainer denylist secret so private-name assertions execute in CI.
       - name: pack neutrality with denylist
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
-        run: node --test test/readiness-protocols.test.mjs
+        run: npm run test:private-boundary
       - name: release audit
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}

@@ -7,6 +7,7 @@ import { matchesPathPattern } from '../project/path-match.mjs'
 import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 import {
   CHECK_AGGREGATE_MAX_BYTES,
+  DEFAULT_CONTENT_RULES,
   createArtifactScanContext,
   artifactGitOutput,
   validateArtifactScan,
@@ -23,6 +24,7 @@ import {
 } from './content-rules.mjs'
 import { delegationsPathFor, loadDelegationsFile, ownerKeysForCommand, resolveDelegation, validateDelegationsDocument } from './delegation.mjs'
 
+export { DEFAULT_CONTENT_RULES }
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
 export const BOUNDARY_POLICY_SCHEMA_V2 = 'mnstry.atelier-boundary-policy@v2'
 export const BOUNDARY_POLICY_SCHEMA_V3 = 'mnstry.atelier-boundary-policy@v3'

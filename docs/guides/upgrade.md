@@ -9,6 +9,15 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.3.0
+
+No breaking export removals (`v0.2.0-alpha.4` through `v0.2.0-alpha.25` subpaths
+and contracts remain compatible). `0.3.0` advances the package off the alpha
+prerelease line (`0.2.0` is unavailable on npm), adds GraphMark, ships `.d.mts`
+TypeScript declarations for consumed surfaces, adds `contracts/stability-manifest.v1.json`,
+and splits fresh-clone `npm test` from the fail-closed maintainer
+`test:private-boundary` check.
+
 ## Upgrading to 0.2.0-alpha.25
 
 No export changes. A personal workspace whose enrolled repositories have no
@@ -176,7 +185,7 @@ A package update supplies no interpretation approval, source-write permission,
 Obsidian host qualification, publication authority or runtime activation. Rehearse
 this exact installed version in a disposable workspace before client use.
 
-## Unreleased
+## Upgrading to 0.2.0-alpha.13 (contract & template notes)
 
 The bundled readiness pack retains its original v1 content and digest. Existing
 locks, including the prior alpha.10 release fixture, can prepare and apply both
@@ -396,7 +405,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
+npm install --save-dev @mnstry/atelier@0.3.0
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -404,7 +413,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.14"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.3.0"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 

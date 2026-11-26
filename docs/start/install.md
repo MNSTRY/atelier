@@ -34,28 +34,29 @@ The registry is the distribution channel of record, as `docs/reference/continuit
 commits:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.25
+npm install --save-dev @mnstry/atelier@0.3.0
 ```
 
 Installing from the matching Git tag resolves to the same reviewed commit:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.25"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.3.0"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.25"
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.3.0"
 ```
 
 Keep the `@mnstry/` scope — see the command-form note above for why the
 unscoped name is dangerous.
 
-Do not install from `v0.2.0-alpha.0`. That tag is the **contract epoch
-marker** — `contracts/compat-baseline.json` pins the compatibility gate to it,
-so it stays where it is permanently. It predates the current tree and carries
-`publishConfig.access: "restricted"`.
+Do not install from `v0.2.0-alpha.0`. That tag is the historical **contract
+epoch marker** — it stays where it is permanently, predates the current tree,
+and carries `publishConfig.access: "restricted"`. The active compatibility gate
+in `contracts/compat-baseline.json` pins `baselineTag` (`v0.2.0-alpha.11`) and
+`latestReleaseTag` (`v0.2.0-alpha.25`).
 
 The workspace `atelier.lock.json` should record the resolved version or Git
 SHA from the install. Treat the tag or version as the friendly handle and the
