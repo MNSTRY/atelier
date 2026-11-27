@@ -67,6 +67,9 @@ function canonicalInput(project) {
         ? project.config.graph.externalRelationPrefixes
         : [],
       externalRelationIds: Array.isArray(project.config.graph?.externalRelationIds) ? project.config.graph.externalRelationIds : [],
+      extraKgTypes: Array.isArray(project.config.ext?.['mnstry.atelier']?.allowedKgTypes)
+        ? project.config.ext['mnstry.atelier'].allowedKgTypes
+        : [],
     },
   }
 }

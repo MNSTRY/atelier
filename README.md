@@ -7,7 +7,7 @@ give people, agents, and tools a bounded view of the work. Git remains the
 source of record. Your files remain plain text. The authoring runtime remains
 local, with zero telemetry and Apache-2.0 licensing.
 
-- **Current package:** `@mnstry/atelier@0.3.0` (Node.js 22 or 24)
+- **Current package:** `@mnstry/atelier@0.3.1` (Node.js 22 or 24)
 - **Stability & contracts:** [stability manifest](contracts/stability-manifest.v1.json) · [contract stability](docs/reference/contract-stability.md) · [security & egress limits](SECURITY.md)
 - **Release history:** [CHANGELOG.md](CHANGELOG.md)
 
@@ -18,7 +18,7 @@ graph, project its local review surface, and watch the export boundary enforce
 itself offline:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.3.0
+npm install --save-dev @mnstry/atelier@0.3.1
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -546,7 +546,7 @@ Node.js 22 (22.18.0 or later) or Node.js 24 (24.13.1 or later) is required.
 Pin the exact version in production toolchains:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.3.0
+npm install --save-dev @mnstry/atelier@0.3.1
 ```
 
 Start with [independent setup](./docs/start/independent-start.md) or
@@ -556,7 +556,7 @@ API and architecture references, and maintainer controls.
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.3.0`.
+Current package: `@mnstry/atelier@0.3.1`.
 
 `@mnstry/atelier` is in its `0.x` series: contracts and `stable`-tier exports
 are enforced by compatibility gates, while `beta` and `experimental` exports

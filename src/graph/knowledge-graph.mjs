@@ -1274,11 +1274,21 @@ export function activeOrphanSidecars(repoName, repoRoot, files, isIgnored = gitI
   return orphans
 }
 
-export function validateKnowledgeGraph(nodes, edges, orphanSidecars = [], { externalRelationPrefixes = [], externalRelationIds = [] } = {}) {
+export function validateKnowledgeGraph(
+  nodes,
+  edges,
+  orphanSidecars = [],
+  { externalRelationPrefixes = [], externalRelationIds = [], extraKgTypes = [] } = {},
+) {
   const errors = []
   const seenIds = new Map()
   const allowedExternalPrefixes = new Set(externalRelationPrefixes)
   const allowedExternalIds = new Set(externalRelationIds)
+  const allowedExtraKgTypes = new Set(
+    (Array.isArray(extraKgTypes) ? extraKgTypes : []).filter(
+      (value) => typeof value === 'string' && /^[a-z][a-z0-9_-]*$/.test(value),
+    ),
+  )
 
   for (const node of nodes) {
     if (!node.id) errors.push(`${node.repo}/${node.path}: missing kg.id`)
@@ -1305,7 +1315,9 @@ export function validateKnowledgeGraph(nodes, edges, orphanSidecars = [], { exte
       errors.push(`${node.repo}/${node.path}: invalid or missing kg.audience "${node.audience ?? ''}"`)
     }
     if (!VALID_STATUSES.has(node.status)) errors.push(`${node.repo}/${node.path}: invalid kg.status "${node.status}"`)
-    if (!VALID_KG_TYPES.has(node.kgType)) errors.push(`${node.repo}/${node.path}: invalid kg.type "${node.kgType}"`)
+    if (!VALID_KG_TYPES.has(node.kgType) && !allowedExtraKgTypes.has(node.kgType)) {
+      errors.push(`${node.repo}/${node.path}: invalid kg.type "${node.kgType}"`)
+    }
     for (const [type, targets] of Object.entries(node.relations ?? {})) {
       if (!VALID_RELATION_TYPES.has(type)) errors.push(`${node.repo}/${node.path}: invalid kg.relations type "${type}"`)
       if (!Array.isArray(targets)) {
@@ -1413,6 +1425,7 @@ export function* buildKnowledgeGraphSteps({
   externalRepos = [],
   externalRelationPrefixes = [],
   externalRelationIds = [],
+  extraKgTypes = [],
   isLinkTargetEligible = undefined,
   isAssetEligible = undefined,
   fileCache = null,
@@ -1521,6 +1534,7 @@ export function* buildKnowledgeGraphSteps({
   const validationErrors = validateKnowledgeGraph(workspaceNodes, workspaceEdges, workspaceOrphanSidecars, {
     externalRelationPrefixes,
     externalRelationIds,
+    extraKgTypes,
   })
   const workspaceGraph = {
     schema: KNOWLEDGE_GRAPH_SCHEMA,
