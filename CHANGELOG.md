@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+- **Extensible domain `kg.type` values:** `buildKnowledgeGraph` / `validateKnowledgeGraph` now accept `extraKgTypes` (and `atelier.project.json` projects may declare lowercase slug types under `ext["mnstry.atelier"].allowedKgTypes`) so editorial and domain workspaces can register custom node types without weakening default typo detection.
+
 ## 0.3.0
 
 ### Added

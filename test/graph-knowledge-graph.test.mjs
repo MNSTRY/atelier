@@ -319,6 +319,39 @@ test('a title-only wikilink resolves when unique and refuses when two documents 
   assert.equal(text.slice(ambiguous.range.start, ambiguous.range.end), '[[Shared glossary]]')
 })
 
+test('extraKgTypes accepts declared domain node types while rejecting undeclared or malformed ones', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t, ['editorial-notes'])
+  fs.writeFileSync(
+    path.join(repos['editorial-notes'], 'essay.md'),
+    ['---', 'title: Harbor essay', 'kg:', '  id: editorial-notes:harbor', '  type: essay', '  audience: public', '---', '', '# Harbor essay', ''].join('\n'),
+  )
+  fs.writeFileSync(
+    path.join(repos['editorial-notes'], 'unknown.md'),
+    ['---', 'title: Unknown kind', 'kg:', '  id: editorial-notes:unknown', '  type: mystery', '  audience: public', '---', '', '# Unknown kind', ''].join('\n'),
+  )
+
+  const rejected = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(rejected.ok, false)
+  assert.ok(rejected.errors.some((err) => err.includes('invalid kg.type "essay"')))
+  assert.ok(rejected.errors.some((err) => err.includes('invalid kg.type "mystery"')))
+
+  const partial = buildKnowledgeGraph({
+    workspaceRoot: root,
+    repoAccessConfig: access,
+    extraKgTypes: ['essay', 'INVALID SPACE'],
+  })
+  assert.equal(partial.ok, false)
+  assert.ok(!partial.errors.some((err) => err.includes('invalid kg.type "essay"')))
+  assert.ok(partial.errors.some((err) => err.includes('invalid kg.type "mystery"')))
+
+  const accepted = buildKnowledgeGraph({
+    workspaceRoot: root,
+    repoAccessConfig: access,
+    extraKgTypes: ['essay', 'mystery'],
+  })
+  assert.equal(accepted.ok, true, accepted.errors.join('\n'))
+})
+
 test('a withheld target yields no edge and a finding identical to an absent target', (t) => {
   const { root, repos, access } = makeLinkedWorkspace(t)
   const body = (name) => `# Tide tables\n\n[one](../beta-notes/${name}.md) and [[${name === 'sealed' ? 'Sealed ledger' : 'Missing ledger'}]].`

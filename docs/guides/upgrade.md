@@ -405,7 +405,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.3.0
+npm install --save-dev @mnstry/atelier@0.3.1
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -413,7 +413,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.3.0"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.3.1"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
